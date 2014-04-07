@@ -1,7 +1,10 @@
 ---
-project: nw
-tagline: native widgets
+project:   nw
+tagline:   native widgets
+platforms: mingw32, mingw64
 ---
+
+#### NOTE: work-in-progress (to-be-released soon)
 
 ## `local nw = require'nw'`
 
