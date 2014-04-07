@@ -96,7 +96,7 @@ function app:active_window()
 end
 
 function app:active()
-	self.impl:active()
+	return self.impl:active()
 end
 
 --window
@@ -203,7 +203,9 @@ function window:resized() end --also called when changing state
 
 --frame
 
-function window:title(newtitle) return self.impl:title(newtitle) end
+function window:title(newtitle)
+	return self.impl:title(newtitle)
+end
 
 --keyboard
 
@@ -214,7 +216,7 @@ end
 function window:key_down(key) end
 function window:key_up(key) end
 function window:key_press(key) end
-function window:key_char(char) end --sent after every key_press
+function window:key_char(char) end --sent after key_press for displayable characters
 
 --mouse
 
