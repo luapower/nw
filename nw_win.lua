@@ -7,6 +7,7 @@ require'winapi.mouse'
 require'winapi.keyboard'
 require'winapi.time'
 require'winapi.systemmetrics'
+require'winapi.wingdi'
 local glue = require'glue'
 
 local function unpack_rect(rect)
@@ -44,15 +45,11 @@ function app:client_rect()
 	return unpack_rect(rect)
 end
 
-function app:active()
-	--
-end
-
 function app:double_click_time() --milliseconds
 	return winapi.GetDoubleClickTime()
 end
 
-function app:double_click_rect_size()
+function app:double_click_target_area()
 	local w = winapi.GetSystemMetrics(winapi.SM_CXDOUBLECLK)
 	local h = winapi.GetSystemMetrics(winapi.SM_CYDOUBLECLK)
 	return w, h
@@ -81,28 +78,23 @@ function window:_new_view() end --stub
 function app:window(t)
 	self = glue.inherit({app = self}, self.window_class)
 
-	if t.state == 'fullscreen' then
-		--TODO
-	end
-
 	self.win = Window{
-		visible = false,
-		title = t.title,
-		state = t.state,
-
-		titlebar = t.frame,
-		dialog_frame = t.frame,
-
-		sizeable = t.allow_resize,
-		minimize_button = t.allow_minimize,
-		maximize_button = t.allow_maximize,
-		noclose = t.allow_close == false,
-		--tool_window = t.frame == false,
-
 		x = t.x,
 		y = t.y,
 		w = t.w,
 		h = t.h,
+		visible = false,
+		state = t.state,
+
+		title = t.title,
+		titlebar = t.frame,
+		sizeable = t.allow_resize,
+		minimize_button = t.allow_minimize,
+		maximize_button = t.allow_maximize,
+		noclose = t.allow_close == false,
+		layered = true,
+		own_dc = true,
+
 		receive_double_clicks = false, --we do our own double-clicking
 	}
 
@@ -121,12 +113,20 @@ function app:window(t)
 	m.right = winapi.GetKeyState(winapi.VK_RBUTTON)
 	m.xbutton1 = winapi.GetKeyState(winapi.VK_XBUTTON1)
 	m.xbutton2 = winapi.GetKeyState(winapi.VK_XBUTTON2)
+	m.inside = false
 
 	--start tracking mouse leave
 	winapi.TrackMouseEvent{hwnd = self.win.hwnd, flags = winapi.TME_LEAVE}
 
+	self._fullscreen = false
+	self:fullscreen(t.fullscreen)
+
+	self:invalidate()
+
 	return self
 end
+
+--lifetime
 
 function window:free()
 	self.win:close()
@@ -146,7 +146,7 @@ function Window:on_destroy()
 	self.delegate:event'closed'
 end
 
---activation
+--focus
 
 function window:activate()
 	self.win:activate()
@@ -166,49 +166,18 @@ end
 
 --state
 
-function window:show(state)
-	local curstate = self:state()
-	local visible = self:visible()
-	state = state or curstate
-	if curstate == state and visible then return end
-
-	if state == 'fullscreen' then
-		self._fullscreen = true
-		self._fullscreen_state = {
-			titlebar = self.win.titlebar,
-			dialog_frame = self.win.dialog_frame,
-			state = self.win.state,
-			frame_rect = self.win.state == 'normal' and self.win.rect or nil,
-		}
-		self.win.titlebar = false
-		self.win.dialog_frame = false
-		if self.win.state == 'minimized' then
-			self.win:show'normal'
-		end
-		self.win:move(self.app:screen_rect())
-		self:activate()
+function window:state(state)
+	if state ~= nil then
+		self.win.state = state
 	else
-		if self._fullscreen then
-			local t = self._fullscreen_state
-			self.win.titlebar = t.titlebar
-			self.win.dialog_frame = t.dialog_frame
-			state = state or t.state
-			if state == 'normal' then
-				self.win.rect = t.frame_rect
-			else
-				self._normal_rect = t.frame_rect
-				self.win:show(state)
-			end
-			self._fullscreen = false
-		else
-			if state == 'normal' and self._normal_rect then
-				self.win.rect = self._normal_rect
-				self._normal_rect = nil
-			end
-			self.win:show(state)
-		end
+		return self.win.state
 	end
-	if self:active() then
+end
+
+function window:show()
+	local was_visible = self:visible()
+	self.win:show()
+	if not was_visible and self:active() then
 		self.delegate:event'activated'
 	end
 end
@@ -221,15 +190,73 @@ function window:visible()
 	return self.win.visible
 end
 
-function window:state()
-	return self._fullscreen and 'fullscreen' or self.win.state
+function window:fullscreen(on)
+	if on == nil then
+		return self._fullscreen
+	elseif on == self._fullscreen then
+		return
+	elseif on then
+		self._fs = {
+			state = self:state(),
+			normal_rect = self.win.normal_rect,
+			frame = self:frame'frame',
+			allow_resize = self:frame'allow_resize',
+		}
+		self:state'normal'
+		self.win:move(self.app:screen_rect())
+		self:frame('frame', false)
+		self:frame('allow_resize', false)
+		self._fullscreen = true
+	else
+		self:frame('frame', self._fs.frame)
+		self:frame('allow_resize', self._fs.allow_resize)
+		self:state(self._fs.state)
+		self.win.normal_rect = self._fs.normal_rect
+		self._fullscreen = false
+	end
+end
+
+function window:save()
+	local r = self.win.normal_rect
+	return {
+		x = r.x,
+		y = r.y,
+		w = r.w,
+		h = r.h,
+		state = self:state(),
+		fullscreen = self._fullscreen,
+		title = self:title(),
+		frame = self:frame'frame',
+		topmost = self:Frame'topmost',
+		allow_minimize = self:frame'allow_minimize',
+		allow_maximize = self:frame'allow_maximize',
+		allow_close = self:frame'allow_close',
+		allow_resize = self:frame'allow_resize',
+		visible = self:visible(),
+	}
 end
 
 --positioning
 
+function window:normal_frame_rect(x, y, w, h)
+	if x then
+		local r = winapi.RECT()
+		r.x = x
+		r.y = y
+		r.w = w
+		r.h = h
+		self.win.normal_rect = r
+	else
+		return unpack_rect(self.win.normal_rect)
+	end
+end
+
 function window:frame_rect(x, y, w, h)
-	self.win:move(x, y, w, h)
-	return unpack_rect(self.win.rect)
+	if x then
+		self.win:move(x, y, w, h)
+	else
+		return unpack_rect(self.win.rect)
+	end
 end
 
 function window:client_rect()
@@ -258,6 +285,9 @@ end
 
 function Window:on_resized(flag)
 	print('>', flag)
+	if self.layered then
+		self:free_layered()
+	end
 	self.delegate:event'resized'
 end
 
@@ -272,6 +302,36 @@ function window:title(newtitle)
 		self.win.title = newtitle
 	else
 		return self.win.title
+	end
+end
+
+function window:frame(flag, value)
+	if value ~= nil then
+		if flag == 'frame' then
+			self.win.titlebar = value
+		elseif flag == 'topmost' then
+			self.win.topmost = value
+		elseif flag == 'allow_minimize' then
+			self.win.minimize_button = value
+		elseif flag == 'allow_maximize' then
+			self.win.maximize_button = value
+		elseif flag == 'allow_close' then
+			self.win.noclose = value == false
+		elseif flag == 'allow_resize' then
+			self.win.sizeable = value
+		end
+	elseif flag == 'frame' then
+		return self.win.titlebar
+	elseif flag == 'topmost' then
+		return self.win.topmost
+	elseif flag == 'allow_minimize' then
+		return self.win.minimize_button
+	elseif flag == 'allow_maximize' then
+		return self.win.maximize_button
+	elseif flag == 'allow_close' then
+		return not self.win.noclose
+	elseif flag == 'allow_resize' then
+		return self.win.sizeable
 	end
 end
 
@@ -330,7 +390,7 @@ function Window:on_key_up(vk)
 	self.delegate:event('key_up', keyname(vk))
 end
 
---we get the ALT key with this messages instead
+--we get the ALT key with these messages instead
 Window.on_syskey_down = Window.on_key_down
 Window.on_syskey_up = Window.on_key_up
 
@@ -373,8 +433,8 @@ function Window:setmouse(x, y, buttons)
 	m.xbutton2 = buttons.xbutton2
 
 	--send mouse_enter
-	if not self._mouse_entered then
-		self._mouse_entered = true
+	if not m.inside then
+		m.inside = true
 		winapi.TrackMouseEvent{hwnd = self.hwnd, flags = winapi.TME_LEAVE}
 		self.delegate:event'mouse_enter'
 	end
@@ -390,8 +450,8 @@ function Window:on_mouse_move(x, y, buttons)
 end
 
 function Window:on_mouse_leave()
-	if not self._mouse_entered then return end
-	self._mouse_entered = false
+	if not self.delegate.mouse.inside then return end
+	self.delegate.mouse.inside = false
 	self.delegate:event'mouse_leave'
 end
 
@@ -482,16 +542,61 @@ end
 --rendering
 
 function window:invalidate()
-	self.win:invalidate()
+	if self.win.layered then
+		self.win:update_layered()
+	else
+		self.win:invalidate()
+	end
 end
 
 function Window:on_paint()
 	self.delegate:event'render'
 end
 
+local cairo = require'cairo'
+require'cairo_win32'
+
+function Window:free_layered()
+	self.bmp_cr:free()
+	self.bmp_surface:free()
+	self.pixman_cr:free()
+	self.pixman_surface:free()
+	winapi.DeleteDC(self.bmp_hdc)
+	winapi.DeleteObject(self.bmp)
+	self.bmp = nil
+end
+
+function Window:update_layered()
+	if not self.bmp then
+		self.screen_hdc = winapi.GetDC()
+		local w, h = self.client_w, self.client_h
+		self.bmp_origin = winapi.POINT()
+		self.bmp_size = winapi.SIZE{w = w, h = h}
+		self.bmp = winapi.CreateCompatibleBitmap(self.screen_hdc, w, h)
+		self.bmp_hdc = winapi.CreateCompatibleDC(self.screen_hdc)
+		winapi.SelectObject(self.bmp_hdc, self.bmp)
+		self.blendfunc = winapi.types.BLENDFUNCTION{
+			AlphaFormat = winapi.AC_SRC_ALPHA,
+			BlendFlags = 0,
+			BlendOp = winapi.AC_SRC_OVER,
+			SourceConstantAlpha = 255,
+		}
+		self.bmp_surface = cairo.cairo_win32_surface_create(self.bmp_hdc)
+		self.bmp_cr = self.bmp_surface:create_context()
+		self.pixman_surface = cairo.cairo_image_surface_create(cairo.CAIRO_FORMAT_RGB24, w, h)
+		self.pixman_cr = self.pixman_surface:create_context()
+		self.bmp_cr:set_source_surface(self.pixman_surface, 0, 0)
+	end
+	self.delegate:event('render', self.pixman_cr)
+	self.bmp_cr:paint()
+	winapi.UpdateLayeredWindow(self.hwnd, self.screen_hdc, self.bmp_origin, self.bmp_size, self.bmp_hdc,
+										self.bmp_origin, 0, self.blendfunc, winapi.ULW_ALPHA)
+end
 
 if not ... then require'nw_demo' end
 
---return an api subclass with this implementation
-return glue.inherit({impl = nw}, require'nw_api')
+--set the api impl and return it
+local api = require'nw_api'
+api.impl = nw
+return api
 

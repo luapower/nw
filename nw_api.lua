@@ -1,13 +1,16 @@
 --native widgets api class. needs an impl instance to function.
 local glue = require'glue'
+local box2d = require'box2d'
 
 local nw = {}
 
 function nw:app()
-	local app = glue.inherit({}, self.app_class)
-	app.impl = self.impl:app()
-	app._windows = {}
-	return app
+	if not self._app then
+		self._app = glue.inherit({}, self.app_class)
+		self._app.impl = self.impl:app()
+		self._app._windows = {}
+	end
+	return self._app
 end
 
 --app
@@ -24,6 +27,7 @@ function app:run()
 end
 
 --close all windows and quit the main loop; abort on the first window that refuses to close
+--spawning new windows on close results in undefined behavior
 function app:quit()
 	for win in self:windows() do
 		win:free()
@@ -31,7 +35,6 @@ function app:quit()
 			break
 		end
 	end
-	self.impl:quit()
 end
 
 --monitors
@@ -44,7 +47,7 @@ function app:client_rect()
 	return self.impl:client_rect()
 end
 
---config
+--time
 
 function app:time()
 	return self.impl:time()
@@ -63,6 +66,10 @@ function app:window(t)
 	win.keys = {}
 	win._down = {}
 	win.impl = self.impl:window{
+		x = t.x,
+		y = t.y,
+		w = t.w,
+		h = t.h,
 		title = t.title,
 		state = t.state,
 		topmost = t.topmost,
@@ -71,15 +78,10 @@ function app:window(t)
 		allow_maximize = t.allow_maximize,
 		allow_close = t.allow_close,
 		allow_resize = t.allow_resize,
-		x = t.x,
-		y = t.y,
-		w = t.w,
-		h = t.h,
 		delegate = win,
 	}
 	self._windows[win] = true
-	--TODO: self._winimpl[win.impl] = win
-	if t.visible then
+	if t.visible ~= false then
 		win:show()
 	end
 	return win
@@ -88,8 +90,6 @@ end
 function app:windows()
 	return pairs(self._windows)
 end
-
-function app:closed(window) end
 
 function app:active_window()
 	return self._active_window
@@ -125,6 +125,9 @@ function window:_dispatch(event, ...)
 	if self[event] then
 		return self[event](self, ...)
 	end
+	if self.app[event] then
+		return self.app[event](self.app, self, ...)
+	end
 end
 
 --lifetime
@@ -138,25 +141,23 @@ function window:dead()
 	return self.app._windows[self] == nil
 end
 
-function window:closing() end --return false to prevent closing
-function window:closed() end --right before freeing the children
-
 function _event:closed()
 	self:_dispatch'closed'
-	self.app:closed(self)
 	self.app._windows[self] = nil
 	if not next(self.app._windows) then
-		self.app:quit()
+		self.app.impl:quit()
 	end
 end
 
---activation
+--focus
 
-function window:activate() self.impl:activate() end
-function window:active() return self.impl:active() end --true|false
+function window:activate()
+	self.impl:activate()
+end
 
-function window:activated() end
-function window:deactivated() end
+function window:active() --true|false
+	return self.impl:active()
+end
 
 function _event:activated()
 	self.app._active_window = self
@@ -170,24 +171,53 @@ end
 
 --state
 
-function window:show(state) --'maximized'|'minimized'|'normal'|'fullscreen'
-	self.impl:show(state)
+function window:show(state)
+	if state then
+		self.impl:state(state)
+	end
+	self.impl:show()
 end
 
-function window:hide() self.impl:hide() end
-function window:visible() return self.impl:visible() end --true|false
+function window:hide()
+	self.impl:hide()
+end
 
-function window:state(state) --'maximized'|'minimized'|'normal'|'fullscreen'
-	if state then
-		return self.impl:state() == state
-	else
-		return self.impl:state()
+function window:visible() --true|false
+	return self.impl:visible()
+end
+
+function window:state(state) --'maximized'|'minimized'|'normal'
+	return self.impl:state(state)
+end
+
+function window:fullscreen(on)
+	return self.impl:fullscreen(on)
+end
+
+function window:save()
+	return self.impl:save()
+end
+
+function window:load(t)
+	if not t.visible then
+		self:hide()
+		self:state(t.state)
+	end
+	self:frame_rect(t.x, t.y, t.w, t.h)
+	self:title(t.title)
+	self:frame('frame', t.frame)
+	self:frame('topmost', t.topmost)
+	self:frame('allow_minimize', t.allow_minimize)
+	self:frame('allow_maximize', t.allow_maximize)
+	self:frame('allow_close', t.allow_close)
+	if t.visible then
+		self:show(t.state)
 	end
 end
 
-function window:state_changed() end
-
---positioning
+function window:normal_frame_rect(x, y, w, h) --x, y, w, h
+	return self.impl:normal_frame_rect(x, y, w, h)
+end
 
 function window:frame_rect(x, y, w, h) --x, y, w, h
 	return self.impl:frame_rect(x, y, w, h)
@@ -197,14 +227,14 @@ function window:client_rect() --x, y, w, h
 	return self.impl:client_rect()
 end
 
-function window:frame_changing(how, x, y, w, h) end --move|left|right|top|bottom|topleft|topright|bottomleft|bottomright
-function window:moved() end --also called when changing state
-function window:resized() end --also called when changing state
-
 --frame
 
 function window:title(newtitle)
 	return self.impl:title(newtitle)
+end
+
+function window:frame(flag, value)
+	return self.impl:frame(flag, value)
 end
 
 --keyboard
@@ -213,44 +243,36 @@ function window:key(key) --down[, toggled]
 	return self.impl:key(key)
 end
 
-function window:key_down(key) end
-function window:key_up(key) end
-function window:key_press(key) end
-function window:key_char(char) end --sent after key_press for displayable characters
-
 --mouse
 
-function window:click_count(button)
-	return self._down[button] and self._down[button].count or 0
-end
-
 function _event:mouse_down(button)
-	self._down[button] = self._down[button] or {}
 	local t = self._down[button]
+	if not t then
+		t = {count = 0}
+		self._down[button] = t
+	end
 
-	if self.app:timediff(t.time or 0) < self.app.impl:double_click_time() then
-		t.count = (t.count or 1) + 1
+	if t.count > 0
+		and self.app:timediff(t.time) < t.interval
+		and box2d.hit(self.mouse.x, self.mouse.y, t.x, t.y, t.w, t.h)
+	then
+		t.count = t.count + 1
+		t.time = self.app:time()
 	else
 		t.count = 1
-		--t.x = self:mouse_
+		t.time = self.app:time()
+		t.interval = self.app.impl:double_click_time()
+		t.w, t.h = self.app.impl:double_click_target_area()
+		t.x = self.mouse.x - t.w / 2
+		t.y = self.mouse.y - t.h / 2
 	end
-	t.time = self.app:time()
 
 	self:_dispatch('mouse_down', button)
 
-	if self:event('mouse_click', button, self:click_count(button)) then
+	if self:event('mouse_click', button, t.count) then
 		t.count = 0
 	end
 end
-
-function window:mouse_move(x, y) end
-function window:mouse_enter() end
-function window:mouse_leave() end
-function window:mouse_up(button) end
-function window:mouse_down(button) end
-function window:mouse_click(button, count) end
-function window:mouse_wheel(delta) end
-function window:mouse_hwheel(delta) end
 
 --trackpad
 
@@ -262,7 +284,6 @@ function window:invalidate()
 	self.impl:invalidate()
 end
 
-function window:render() end
 
 if not ... then require'nw_demo' end
 

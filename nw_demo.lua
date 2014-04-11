@@ -76,7 +76,20 @@ function win1:frame_changing(how, x, y, w, h)
 	end
 	return x, y, w, h
 end
-function win1:moved() print'moved win1' end
+function win1:moved()
+	print'moved win1'
+	win1:invalidate()
+end
+
+function win1:render(cr)
+	cr:rectangle(10, 10, 100, 100)
+	cr:set_source_rgba(1, 0, 0, 1)
+	cr:fill()
+	cr:rectangle(150, 150, 100, 100)
+	cr:set_source_rgba(1, 0, 0, 0.5)
+	cr:fill()
+end
+
 function win2:moved() print'moved win2' end
 function win1:resized() print'resized win1' end
 function win2:resized() print'resized win2' end
@@ -102,59 +115,72 @@ function win1:mouse_wheel(delta) print('mouse_wheel win1', delta) end
 function win2:mouse_wheel(delta) print('mouse_wheel win2', delta) end
 
 local commands = {
-	space = function()
-		local state = win2:state()
-		if win2:state'maximized' then
-			win2:show'normal'
-		elseif win2:state'normal' then
-			win2:show'minimized'
-		elseif win2:state'minimized' then
-			win2:show'fullscreen'
-		elseif win2:state'fullscreen' then
-			win2:show'maximized'
-		end
-		print('state', state, '->', win2:state())
+	Q = function(self) win1:state(win1:state() == 'maximized' and 'normal' or 'maximized') end,
+	W = function(self) win1:show'maximized' end,
+	E = function(self) if win1:visible() then win1:hide() else win1:show() end end,
+	R = function(self) self:frame('allow_resize', not self:frame'allow_resize') end,
+
+	F11 = function(self)
+		win1:fullscreen(not win1:fullscreen())
 	end,
-	esc = function()
+
+	left = function(self) local x, y, w, h = self:frame_rect(); x = x - 100; self:frame_rect(x, y, w, h) end,
+	right = function(self) local x, y, w, h = self:frame_rect(); x = x + 100; self:frame_rect(x, y, w, h) end,
+	up = function(self) local x, y, w, h = self:frame_rect(); y = y - 100; self:frame_rect(x, y, w, h) end,
+	down = function(self) local x, y, w, h = self:frame_rect(); y = y + 100; self:frame_rect(x, y, w, h) end,
+
+	space = function(self)
+		local state = self:state()
+		if self:state() == 'maximized' then
+			self:show'normal'
+		elseif self:state() == 'normal' then
+			self:show'minimized'
+		elseif self:state() == 'minimized' then
+			self:show'maximized'
+		end
+		print('state', state, '->', self:state())
+	end,
+	esc = function(self)
 		if win2:active() then
 			win1:activate()
 		elseif win1:active() then
 			win2:activate()
 		end
 	end,
-	H = function()
-		if win2:visible() then
-			win2:hide()
+	H = function(self)
+		if self:visible() then
+			self:hide()
 		else
-			win2:show()
+			self:show()
 		end
 	end,
-	M = function()
+	M = function(self)
 		app:window{x = 200, y = 200, w = 200, h = 200, title = 'temp', visible = true, state = 'minimized'}
 	end,
-	shift = function()
-		print('shift-key', win2:key'lshift' and 'left' or 'right')
+	shift = function(self)
+		print('shift-key', self:key'lshift' and 'left' or 'right')
 	end,
-	alt = function()
-		print('alt-key', win2:key'lalt' and 'left' or 'right')
+	alt = function(self)
+		print('alt-key', self:key'lalt' and 'left' or 'right')
 	end,
-	ctrl = function()
-		print('ctrl-key', win2:key'lctrl' and 'left' or 'right')
+	ctrl = function(self)
+		print('ctrl-key', self:key'lctrl' and 'left' or 'right')
 	end,
 }
 
 function win2:key_press(key)
 	print('key_press', key, win2:key(key))
-end
-
-function win2:key_down(key)
-	print('key_down', key, win2:key(key))
 	if commands[key] then
-		commands[key]()
+		commands[key](self)
 	end
 end
 
+function win2:key_down(key)
+	print('key_down', key, self:key(key))
+end
+
 win1.key_down = win2.key_down
+win1.key_press = win2.key_press
 
 function win2:key_up(key)
 	print('key_up', key, win2:key(key))
