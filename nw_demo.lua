@@ -46,15 +46,27 @@ local nw = require'nw'
 
 local app = nw:app()
 
-print('screen_rect', app:screen_rect())
-print('client_rect', app:client_rect())
-print('double_click_time', app.impl:double_click_time())
+print('impl.double_click_time', app.impl:double_click_time())
+print('impl.double_click_target_area', app.impl:double_click_target_area())
+
+for monitor in app:monitors() do
+	print('screen_rect', app:screen_rect(monitor))
+	print('client_rect', app:client_rect(monitor))
+end
 
 local win1 = app:window{x = 100, y = 100, w = 800, h = 400, title = 'win1', visible = false,
 								transparent = true, frame = false}
 local win2 = app:window{x = 200, y = 400, w = 600, h = 200, title = 'win2', visible = false,
 								frame = false, allow_resize = false, allow_minimize = false, allow_maximize = false,
 								allow_close = true}
+
+assert(win1:monitor() == win2:monitor())
+assert(win1:monitor() == app:primary_monitor())
+
+print'frames'
+for x, y, w, h in app:frames() do
+	print('', x, y, w, h)
+end
 
 for win in app:windows() do
 	win:title('[' .. win:title() .. ']')
@@ -72,6 +84,7 @@ function win2:activated() print'activated win2' end
 function win1:deactivated() print'deactivated win1' end
 function win2:deactivated() print'deactivated win2' end
 function win1:frame_changing(how, x, y, w, h)
+	print'frame_changing win1'
 	if how == 'move' then
 		x = math.min(math.max(x, 50), 250)
 		y = math.min(math.max(y, 50), 250)
@@ -128,7 +141,7 @@ local commands = {
 	R = function(self) self:frame('allow_resize', not self:frame'allow_resize') end,
 
 	F11 = function(self)
-		win1:fullscreen(not win1:fullscreen())
+		self:fullscreen(not self:fullscreen())
 	end,
 
 	left = function(self) local x, y, w, h = self:frame_rect(); x = x - 100; self:frame_rect(x, y, w, h) end,
@@ -176,7 +189,7 @@ local commands = {
 }
 
 function win2:keypress(key)
-	print('keypress', key, win2:key(key))
+	print('keypress', key, self:key(key))
 	if commands[key] then
 		commands[key](self)
 	end
@@ -190,7 +203,7 @@ win1.keydown = win2.keydown
 win1.keypress = win2.keypress
 
 function win2:keyup(key)
-	print('keyup', key, win2:key(key))
+	print('keyup', key, self:key(key))
 end
 
 function win2:keychar(char) print('keychar', char) end

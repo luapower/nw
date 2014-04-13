@@ -8,6 +8,7 @@ require'winapi.keyboard'
 require'winapi.time'
 require'winapi.systemmetrics'
 require'winapi.gdi'
+require'winapi.monitor'
 local glue = require'glue'
 local ffi = require'ffi'
 local box2d = require'box2d'
@@ -42,17 +43,27 @@ function app:quit()
 end
 
 function app:monitors()
-	return 1, 1 --count, primary
+	local monitors = winapi.EnumDisplayMonitors()
+	local i = 0
+	return function()
+		i = i + 1
+		if i > #monitors then return end
+		return monitors[i]
+	end
+end
+
+function app:primary_monitor()
+	return winapi.MonitorFromPoint(nil, winapi.MONITOR_DEFAULTTOPRIMARY)
 end
 
 function app:screen_rect(monitor)
-	return unpack_rect(winapi.GetWindowRect(winapi.GetDesktopWindow()))
+	monitor = monitor or self:primary_monitor()
+	return unpack_rect(winapi.GetMonitorInfo(monitor).monitor_rect)
 end
 
 function app:client_rect(monitor)
-	local rect = winapi.RECT()
-	winapi.SystemParametersInfo(winapi.SPI_GETWORKAREA, 0, rect, 0)
-	return unpack_rect(rect)
+	monitor = monitor or self:primary_monitor()
+	return unpack_rect(winapi.GetMonitorInfo(monitor).work_rect)
 end
 
 function app:double_click_time() --milliseconds
@@ -81,9 +92,25 @@ function app:window(t)
 end
 
 function app:frames()
-	return function()
-		--TODO
+	local t = {}
+	for i,hwnd in ipairs(winapi.EnumChildWindows()) do
+		if winapi.IsWindowVisible(hwnd) and not winapi.IsIconic(hwnd) then
+			local ok, rect = pcall(winapi.GetWindowRect, hwnd)
+			if ok then
+				local ok, text = pcall(winapi.GetWindowText, hwnd)
+				if ok then
+					if text ~= '' and text ~= 'Program Manager' then
+						table.insert(t, rect)
+					end
+				end
+			end
+		end
 	end
+	return coroutine.wrap(function()
+		for i,rect in ipairs(t) do
+			coroutine.yield(unpack_rect(rect))
+		end
+	end)
 end
 
 --window impl
@@ -141,8 +168,9 @@ function window:new(app, t)
 	winapi.TrackMouseEvent{hwnd = self.win.hwnd, flags = winapi.TME_LEAVE}
 
 	self._fullscreen = false
-	self:fullscreen(t.fullscreen)
-	self:invalidate()
+	if t.fullscreen then
+		self:fullscreen(true)
+	end
 
 	return self
 end
@@ -190,16 +218,27 @@ end
 
 function window:state(state)
 	if state ~= nil then
-		self.win.state = state
+		if self._fullscreen then
+			self._fs.state = state
+		else
+			self.win.state = state
+			--frameless windows maximize to the entire screen, covering the taskbar. fix that.
+			if state == 'maximized' and not self.win.titlebar then
+				self.win.rect = winapi.GetMonitorInfo(self:monitor()).work_rect
+			end
+		end
 	else
-		return self.win.state
+		if self._fullscreen then
+			return self._fs.state
+		else
+			return self.win.state
+		end
 	end
 end
 
 function window:visible(visible)
 	if visible ~= nil then
 		if visible then
-			local was_visible = self:visible()
 			self.win:show()
 		else
 			self.win:hide()
@@ -221,47 +260,44 @@ function window:fullscreen(on)
 			titlebar = self.win.titlebar,
 			sizeable = self.win.sizeable,
 		}
-		self.win.normal_rect = self.app:screen_rect()
-		self.win.state = 'normal'
+		self.win.visible = false
+		self.win.normal_rect = winapi.GetMonitorInfo(self:monitor()).monitor_rect
 		self.win.titlebar = false
 		self.win.sizeable = false
+		self.win.state = 'normal'
+		self.win.visible = true
 		self._fullscreen = true
 	else
+		self.win.visible = false
+		self.win.normal_rect = self._fs.normal_rect
 		self.win.titlebar = self._fs.titlebar
 		self.win.sizeable = self._fs.sizeable
-		self.win.normal_rect = self._fs.normal_rect
+		self.win.visible = true
 		self.win.state = self._fs.state
+		--frameless windows maximize to the entire screen, covering the taskbar. fix that.
+		if self.win.state == 'maximized' and not self.win.titlebar then
+			self.win.rect = winapi.GetMonitorInfo(self:monitor()).work_rect
+		end
 		self._fullscreen = false
 	end
 end
 
 --positioning
 
-function window:normal_frame_rect(x, y, w, h)
-	if x then
-		local r = winapi.RECT()
-		r.x = x
-		r.y = y
-		r.w = w
-		r.h = h
-		self.win.normal_rect = r
-	else
-		return unpack_rect(self.win.normal_rect)
-	end
-end
-
 function window:frame_rect(x, y, w, h)
 	if x then
-		self.win:move(x, y, w, h)
-		self.win:free_surface()
-		self.delegate:invalidate()
+		if self._fullscreen then
+			self._fs.normal_rect = RECT(x, y, x + w, y + h)
+		else
+			self.win:set_normal_rect(x, y, x + w, y + h)
+		end
 	else
-		return unpack_rect(self.win.rect)
+		if self._fullscreen then
+			return self._fs.normal_rect
+		else
+			return unpack_rect(self.win.normal_rect)
+		end
 	end
-end
-
-function window:client_rect()
-	return unpack_rect(self.win.client_rect)
 end
 
 function Window:frame_changing(how, rect)
@@ -281,18 +317,29 @@ function Window:on_resizing(how, rect)
 end
 
 function Window:on_moved()
-	if self.layered and self.win_pos then
+	if self.layered then
 		self.win_pos.x = self.x
 		self.win_pos.y = self.y
+		self.delegate:invalidate()
 	end
 end
 
-function Window:on_resized(flag)
+function Window:resized()
 	self:free_surface()
+	self.delegate:invalidate()
+end
+
+function Window:on_resized(flag)
+	self:resized()
+	self.delegate:event'resized'
 end
 
 function Window:on_pos_changed(info)
-	self.delegate:event'frame_changed'
+	--self.delegate:event'frame_changed'
+end
+
+function window:monitor()
+	return self.win.monitor
 end
 
 --frame
@@ -389,6 +436,8 @@ function window:key(key) --down[, toggled]
 end
 
 --mouse
+
+--TODO: get lost mouse events http://blogs.msdn.com/b/oldnewthing/archive/2012/03/14/10282406.aspx
 
 function Window:setmouse(x, y, buttons)
 
@@ -511,6 +560,10 @@ end
 
 --rendering
 
+function window:client_rect()
+	return unpack_rect(self.win.client_rect)
+end
+
 function window:invalidate()
 	if self.win.layered then
 		self.win:repaint_surface()
@@ -523,6 +576,10 @@ end
 function Window:on_paint(hdc)
 	self:repaint_surface()
 	winapi.BitBlt(hdc, 0, 0, self.bmp_size.w, self.bmp_size.h, self.bmp_hdc, 0, 0, winapi.SRCCOPY)
+end
+
+function Window:WM_ERASEBKGND()
+	return false --we draw our own background (prevent flicker)
 end
 
 local cairo = require'cairo'
@@ -584,7 +641,7 @@ function Window:update_layered()
 										self.bmp_pos, 0, self.blendfunc, winapi.ULW_ALPHA)
 end
 
-if not ... then require'nw_demo' end
+if not ... then require'nw_demo2' end
 
 --set the api impl and return it
 local api = require'nw_api'

@@ -17,7 +17,7 @@ nw.app_class = app
 
 function app:new(nw)
 	self = glue.inherit({}, self)
-	self._windows = {}
+	self._windows = {} --{window1,...}
 	self.impl = nw.impl:app()
 	return self
 end
@@ -32,10 +32,10 @@ function app:run()
 	self._running = nil
 end
 
---close all windows and quit the main loop; abort on the first window that refuses to close.
+--close all windows in reverse-creation order and quit the main loop; abort on the first window that refuses to close.
 --spawning new windows on close is allowed and will result in the app not quitting.
 function app:quit()
-	for win in self:windows() do
+	for win in self:windows'reverse' do
 		win:free()
 		if not win:dead() then
 			break
@@ -49,6 +49,10 @@ function app:monitors()
 	return self.impl:monitors()
 end
 
+function app:primary_monitor()
+	return self.impl:primary_monitor()
+end
+
 function app:screen_rect(monitor)
 	return self.impl:screen_rect(monitor)
 end
@@ -57,7 +61,7 @@ function app:client_rect(monitor)
 	return self.impl:client_rect(monitor)
 end
 
-function app:frames()
+function app:frames() --iter() -> x,y,w,h in z-order top-to-bottom
 	return self.impl:frames()
 end
 
@@ -77,13 +81,38 @@ function app:window(t)
 	return self.window_class:new(self, t)
 end
 
---iterate existing windows. creating new windows while iterating is allowed (they will not be included).
-function app:windows()
-	return pairs(glue.update({}, self._windows))
+--iterate existing windows in creation order, or reverse-creation order.
+--windows created while iterating won't be included in the iteration. windows freed won't be excluded.
+function app:windows(reverse)
+	local t = glue.extend({}, self._windows)
+	local i, j = 0, 1
+	if reverse then
+		i, j = #self.windows + 1, -1
+	end
+	return function()
+		i = i + j
+		return t[i]
+	end
 end
 
 function app:active_window()
 	return self._active_window
+end
+
+function app:_add_window(win)
+	table.insert(self._windows, win)
+end
+
+function app:_remove_window(target_win)
+	for i, win in ipairs(self._windows) do
+		if win == target_win then
+			table.remove(self._windows, i)
+			break
+		end
+	end
+	if #self._windows == 0 then
+		self.impl:quit()
+	end
 end
 
 --window
@@ -141,7 +170,7 @@ function window:new(app, t)
 		resizeable = t.resizeable,
 	}
 
-	app._windows[self] = true
+	app:_add_window(self)
 
 	if t.visible then
 		self:show()
@@ -150,55 +179,7 @@ function window:new(app, t)
 	return self
 end
 
---state
-
---get read-only frame properties
-function window:frame(prop)
-	return self._frame[prop]
-end
-
---save a table t that can be passed to app:window(t) to recreate the window in its current state.
-function window:save()
-	--gather state and frame
-	local x, y, w, h = self:frame_rect()
-	local t = {
-		x = x,
-		y = y,
-		w = w,
-		h = h,
-		title = self:title(),
-		state = self:state(),
-		topmost = self:topmost(),
-		frame = self:frame'frame',
-		transparent = self:frame'transparent',
-		minimizable = self:frame'minimizable',
-		maximizable = self:frame'maximizable',
-		closeable = self:frame'closeable',
-		resizeable = self:frame'resizeable',
-	}
-	--strip defaults
-	for k,v in pairs(self.defaults) do
-		if t[k] == v then
-			t[k] = nil
-		end
-	end
-	return t
-end
-
---load a window's user-changeable state from a saved state (visibility and title remain the same)
-function window:load(t)
-	t = glue.update({}, self.defaults, t)
-	if self:state() == 'normal' then --resize after state change to avoid flicker
-		self:state(t.state)
-		self:frame_rect(t.x, t.y, t.w, t.h)
-	else --resize before state change to avoid flicker
-		self:frame_rect(t.x, t.y, t.w, t.h)
-		self:state(t.state)
-	end
-	self:topmost(t.topmost)
-end
-
---delegate
+--events
 
 local _event = {}
 
@@ -232,24 +213,28 @@ function window:free()
 end
 
 function window:dead()
-	return self.app._windows[self] == nil
+	return self._dead
+end
+
+function window:check()
+	assert(not self:dead(), 'dead window')
 end
 
 function _event:closed()
 	self:_dispatch'closed'
-	self.app._windows[self] = nil
-	if not next(self.app._windows) then
-		self.app.impl:quit()
-	end
+	self._dead = true
+	self.app:_remove_window(self)
 end
 
 --focus
 
 function window:activate()
+	self:check()
 	self.impl:activate()
 end
 
 function window:active() --true|false
+	self:check()
 	return self.impl:active()
 end
 
@@ -263,6 +248,8 @@ function _event:deactivated()
 	self:_dispatch'deactivated'
 end
 
+--state
+
 function window:show(state)
 	if state then
 		self.impl:state(state)
@@ -275,40 +262,77 @@ function window:hide()
 end
 
 function window:visible(visible) --true|false
+	self:check()
 	return self.impl:visible(visible)
 end
 
 function window:state(state) --'maximized'|'minimized'|'normal'
+	self:check()
 	return self.impl:state(state)
 end
 
-function window:topmost(yes)
-	return self.impl:topmost(yes)
+function window:topmost(topmost)
+	self:check()
+	return self.impl:topmost(topmost)
 end
 
-function window:fullscreen(on)
-	return self.impl:fullscreen(on)
+function window:fullscreen(fullscreen)
+	self:check()
+	return self.impl:fullscreen(fullscreen)
 end
 
 function window:frame_rect(x, y, w, h) --x, y, w, h
+	self:check()
 	return self.impl:frame_rect(x, y, w, h)
 end
 
 function window:client_rect() --x, y, w, h
+	self:check()
 	return self.impl:client_rect()
 end
 
 function window:title(newtitle)
+	self:check()
 	return self.impl:title(newtitle)
 end
 
 function window:monitor()
+	self:check()
 	return self.impl:monitor()
+end
+
+--get read-only frame properties
+function window:frame(prop)
+	self:check()
+	return self._frame[prop]
+end
+
+--save a window's user-changeable state
+function window:save()
+	local x, y, w, h = self:frame_rect()
+	local t = {x = x, y = y, w = w, h = h, state = self:state()}
+	if t.state == self.defaults.state then
+		t.state = nil
+	end
+	return t
+end
+
+--load a window's user-changeable state
+function window:load(t)
+	t = glue.update({}, self.defaults, t)
+	if self:state() == 'normal' then --resize after state change to avoid flicker
+		self:state(t.state)
+		self:frame_rect(t.x, t.y, t.w, t.h)
+	else --resize before state change to avoid flicker
+		self:frame_rect(t.x, t.y, t.w, t.h)
+		self:state(t.state)
+	end
 end
 
 --keyboard
 
 function window:key(key) --down[, toggled]
+	self:check()
 	return self.impl:key(key)
 end
 
@@ -343,13 +367,10 @@ function _event:mousedown(button)
 	end
 end
 
---trackpad
-
---
-
 --rendering
 
 function window:invalidate()
+	self:check()
 	self.impl:invalidate()
 end
 
