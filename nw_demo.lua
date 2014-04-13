@@ -21,23 +21,22 @@ function app:quit(); works from closed(), not from closing()
 - function window:visible()
 - function window:state()
 - function window:frame_changing(how, x, y, w, h) end --move|left|right|top|bottom|topleft|topright|bottomleft|bottomright
-- function window:resized() end
-- function window:moved() end
+- function window:frame_changed()
 function window:state_changed() end
 function window:frame_rect(x, y, w, h) return self.impl:frame_rect(x, y, w, h) end --x, y, w, h
 function window:client_rect() return self.impl:client_rect() end --x, y, w, h
 
 - function window:title(newtitle)
 
-- function window:key_down(key) end
-- function window:key_up(key) end
-- function window:key_press(key) end
-- function window:key_char(char) end
+- function window:keydown(key) end
+- function window:keyup(key) end
+- function window:keypress(key) end
+- function window:keychar(char) end
 
-- function window:mouse_up(button) end
-- function window:mouse_down(button) end
+- function window:mouseup(button) end
+- function window:mousedown(button) end
 - function window:click(button) end
-- function window:mouse_wheel(delta) end
+- function window:wheel(delta) end
 
 - function window:render() end
 - function window:invalidate()
@@ -51,7 +50,8 @@ print('screen_rect', app:screen_rect())
 print('client_rect', app:client_rect())
 print('double_click_time', app.impl:double_click_time())
 
-local win1 = app:window{x = 100, y = 100, w = 800, h = 400, title = 'win1', visible = false}
+local win1 = app:window{x = 100, y = 100, w = 800, h = 400, title = 'win1', visible = false,
+								transparent = true, frame = false}
 local win2 = app:window{x = 200, y = 400, w = 600, h = 200, title = 'win2', visible = false,
 								frame = false, allow_resize = false, allow_minimize = false, allow_maximize = false,
 								allow_close = true}
@@ -69,6 +69,8 @@ function win1:closed() print'closed win1' end
 function win2:closed() print'closed win2' end
 function win1:activated() print'activated win1' end
 function win2:activated() print'activated win2' end
+function win1:deactivated() print'deactivated win1' end
+function win2:deactivated() print'deactivated win2' end
 function win1:frame_changing(how, x, y, w, h)
 	if how == 'move' then
 		x = math.min(math.max(x, 50), 250)
@@ -76,43 +78,48 @@ function win1:frame_changing(how, x, y, w, h)
 	end
 	return x, y, w, h
 end
-function win1:moved()
-	print'moved win1'
-	win1:invalidate()
+function win1:frame_changed()
+	print'frame_changed win1'
+	self:invalidate()
+end
+function win2:frame_changed()
+	print'frame_changed win2'
+	self:invalidate()
 end
 
 function win1:render(cr)
-	cr:rectangle(10, 10, 100, 100)
-	cr:set_source_rgba(1, 0, 0, 1)
-	cr:fill()
-	cr:rectangle(150, 150, 100, 100)
+	local w, h = select(3, self:frame_rect())
+	cr:rectangle(0, 0, w, h)
+	cr:set_source_rgba(1, 1, 1, 0.5)
+	cr:set_line_width(10)
+	cr:stroke()
+	cr:rectangle(50, 50, 100, 100)
 	cr:set_source_rgba(1, 0, 0, 0.5)
 	cr:fill()
 end
 
-function win2:moved() print'moved win2' end
-function win1:resized() print'resized win1' end
-function win2:resized() print'resized win2' end
-function win1:mouse_enter() print'mouse_enter win1' end
-function win2:mouse_enter() print'mouse_enter win2' end
-function win1:mouse_leave() print'mouse_leave win1' end
-function win2:mouse_leave() print'mouse_leave win2' end
-function win1:mouse_move() print('mouse_move win1', win1.mouse.x, win1.mouse.y) end
-function win2:mouse_move() print('mouse_move win2', win2.mouse.x, win2.mouse.y) end
-function win1:mouse_down(button, click_count) print('mouse_down win1', button) end
-function win2:mouse_down(button, click_count) print('mouse_down win2', button) end
-function win1:mouse_up(button, click_count) print('mouse_up win1', button) end
-function win2:mouse_up(button, click_count) print('mouse_up win2', button) end
-function win1:mouse_click(button, click_count)
-	print('mouse_click win1', button, click_count)
+win2.render = win1.render
+
+function win1:hover() print'hover win1' end
+function win2:hover() print'hover win2' end
+function win1:leave() print'leave win1' end
+function win2:leave() print'leave win2' end
+function win1:mousemove() print('mousemove win1', win1.mouse.x, win1.mouse.y) end
+function win2:mousemove() print('mousemove win2', win2.mouse.x, win2.mouse.y) end
+function win1:mousedown(button, click_count) print('mousedown win1', button) end
+function win2:mousedown(button, click_count) print('mousedown win2', button) end
+function win1:mouseup(button, click_count) print('mouseup win1', button) end
+function win2:mouseup(button, click_count) print('mouseup win2', button) end
+function win1:click(button, click_count)
+	print('click win1', button, click_count)
 	if click_count == 2 then return true end
 end
-function win2:mouse_click(button, click_count)
-	print('mouse_click win2', button, click_count)
+function win2:click(button, click_count)
+	print('click win2', button, click_count)
 	if click_count == 3 then return true end
 end
-function win1:mouse_wheel(delta) print('mouse_wheel win1', delta) end
-function win2:mouse_wheel(delta) print('mouse_wheel win2', delta) end
+function win1:wheel(delta) print('wheel win1', delta) end
+function win2:wheel(delta) print('wheel win2', delta) end
 
 local commands = {
 	Q = function(self) win1:state(win1:state() == 'maximized' and 'normal' or 'maximized') end,
@@ -168,25 +175,25 @@ local commands = {
 	end,
 }
 
-function win2:key_press(key)
-	print('key_press', key, win2:key(key))
+function win2:keypress(key)
+	print('keypress', key, win2:key(key))
 	if commands[key] then
 		commands[key](self)
 	end
 end
 
-function win2:key_down(key)
-	print('key_down', key, self:key(key))
+function win2:keydown(key)
+	print('keydown', key, self:key(key))
 end
 
-win1.key_down = win2.key_down
-win1.key_press = win2.key_press
+win1.keydown = win2.keydown
+win1.keypress = win2.keypress
 
-function win2:key_up(key)
-	print('key_up', key, win2:key(key))
+function win2:keyup(key)
+	print('keyup', key, win2:key(key))
 end
 
-function win2:key_char(char) print('key_char', char) end
+function win2:keychar(char) print('keychar', char) end
 
 win1:show()
 win2:show()

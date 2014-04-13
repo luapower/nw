@@ -4,12 +4,9 @@ local box2d = require'box2d'
 
 local nw = {}
 
+--return the singleton app object
 function nw:app()
-	if not self._app then
-		self._app = glue.inherit({}, self.app_class)
-		self._app.impl = self.impl:app()
-		self._app._windows = {}
-	end
+	self._app = self._app or self.app_class:new(self)
 	return self._app
 end
 
@@ -18,7 +15,16 @@ end
 local app = {}
 nw.app_class = app
 
---start the main loop
+function app:new(nw)
+	self = glue.inherit({}, self)
+	self._windows = {}
+	self.impl = nw.impl:app()
+	return self
+end
+
+--app main loop
+
+--start the main loop. calling this while running is a no op.
 function app:run()
 	if self._running then return end --ignore if already running
 	self._running = true
@@ -26,8 +32,8 @@ function app:run()
 	self._running = nil
 end
 
---close all windows and quit the main loop; abort on the first window that refuses to close
---spawning new windows on close results in undefined behavior
+--close all windows and quit the main loop; abort on the first window that refuses to close.
+--spawning new windows on close is allowed and will result in the app not quitting.
 function app:quit()
 	for win in self:windows() do
 		win:free()
@@ -39,12 +45,20 @@ end
 
 --monitors
 
-function app:screen_rect()
-	return self.impl:screen_rect()
+function app:monitors()
+	return self.impl:monitors()
 end
 
-function app:client_rect()
-	return self.impl:client_rect()
+function app:screen_rect(monitor)
+	return self.impl:screen_rect(monitor)
+end
+
+function app:client_rect(monitor)
+	return self.impl:client_rect(monitor)
+end
+
+function app:frames()
+	return self.impl:frames()
 end
 
 --time
@@ -60,49 +74,129 @@ end
 --windows
 
 function app:window(t)
-	local win = glue.inherit({app = self}, self.window_class)
-	win.observers = {}
-	win.mouse = {}
-	win.keys = {}
-	win._down = {}
-	win.impl = self.impl:window{
-		x = t.x,
-		y = t.y,
-		w = t.w,
-		h = t.h,
-		title = t.title,
-		state = t.state,
-		topmost = t.topmost,
-		frame = t.frame,
-		allow_minimize = t.allow_minimize,
-		allow_maximize = t.allow_maximize,
-		allow_close = t.allow_close,
-		allow_resize = t.allow_resize,
-		delegate = win,
-	}
-	self._windows[win] = true
-	if t.visible ~= false then
-		win:show()
-	end
-	return win
+	return self.window_class:new(self, t)
 end
 
+--iterate existing windows. creating new windows while iterating is allowed (they will not be included).
 function app:windows()
-	return pairs(self._windows)
+	return pairs(glue.update({}, self._windows))
 end
 
 function app:active_window()
 	return self._active_window
 end
 
-function app:active()
-	return self.impl:active()
-end
-
 --window
 
 local window = {}
 app.window_class = window
+
+window.defaults = {
+	visible = true,
+	title = '',
+	state = 'normal',
+	fullscreen = false,
+	topmost = false,
+	frame = true,
+	transparent = false,
+	minimizable = true,
+	maximizable = true,
+	closeable = true,
+	resizeable = true,
+}
+
+function window:new(app, t)
+	t = glue.update({}, self.defaults, t)
+	local self = glue.inherit({app = app}, self)
+
+	self.observers = {}
+	self.mouse = {}
+	self._down = {}
+	self._frame = {
+		frame = t.frame,
+		transparent = t.transparent,
+		minimizable = t.minimizable,
+		maximizable = t.maximizable,
+		closeable = t.closeable,
+		resizeable = t.resizeable,
+	}
+
+	self.impl = app.impl:window{
+		delegate = self,
+		--state (read-write)
+		x = t.x,
+		y = t.y,
+		w = t.w,
+		h = t.h,
+		title = t.title,
+		state = t.state,
+		fullscreen = t.fullscreen,
+		topmost = t.topmost,
+		--frame (read-only)
+		frame = t.frame,
+		transparent = t.transparent,
+		minimizable = t.minimizable,
+		maximizable = t.maximizable,
+		closeable = t.closeable,
+		resizeable = t.resizeable,
+	}
+
+	app._windows[self] = true
+
+	if t.visible then
+		self:show()
+	end
+
+	return self
+end
+
+--state
+
+--get read-only frame properties
+function window:frame(prop)
+	return self._frame[prop]
+end
+
+--save a table t that can be passed to app:window(t) to recreate the window in its current state.
+function window:save()
+	--gather state and frame
+	local x, y, w, h = self:frame_rect()
+	local t = {
+		x = x,
+		y = y,
+		w = w,
+		h = h,
+		title = self:title(),
+		state = self:state(),
+		topmost = self:topmost(),
+		frame = self:frame'frame',
+		transparent = self:frame'transparent',
+		minimizable = self:frame'minimizable',
+		maximizable = self:frame'maximizable',
+		closeable = self:frame'closeable',
+		resizeable = self:frame'resizeable',
+	}
+	--strip defaults
+	for k,v in pairs(self.defaults) do
+		if t[k] == v then
+			t[k] = nil
+		end
+	end
+	return t
+end
+
+--load a window's user-changeable state from a saved state (visibility and title remain the same)
+function window:load(t)
+	t = glue.update({}, self.defaults, t)
+	if self:state() == 'normal' then --resize after state change to avoid flicker
+		self:state(t.state)
+		self:frame_rect(t.x, t.y, t.w, t.h)
+	else --resize before state change to avoid flicker
+		self:frame_rect(t.x, t.y, t.w, t.h)
+		self:state(t.state)
+	end
+	self:topmost(t.topmost)
+end
 
 --delegate
 
@@ -122,11 +216,11 @@ function window:_dispatch(event, ...)
 			obs(event, ...)
 		end
 	end
+	if self.app[event] then --TODO: why in this order? why can't app respond to an event with a return value?
+		self.app[event](self.app, self, ...)
+	end
 	if self[event] then
 		return self[event](self, ...)
-	end
-	if self.app[event] then
-		return self.app[event](self.app, self, ...)
 	end
 end
 
@@ -169,54 +263,31 @@ function _event:deactivated()
 	self:_dispatch'deactivated'
 end
 
---state
-
 function window:show(state)
 	if state then
 		self.impl:state(state)
 	end
-	self.impl:show()
+	self.impl:visible(true)
 end
 
 function window:hide()
-	self.impl:hide()
+	self.impl:visible(false)
 end
 
-function window:visible() --true|false
-	return self.impl:visible()
+function window:visible(visible) --true|false
+	return self.impl:visible(visible)
 end
 
 function window:state(state) --'maximized'|'minimized'|'normal'
 	return self.impl:state(state)
 end
 
+function window:topmost(yes)
+	return self.impl:topmost(yes)
+end
+
 function window:fullscreen(on)
 	return self.impl:fullscreen(on)
-end
-
-function window:save()
-	return self.impl:save()
-end
-
-function window:load(t)
-	if not t.visible then
-		self:hide()
-		self:state(t.state)
-	end
-	self:frame_rect(t.x, t.y, t.w, t.h)
-	self:title(t.title)
-	self:frame('frame', t.frame)
-	self:frame('topmost', t.topmost)
-	self:frame('allow_minimize', t.allow_minimize)
-	self:frame('allow_maximize', t.allow_maximize)
-	self:frame('allow_close', t.allow_close)
-	if t.visible then
-		self:show(t.state)
-	end
-end
-
-function window:normal_frame_rect(x, y, w, h) --x, y, w, h
-	return self.impl:normal_frame_rect(x, y, w, h)
 end
 
 function window:frame_rect(x, y, w, h) --x, y, w, h
@@ -227,14 +298,12 @@ function window:client_rect() --x, y, w, h
 	return self.impl:client_rect()
 end
 
---frame
-
 function window:title(newtitle)
 	return self.impl:title(newtitle)
 end
 
-function window:frame(flag, value)
-	return self.impl:frame(flag, value)
+function window:monitor()
+	return self.impl:monitor()
 end
 
 --keyboard
@@ -245,7 +314,7 @@ end
 
 --mouse
 
-function _event:mouse_down(button)
+function _event:mousedown(button)
 	local t = self._down[button]
 	if not t then
 		t = {count = 0}
@@ -267,9 +336,9 @@ function _event:mouse_down(button)
 		t.y = self.mouse.y - t.h / 2
 	end
 
-	self:_dispatch('mouse_down', button)
+	self:_dispatch('mousedown', button)
 
-	if self:event('mouse_click', button, t.count) then
+	if self:event('click', button, t.count) then
 		t.count = 0
 	end
 end
