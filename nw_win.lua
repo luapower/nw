@@ -1,7 +1,6 @@
 --native widgets winapi implementation
 local winapi = require'winapi'
 require'winapi.windowclass'
-require'winapi.messageloop'
 require'winapi.spi'
 require'winapi.mouse'
 require'winapi.keyboard'
@@ -91,28 +90,6 @@ function app:window(t)
 	return self.window_class:new(self, t)
 end
 
-function app:frames()
-	local t = {}
-	for i,hwnd in ipairs(winapi.EnumChildWindows()) do
-		if winapi.IsWindowVisible(hwnd) and not winapi.IsIconic(hwnd) then
-			local ok, rect = pcall(winapi.GetWindowRect, hwnd)
-			if ok then
-				local ok, text = pcall(winapi.GetWindowText, hwnd)
-				if ok then
-					if text ~= '' and text ~= 'Program Manager' then
-						table.insert(t, rect)
-					end
-				end
-			end
-		end
-	end
-	return coroutine.wrap(function()
-		for i,rect in ipairs(t) do
-			coroutine.yield(unpack_rect(rect))
-		end
-	end)
-end
-
 --window impl
 
 local window = {}
@@ -123,7 +100,7 @@ local Window = winapi.subclass({}, winapi.Window)
 function window:new(app, t)
 	self = glue.inherit({app = app}, self)
 
-	local framed = not t.transparent and t.frame
+	local framed = t.frame == 'normal'
 
 	self.win = Window{
 		--state
@@ -132,19 +109,20 @@ function window:new(app, t)
 		w = t.w,
 		h = t.h,
 		visible = false,
-		title = t.title,
-		state = t.state,
-		topmost = t.topmost,
+		state = t.maximized and 'maximized',
 		--frame
-		titlebar = framed,
-		dialog_frame = framed,
+		title = t.title,
 		border = framed,
-		layered = t.transparent,
+		frame = framed,
+		window_edge = framed,
+		double_border = framed,
+		layered = t.frame == 'transparent',
+		--behavior
+		topmost = t.topmost,
 		minimize_button = t.minimizable,
 		maximize_button = t.maximizable,
 		noclose = not t.closeable,
 		sizeable = framed and t.resizeable,
-		--behavior
 		receive_double_clicks = false, --we do our own double-clicking
 	}
 
@@ -167,10 +145,8 @@ function window:new(app, t)
 	--start tracking mouse leave
 	winapi.TrackMouseEvent{hwnd = self.win.hwnd, flags = winapi.TME_LEAVE}
 
-	self._fullscreen = false
-	if t.fullscreen then
-		self:fullscreen(true)
-	end
+	self._state = t.state
+	self._fullscreen = t.fullscreen
 
 	return self
 end
@@ -214,46 +190,40 @@ function Window:on_deactivate()
 	self.delegate:event'deactivated'
 end
 
+function Window:on_activate_app()
+	self.delegate.app:activated()
+	self.delegate:event'activated'
+end
+
+function Window:on_deactivate_app()
+	self.delegate:event'deactivated'
+	self.delegate.app:deactivated()
+end
+
 --state
 
-function window:state(state)
-	if state ~= nil then
-		if self._fullscreen then
-			self._fs.state = state
-		else
-			self.win.state = state
-			--frameless windows maximize to the entire screen, covering the taskbar. fix that.
-			if state == 'maximized' and not self.win.titlebar then
-				self.win.rect = winapi.GetMonitorInfo(self:monitor()).work_rect
-			end
-		end
-	else
-		if self._fullscreen then
-			return self._fs.state
-		else
-			return self.win.state
-		end
+function window:hide()
+	self.win:hide()
+end
+
+function window:shownormal()
+	self.win:shownormal()
+end
+
+function window:showminimized()
+	self.win:minimize()
+end
+
+function window:showmaximized()
+	self.win:maximize()
+	--frameless windows maximize to the entire screen, covering the taskbar. fix that.
+	if not self.win.frame then
+		self.win.rect = winapi.GetMonitorInfo(self:monitor()).work_rect
 	end
 end
 
-function window:visible(visible)
-	if visible ~= nil then
-		if visible then
-			self.win:show()
-		else
-			self.win:hide()
-		end
-	else
-		return self.win.visible
-	end
-end
-
-function window:fullscreen(on)
-	if on == nil then
-		return self._fullscreen
-	elseif on == self._fullscreen then
-		return
-	elseif on then
+function window:showfullscreen()
+	--[[
 		self._fs = {
 			state = self.win.state,
 			normal_rect = self.win.normal_rect,
@@ -280,6 +250,7 @@ function window:fullscreen(on)
 		end
 		self._fullscreen = false
 	end
+	]]
 end
 
 --positioning
@@ -293,7 +264,7 @@ function window:frame_rect(x, y, w, h)
 		end
 	else
 		if self._fullscreen then
-			return self._fs.normal_rect
+			return unpack_rect(self._fs.normal_rect)
 		else
 			return unpack_rect(self.win.normal_rect)
 		end
@@ -301,7 +272,7 @@ function window:frame_rect(x, y, w, h)
 end
 
 function Window:frame_changing(how, rect)
-	local x, y, w, h = self.delegate:event('frame_changing', how, unpack_rect(rect))
+	local x, y, w, h = self.delegate:event('resizing', how, unpack_rect(rect))
 	rect.x = x or rect.x
 	rect.y = y or rect.y
 	rect.w = w or rect.w
@@ -330,8 +301,15 @@ function Window:resized()
 end
 
 function Window:on_resized(flag)
-	self:resized()
-	self.delegate:event'resized'
+	if flag == 'minimized' then
+		self.delegate:event'minimized'
+	elseif flag == 'maximized' then
+		self:resized()
+		self.delegate:event'maximized'
+	elseif flag == 'restored' then
+		self:resized()
+		self.delegate:event'resized'
+	end
 end
 
 function Window:on_pos_changed(info)

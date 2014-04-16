@@ -43,6 +43,9 @@ function app:quit()
 	end
 end
 
+function app:activated() end --event stub
+function app:deactivated() end --event stub
+
 --monitors
 
 function app:monitors()
@@ -61,10 +64,6 @@ function app:client_rect(monitor)
 	return self.impl:client_rect(monitor)
 end
 
-function app:frames() --iter() -> x,y,w,h in z-order top-to-bottom
-	return self.impl:frames()
-end
-
 --time
 
 function app:time()
@@ -81,7 +80,7 @@ function app:window(t)
 	return self.window_class:new(self, t)
 end
 
---iterate existing windows in creation order, or reverse-creation order.
+--iterate existing windows in creation order, or in reverse-creation order.
 --windows created while iterating won't be included in the iteration. windows freed won't be excluded.
 function app:windows(reverse)
 	local t = glue.extend({}, self._windows)
@@ -121,13 +120,16 @@ local window = {}
 app.window_class = window
 
 window.defaults = {
+	--state
 	visible = true,
-	title = '',
-	state = 'normal',
+	minimized = false,
 	fullscreen = false,
+	maximized = false,
+	--frame
+	title = '',
+	frame = 'normal', --normal, frameless, transparent
+	--behavior
 	topmost = false,
-	frame = true,
-	transparent = false,
 	minimizable = true,
 	maximizable = true,
 	closeable = true,
@@ -141,34 +143,33 @@ function window:new(app, t)
 	self.observers = {}
 	self.mouse = {}
 	self._down = {}
-	self._frame = {
+
+	self.impl = app.impl:window{
+		delegate = self,
+		--state
+		x = t.x,
+		y = t.y,
+		w = t.w,
+		h = t.h,
+		visible = false
+		minimized = t.minimized,
+		fullscreen = t.fullscreen,
+		maximized = t.maximized,
+		--frame
+		title = t.title,
 		frame = t.frame,
-		transparent = t.transparent,
+		--behavior
+		topmost = t.topmost,
 		minimizable = t.minimizable,
 		maximizable = t.maximizable,
 		closeable = t.closeable,
 		resizeable = t.resizeable,
 	}
 
-	self.impl = app.impl:window{
-		delegate = self,
-		--state (read-write)
-		x = t.x,
-		y = t.y,
-		w = t.w,
-		h = t.h,
-		title = t.title,
-		state = t.state,
-		fullscreen = t.fullscreen,
-		topmost = t.topmost,
-		--frame (read-only)
-		frame = t.frame,
-		transparent = t.transparent,
-		minimizable = t.minimizable,
-		maximizable = t.maximizable,
-		closeable = t.closeable,
-		resizeable = t.resizeable,
-	}
+	self._visible = false
+	self._minimized = t.minimized
+	self._fullscreen = t.fullscreen
+	self._maximized = t.maximized
 
 	app:_add_window(self)
 
@@ -233,7 +234,7 @@ function window:activate()
 	self.impl:activate()
 end
 
-function window:active() --true|false
+function window:active()
 	self:check()
 	return self.impl:active()
 end
@@ -250,36 +251,120 @@ end
 
 --state
 
-function window:show(state)
-	if state then
-		self.impl:state(state)
+function window:_getstate() --visible, minimized, fullscreen, maximized
+	self:check()
+	if not self._visible then
+		return false, self._minimized, self._fullscreen, self._maximized
+	elseif self.impl:minimized() then
+		return true, true, self._fullscreen, self._maximized
+	elseif self.impl:fullscreen() then
+		return true, false, true, self._maximized
+	else
+		return true, false, false, self.impl:maximized()
 	end
-	self.impl:visible(true)
 end
 
-function window:hide()
-	self.impl:visible(false)
+function window:_setstate(visible, minimized, fullscreen, maximized)
+	local old_visible, old_minimized, old_fullscreen, old_maximized = self:_getstate()
+	if visible == nil then visible = old_visible end
+	if minimized == nil then minimized = old_minimized end
+	if fullscreen == nil then fullscreen = old_fullscreen end
+	if maximized == nil then maximized = old_maximized end
+	if not visible then
+		if old_visible then self.impl:hide() end
+	elseif minimized then
+		if not old_minimized then self.impl:showminimized() end
+	elseif fullscreen then
+		if not old_fullscreen then self.impl:showfullscreen() end
+	elseif maximized then
+		if not old_maximized then self.impl:showmaximized() end
+	else
+		if not old_visible then self.impl:shownormal() end
+	end
+	self._visible = visible
+	self._minimized = minimized
+	self._fullscreen = fullscreen
+	self._maximized = maximized
 end
 
-function window:visible(visible) --true|false
-	self:check()
-	return self.impl:visible(visible)
+function window:visible(visible)
+	if visible == nil then
+		return self._visible
+	else
+		self:_setstate(visible)
+	end
 end
 
-function window:state(state) --'maximized'|'minimized'|'normal'
-	self:check()
-	return self.impl:state(state)
-end
-
-function window:topmost(topmost)
-	self:check()
-	return self.impl:topmost(topmost)
+function window:minimized(minimized)
+	if minimized == nil then
+		if not self:visible() then
+			return self._minimized
+		else
+			return self.impl:minimized()
+		end
+	else
+		self:_setstate(nil, minimized)
+	end
 end
 
 function window:fullscreen(fullscreen)
-	self:check()
-	return self.impl:fullscreen(fullscreen)
+	if fullscreen == nil then
+		return (select(3, self:_getstate()))
+	else
+		self:_setstate(nil, nil, fullscreen)
+	end
 end
+
+function window:maximized(maximized)
+	if maximized == nil then
+		return (select(4, self:_getstate()))
+	else
+		self:_setstate(nil, nil, nil, maximized)
+	end
+end
+
+function _event:resized(how)
+
+end
+
+--state/sugar
+
+function window:state(state)
+	if not state then
+		return
+			not self:visible() and 'hidden' or
+			self.impl:minimized() and 'minimized' or
+			self.impl:fullscreen() and 'fullscreen' or
+			self.impl:maximized() or 'maximized' or
+			'normal'
+	elseif state == 'hidden' then
+		self:visible(false)
+	elseif state == 'minimized' then
+		self:_setstate(true, true)
+	elseif state == 'fullscreen' then
+		self:_setstate(true, false, true)
+	elseif state == 'maximized' then
+		self:_setstate(true, false, false, true)
+	elseif state == 'normal' then
+		self:_setstate(true, false, false, false)
+	else
+		error'invalid state'
+	end
+end
+
+function window:show(state)
+	if state then
+		self:state(state)
+	else
+		self:visible(true)
+	end
+end
+function window:hide() self:visible(false) end
+function window:minimize() self:show'minimized' end
+function window:maximize() self:show'maximized' end
+function window:restore() self:show'normal' end
+
+--positioning
 
 function window:frame_rect(x, y, w, h) --x, y, w, h
 	self:check()
@@ -291,42 +376,21 @@ function window:client_rect() --x, y, w, h
 	return self.impl:client_rect()
 end
 
+--frame, behavior
+
 function window:title(newtitle)
 	self:check()
 	return self.impl:title(newtitle)
 end
 
+function window:topmost(topmost)
+	self:check()
+	return self.impl:topmost(topmost)
+end
+
 function window:monitor()
 	self:check()
 	return self.impl:monitor()
-end
-
---get read-only frame properties
-function window:frame(prop)
-	self:check()
-	return self._frame[prop]
-end
-
---save a window's user-changeable state
-function window:save()
-	local x, y, w, h = self:frame_rect()
-	local t = {x = x, y = y, w = w, h = h, state = self:state()}
-	if t.state == self.defaults.state then
-		t.state = nil
-	end
-	return t
-end
-
---load a window's user-changeable state
-function window:load(t)
-	t = glue.update({}, self.defaults, t)
-	if self:state() == 'normal' then --resize after state change to avoid flicker
-		self:state(t.state)
-		self:frame_rect(t.x, t.y, t.w, t.h)
-	else --resize before state change to avoid flicker
-		self:frame_rect(t.x, t.y, t.w, t.h)
-		self:state(t.state)
-	end
 end
 
 --keyboard

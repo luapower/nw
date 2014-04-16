@@ -24,7 +24,6 @@ __monitors__
 `app:primary_monitor() -> monitor`				get the monitor whose screen rect starts at (0,0)
 `app:screen_rect([monitor]) -> x, y, w, h`	monitor's screen rectangle
 `app:client_rect([monitor]) -> x, y, w, h`	monitor's screen rectangle excluding the taskbar
-`app:frames() -> iter() -> x, y, w, h`			the frames of all windows of all apps in top-to-bottom z-order (stable iterator)
 __time__
 `app:time() -> time`									get an opaque time object representing a hi-resolution timestamp
 `app:timediff(time1, time2) -> ms`				get the difference between two time objects
@@ -33,19 +32,19 @@ __windows__
 `app:active_window() -> win`						get the active window, if any
 `app:window(t) -> win`								create a window (fields of t below)
 __state options__
-t.x, t.y, t.w, t.h (required)						window's frame rectangle
-t.visible (true)										window is visible
-t.title (empty) 										window title
-t.state ('normal')									window state: 'normal', 'maximized', 'minimized'
-t.fullscreen (false)									fullscreen mode (orthogonal to state)
-t.topmost (false)										always stay on top of all other windows
+`t.x, t.y, t.w, t.h` (required)					window's frame rectangle
+`t.visible` (true)									window is visible
+`t.title` (empty) 									window title
+`t.state` ('normal')									window state: 'normal', 'maximized', 'minimized'
+`t.fullscreen` (false)								fullscreen mode (orthogonal to state)
+`t.topmost` (false)									always stay on top of all other windows
 __frame options__
-t.frame (true)											window has a frame, border and title bar
-t.transparent (false)								window is transparent, has no frame and is not directly resizeable
-t.minimizable (true)									enable the minimize button
-t.maximizable (true)									enable the maximize button
-t.closeable (true)									enable the close button / allow closing the window
-t.resizeable (true)									window is user-resizeable
+`t.frame` (true)										window has a frame, border and title bar
+`t.transparent` (false)								window is transparent, has no frame and is not directly resizeable
+`t.minimizable` (true)								enable the minimize button
+`t.maximizable` (true)								enable the maximize button
+`t.closeable` (true)									enable the close button / allow closing the window
+`t.resizeable` (true)								window is user-resizeable
 __window lifetime__
 `win:free()`											close the window and destroy it
 `win:dead() -> true|false`							check if the window was destroyed

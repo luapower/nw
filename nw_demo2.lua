@@ -3,10 +3,10 @@ local nw = require'nw'
 local app = nw:app()
 
 local win = app:window{x = 100, y = 100, w = 800, h = 400, title = 'win',
-								transparent = false, frame = false, state = 'normal'}
+								transparent = true, frame = false, state = 'normal'}
 
 function win:event(event, ...)
-	--print(event, ...)
+	print(event, ...)
 	return app.window_class.event(self, event, ...)
 end
 

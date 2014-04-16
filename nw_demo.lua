@@ -63,11 +63,6 @@ local win2 = app:window{x = 200, y = 400, w = 600, h = 200, title = 'win2', visi
 assert(win1:monitor() == win2:monitor())
 assert(win1:monitor() == app:primary_monitor())
 
-print'frames'
-for x, y, w, h in app:frames() do
-	print('', x, y, w, h)
-end
-
 for win in app:windows() do
 	win:title('[' .. win:title() .. ']')
 	print('title', win:title())
