@@ -16,52 +16,70 @@ local app = {}
 nw.app_class = app
 
 function app:new(nw)
-	self = glue.inherit({}, self)
-	self._windows = {} --{window1,...}
-	self.impl = nw.impl:app()
+	self = glue.inherit({nw = nw}, self)
+	self._windows = {} --{window1 = true, ...}
+	self._window_count = 0
+	self.observers = {}
+	self.impl = nw.impl:app(self)
 	return self
 end
 
 --app main loop
 
---start the main loop. calling this while running is a no op.
+--start the main loop. calling this while running or without any windows created is a no op.
 function app:run()
 	if self._running then return end --ignore if already running
+	if self._window_count == 0 then return end --ignore if there are no windows
 	self._running = true
 	self.impl:run()
 	self._running = nil
 end
 
---close all windows in reverse-creation order and quit the main loop; abort on the first window that refuses to close.
---spawning new windows on close is allowed and will result in the app not quitting.
+--quit the app and process, closing all the windows first, in unspecified order.
+--abort on the first window that refuses to close (unless force == true in which case it doesn't ask).
 function app:quit()
-	for win in self:windows'reverse' do
-		win:free()
-		if not win:dead() then
-			break
-		end
+	self.impl:quit()
+end
+
+--events
+
+local _event = {}
+
+function app:event(event, ...)
+	if _event[event] then
+		return _event[event](self, ...)
+	else
+		return self:_dispatch(event, ...)
 	end
 end
 
-function app:activated() end --event stub
-function app:deactivated() end --event stub
-
---monitors
-
-function app:monitors()
-	return self.impl:monitors()
+function app:_dispatch(event, ...)
+	if self.observers[event] then
+		for obs in pairs(self.observers[event]) do
+			obs(event, ...)
+		end
+	end
+	if self[event] then
+		return self[event](self, ...)
+	end
 end
 
-function app:primary_monitor()
-	return self.impl:primary_monitor()
+--displays
+
+function app:displays()
+	return self.impl:displays()
 end
 
-function app:screen_rect(monitor)
-	return self.impl:screen_rect(monitor)
+function app:main_display()
+	return self.impl:main_display()
 end
 
-function app:client_rect(monitor)
-	return self.impl:client_rect(monitor)
+function app:screen_rect(display)
+	return self.impl:screen_rect(display)
+end
+
+function app:desktop_rect(display)
+	return self.impl:desktop_rect(display)
 end
 
 --time
@@ -71,7 +89,7 @@ function app:time()
 end
 
 function app:timediff(start_time, end_time)
-	return self.impl:timediff(start_time, end_time)
+	return self.impl:timediff(start_time, end_time or self:time())
 end
 
 --windows
@@ -80,18 +98,18 @@ function app:window(t)
 	return self.window_class:new(self, t)
 end
 
---iterate existing windows in creation order, or in reverse-creation order.
---windows created while iterating won't be included in the iteration. windows freed won't be excluded.
-function app:windows(reverse)
-	local t = glue.extend({}, self._windows)
-	local i, j = 0, 1
-	if reverse then
-		i, j = #self.windows + 1, -1
-	end
+--iterate existing windows in unspecified order with a stable iterator.
+function app:windows()
+	local windows = glue.update({}, self._windows) --take a snapshot
+	local win
 	return function()
-		i = i + j
-		return t[i]
+		win = next(windows, win)
+		return win
 	end
+end
+
+function app:window_count()
+	return self._window_count
 end
 
 function app:active_window()
@@ -99,18 +117,15 @@ function app:active_window()
 end
 
 function app:_add_window(win)
-	table.insert(self._windows, win)
+	self._windows[win] = true
+	self._window_count = self._window_count + 1
 end
 
-function app:_remove_window(target_win)
-	for i, win in ipairs(self._windows) do
-		if win == target_win then
-			table.remove(self._windows, i)
-			break
-		end
-	end
-	if #self._windows == 0 then
-		self.impl:quit()
+function app:_remove_window(win)
+	self._windows[win] = nil
+	self._window_count = self._window_count - 1
+	if self._window_count == 0 then
+		self:quit()
 	end
 end
 
@@ -127,7 +142,7 @@ window.defaults = {
 	maximized = false,
 	--frame
 	title = '',
-	frame = 'normal', --normal, frameless, transparent
+	frame = 'normal', --normal, none, transparent
 	--behavior
 	topmost = false,
 	minimizable = true,
@@ -144,14 +159,12 @@ function window:new(app, t)
 	self.mouse = {}
 	self._down = {}
 
-	self.impl = app.impl:window{
-		delegate = self,
+	self.impl = app.impl:window(self, {
 		--state
 		x = t.x,
 		y = t.y,
 		w = t.w,
 		h = t.h,
-		visible = false
 		minimized = t.minimized,
 		fullscreen = t.fullscreen,
 		maximized = t.maximized,
@@ -164,12 +177,13 @@ function window:new(app, t)
 		maximizable = t.maximizable,
 		closeable = t.closeable,
 		resizeable = t.resizeable,
-	}
+	})
 
-	self._visible = false
-	self._minimized = t.minimized
-	self._fullscreen = t.fullscreen
-	self._maximized = t.maximized
+	self._frame = t.frame
+	self._minimizable = t.minimizable
+	self._maximizable = t.maximizable
+	self._closeable = t.closeable
+	self._resizeable = t.resizeable
 
 	app:_add_window(self)
 
@@ -208,13 +222,13 @@ end
 
 --lifetime
 
-function window:free()
+function window:close(force)
 	if self:dead() then return end
-	self.impl:free()
+	self.impl:close(force)
 end
 
 function window:dead()
-	return self._dead
+	return self.impl:dead()
 end
 
 function window:check()
@@ -223,7 +237,6 @@ end
 
 function _event:closed()
 	self:_dispatch'closed'
-	self._dead = true
 	self.app:_remove_window(self)
 end
 
@@ -231,6 +244,7 @@ end
 
 function window:activate()
 	self:check()
+	if not self:visible() then return end
 	self.impl:activate()
 end
 
@@ -249,120 +263,61 @@ function _event:deactivated()
 	self:_dispatch'deactivated'
 end
 
---state
+--visibility
 
-function window:_getstate() --visible, minimized, fullscreen, maximized
+function window:visible()
 	self:check()
-	if not self._visible then
-		return false, self._minimized, self._fullscreen, self._maximized
-	elseif self.impl:minimized() then
-		return true, true, self._fullscreen, self._maximized
-	elseif self.impl:fullscreen() then
-		return true, false, true, self._maximized
-	else
-		return true, false, false, self.impl:maximized()
-	end
+	return self.impl:visible()
 end
 
-function window:_setstate(visible, minimized, fullscreen, maximized)
-	local old_visible, old_minimized, old_fullscreen, old_maximized = self:_getstate()
-	if visible == nil then visible = old_visible end
-	if minimized == nil then minimized = old_minimized end
-	if fullscreen == nil then fullscreen = old_fullscreen end
-	if maximized == nil then maximized = old_maximized end
-	if not visible then
-		if old_visible then self.impl:hide() end
-	elseif minimized then
-		if not old_minimized then self.impl:showminimized() end
-	elseif fullscreen then
-		if not old_fullscreen then self.impl:showfullscreen() end
-	elseif maximized then
-		if not old_maximized then self.impl:showmaximized() end
-	else
-		if not old_visible then self.impl:shownormal() end
-	end
-	self._visible = visible
-	self._minimized = minimized
-	self._fullscreen = fullscreen
-	self._maximized = maximized
+function window:show()
+	self:check()
+	self.impl:show()
 end
 
-function window:visible(visible)
-	if visible == nil then
-		return self._visible
-	else
-		self:_setstate(visible)
-	end
+function window:hide()
+	self:check()
+	self.impl:hide()
 end
 
-function window:minimized(minimized)
-	if minimized == nil then
-		if not self:visible() then
-			return self._minimized
-		else
-			return self.impl:minimized()
-		end
-	else
-		self:_setstate(nil, minimized)
-	end
+--minimized/maximized state
+
+function window:minimized()
+	self:check()
+	return self.impl:minimized()
 end
+
+function window:maximized()
+	self:check()
+	return self.impl:maximized()
+end
+
+function window:minimize()
+	self:check()
+	self.impl:minimize()
+end
+
+function window:maximize()
+	self:check()
+	self.impl:maximize()
+end
+
+function window:restore()
+	self:check()
+	self.impl:restore()
+end
+
+function window:shownormal()
+	self:check()
+	self.impl:shownormal()
+end
+
+--fullscreen mode
 
 function window:fullscreen(fullscreen)
-	if fullscreen == nil then
-		return (select(3, self:_getstate()))
-	else
-		self:_setstate(nil, nil, fullscreen)
-	end
+	self:check()
+	return self.impl:fullscreen(fullscreen)
 end
-
-function window:maximized(maximized)
-	if maximized == nil then
-		return (select(4, self:_getstate()))
-	else
-		self:_setstate(nil, nil, nil, maximized)
-	end
-end
-
-function _event:resized(how)
-
-end
-
---state/sugar
-
-function window:state(state)
-	if not state then
-		return
-			not self:visible() and 'hidden' or
-			self.impl:minimized() and 'minimized' or
-			self.impl:fullscreen() and 'fullscreen' or
-			self.impl:maximized() or 'maximized' or
-			'normal'
-	elseif state == 'hidden' then
-		self:visible(false)
-	elseif state == 'minimized' then
-		self:_setstate(true, true)
-	elseif state == 'fullscreen' then
-		self:_setstate(true, false, true)
-	elseif state == 'maximized' then
-		self:_setstate(true, false, false, true)
-	elseif state == 'normal' then
-		self:_setstate(true, false, false, false)
-	else
-		error'invalid state'
-	end
-end
-
-function window:show(state)
-	if state then
-		self:state(state)
-	else
-		self:visible(true)
-	end
-end
-function window:hide() self:visible(false) end
-function window:minimize() self:show'minimized' end
-function window:maximize() self:show'maximized' end
-function window:restore() self:show'normal' end
 
 --positioning
 
@@ -388,9 +343,27 @@ function window:topmost(topmost)
 	return self.impl:topmost(topmost)
 end
 
-function window:monitor()
+function window:frame() self:check(); return self._frame end
+function window:minimizable() self:check(); return self._minimizable end
+function window:maximizable() self:check(); return self._maximizable end
+function window:closeable() self:check(); return self._closeable end
+function window:resizeable() self:check(); return self._resizeable end
+
+--displays
+
+function window:display()
 	self:check()
-	return self.impl:monitor()
+	return self.impl:display()
+end
+
+function window:screen_rect()
+	self:check()
+	return self.app:screen_rect(self:display())
+end
+
+function window:desktop_rect()
+	self:check()
+	return self.app:desktop_rect(self:display())
 end
 
 --keyboard

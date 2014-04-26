@@ -19,11 +19,11 @@ __application loop__
 `nw:app() -> app`										return the application object (singleton)
 `app:run()`												run the main loop until the last window is closed
 `app:quit()`											close all windows; abandon on the first window that refuses to close.
-__monitors__
-`app:monitors() -> iter() -> monitor`			get monitors in no specific order
-`app:primary_monitor() -> monitor`				get the monitor whose screen rect starts at (0,0)
-`app:screen_rect([monitor]) -> x, y, w, h`	monitor's screen rectangle
-`app:client_rect([monitor]) -> x, y, w, h`	monitor's screen rectangle excluding the taskbar
+__displays__
+`app:displays() -> iter() -> display`			get displays in no specific order
+`app:main_display() -> display`					get the display whose screen rect starts at (0,0)
+`app:screen_rect([display]) -> x, y, w, h`	display's screen rectangle
+`app:desktop_rect([display]) -> x, y, w, h`	display's screen rectangle excluding the taskbar
 __time__
 `app:time() -> time`									get an opaque time object representing a hi-resolution timestamp
 `app:timediff(time1, time2) -> ms`				get the difference between two time objects
@@ -63,7 +63,7 @@ __window state__
 `win:topmost([true]) -> topmost`					get/set the topmost flag
 `win:fullscreen([on]) -> true|false`			get/set fullscreen mode (orthogonal to state)
 `win:frame_rect([x, y, w, h]) -> x, y, w, h`	get/set the frame rect of the 'normal' state
-`win:monitor() -> monitor`							the monitor the window is on
+`win:display() -> display`							the display the window is on
 `win:frame_changing(how, x, y, w, h)`			event: moving (how = 'move'), or resizing (how = 'left', 'right', 'top', 'bottom', 'topleft', 'topright', 'bottomleft', 'bottomright'); return different (x, y, w, h) to constrain
 `win:frame_changed()`								event: window was moved, resized or state changed
 `win:title([title]) -> title`						get/set the window's title
@@ -200,5 +200,5 @@ a count of 3.
   * calling any method on a closed window results in error, except for win:free() which does nothing.
   * calling app:run() while running is a no op.
   * app:windows() can return dead windows (but not new windows).
-  * calling monitor functions on an invalid monitor object results in error (monitors can come and go too you know).
+  * calling display functions on an invalid display object results in error (monitors can come and go too you know).
 

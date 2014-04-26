@@ -1,67 +1,404 @@
---[[
-- function nw:app()
-- function app:run(); ignored while running
-function app:quit(); works from closed(), not from closing()
-- function app:screen_rect()
-- function app:client_rect()
-- function app:window(t); x,y,w,h,title,visible,state=minimized,state=maximized
-- function app:windows()
-- function app:closed(window)
-- function window:free()
-- function window:dead()
-- function window:closing()
-- function window:closed()
-
-- function window:activate()
-- function window:active()
-- function window:activated() end
-- function window:deactivated() end
-- function window:show(state)
-- function window:hide()
-- function window:visible()
-- function window:state()
-- function window:frame_changing(how, x, y, w, h) end --move|left|right|top|bottom|topleft|topright|bottomleft|bottomright
-- function window:frame_changed()
-function window:state_changed() end
-function window:frame_rect(x, y, w, h) return self.impl:frame_rect(x, y, w, h) end --x, y, w, h
-function window:client_rect() return self.impl:client_rect() end --x, y, w, h
-
-- function window:title(newtitle)
-
-- function window:keydown(key) end
-- function window:keyup(key) end
-- function window:keypress(key) end
-- function window:keychar(char) end
-
-- function window:mouseup(button) end
-- function window:mousedown(button) end
-- function window:click(button) end
-- function window:wheel(delta) end
-
-- function window:render() end
-- function window:invalidate()
-]]
-
 local nw = require'nw'
+local glue = require'glue'
 
 local app = nw:app()
 
-print('impl.double_click_time', app.impl:double_click_time())
-print('impl.double_click_target_area', app.impl:double_click_target_area())
+--collection of tests
 
-for monitor in app:monitors() do
-	print('screen_rect', app:screen_rect(monitor))
-	print('client_rect', app:client_rect(monitor))
+local tests = {}
+
+local function add(name, f)
+	table.insert(tests, f)
+	tests[name] = f
+	tests[f] = name
 end
 
-local win1 = app:window{x = 100, y = 100, w = 800, h = 400, title = 'win1', visible = false,
-								transparent = true, frame = false}
-local win2 = app:window{x = 200, y = 400, w = 600, h = 200, title = 'win2', visible = false,
-								frame = false, allow_resize = false, allow_minimize = false, allow_maximize = false,
-								allow_close = true}
+local function test(what, ...)
+	if what then
+		tests[what](...)
+	else
+		for i,f in ipairs(tests) do
+			print()
+			print(tests[f])
+			print'========================='
+			f(what, ...)
+		end
+	end
+end
 
-assert(win1:monitor() == win2:monitor())
-assert(win1:monitor() == app:primary_monitor())
+--system info
+
+add('double-click metrics', function()
+	local t = app.impl:double_click_time()
+	assert(t > 0 and t < 5000)
+	print('impl.double_click_time', t)
+	local w, h = app.impl:double_click_target_area()
+	assert(w > 0 and w < 100)
+	assert(h > 0 and h < 100)
+	print('impl.double_click_target_area', w, h)
+end)
+
+--displays
+
+add('displays', function()
+	local main_display = app:main_display()
+	local found_main = false
+
+	for display in app:displays() do
+		print('screen_rect',  app:screen_rect(display))
+		print('desktop_rect', app:desktop_rect(display))
+
+		if main_display == display then
+			found_main = true
+		end
+	end
+	assert(found_main)
+end)
+
+add('main display', function()
+	local display = app:main_display()
+
+	local x, y, w, h = app:screen_rect(display)
+	print('screen_rect',  x, y, w, h)
+	assert(x == 0)
+	assert(y == 0)
+	assert(w > 100)
+	assert(h > 100)
+
+	local x, y, w, h = app:desktop_rect(display)
+	print('desktop_rect', x, y, w, h)
+	assert(x >= 0)
+	assert(y >= 0)
+	assert(w > 100)
+	assert(h > 100)
+end)
+
+--time
+
+add('time', function()
+	local t = app:time()
+	print('app:time', t)
+	print('app:timediff', app:timediff(t))
+end)
+
+--window position generator
+
+local x = 100
+local y = 100
+local function winpos(t, same_pos)
+	if not same_pos then
+		if y > 600 then
+			x = x + 150
+			y = 100
+		else
+			y = y + 100
+		end
+	end
+	return glue.update({x = x, y = y, w = 140, h = 90}, t)
+end
+
+
+--app running and termination
+
+add('run', function()
+	app:run() --no op: there are no windows yet
+	local win1 = app:window(winpos{title = 'win1'})
+	local win2 = app:window(winpos{title = 'win2'})
+	function win1:closing()
+		app:run() --no op: already running
+		print(self:title(), 'closing')
+	end
+	local _closed
+	function win1:closed()
+		print(self:title(), 'closed')
+		if _closed then return end
+		_closed = true
+		print'quitting'
+		app:quit()
+	end
+	win2.closing = win1.closing
+	win2.closed = win1.closed
+	app:run()
+end)
+
+test'run'
+
+--generate value combinations for sets of binary flags
+
+local function base2(x, digits)
+	local s = ''
+	while x > 0 do
+		 s = '' ..  (x % 2) .. s
+		 x = math.floor(x / 2)
+	end
+	return ('0'):rep(digits - #s) .. s
+end
+
+local function combination(flags, x)
+	local s = base2(x, #flags)
+	local t = {}
+	for i, flag in ipairs(flags) do
+		t[flag] = s:sub(i,i) == '1'
+	end
+	return t
+end
+
+local function combinations(flags)
+	return coroutine.wrap(function()
+		for i = 0, 2^#flags-1 do
+			coroutine.yield(combination(flags, i))
+		end
+	end)
+end
+
+--test all combinations of window initial state flags and transitions to saved states
+
+local function test_states(c, close_it)
+	if close_it == nil then close_it = true end
+	local function BS(b)
+		return b and 'Y' or 'N'
+	end
+	local test = string.format(
+		'vis: %s, min: %s, fs: %s, max: %s, @min: %s, @max: %s',
+							BS(c.visible),
+							BS(c.minimized),
+							BS(c.fullscreen),
+							BS(c.maximized),
+							BS(c.minimizable),
+							BS(c.maximizable))
+	print(test)
+
+	local win = app:window(winpos(c, close_it))
+
+	assert(win:visible() == c.visible)
+	assert(win:minimized() == c.minimized)
+	assert(win:fullscreen() == c.fullscreen)
+	assert(win:maximized() == c.maximized)
+
+	--visible -> minimized | normal | maximized
+	if not c.visible then
+		win:show()
+		assert(win:visible())
+		assert(win:minimized() == c.minimized)
+		assert(win:maximized() == c.maximized)
+	end
+
+	-- minimized -> normal | maximized
+	if c.minimized then
+		win:restore()
+		assert(not win:minimized())
+		assert(win:maximized() == c.maximized)
+	end
+
+	-- maximized -> normal
+	if c.maximized then
+		win:restore()
+	end
+
+	--normal
+	assert(win:visible())
+	assert(not win:minimized())
+	assert(not win:maximized())
+
+	--close
+	if close_it then
+		win:close()
+		assert(win:dead())
+	end
+end
+
+local flags = {
+	'visible', 'minimized', 'fullscreen', 'maximized',
+	'minimizable', 'maximizable', 'closeable', 'resizeable',
+}
+
+add('flags', function(close_win)
+	for c in combinations(flags) do
+		test_states(c, close_win)
+	end
+end)
+
+--test state transitions
+
+add('states', function()
+	local win = app:window{x = 100, y = 100, w = 300, h = 100}
+
+	local function check(s)
+		assert(win:visible() == (s:match'v' ~= nil))
+		assert(win:minimized() == (s:match'm' ~= nil))
+		assert(win:maximized() == (s:match'M' ~= nil))
+	end
+
+	print('>', win:visible(), win:minimized(), win:maximized())
+	win:maximize()
+	win:minimize()
+	print('>', win:visible(), win:minimized(), win:maximized())
+
+	os.exit(1)
+
+	--restore to maximized from minimized
+	win:shownormal()
+	win:maximize()
+	win:minimize(); check'vmM'
+	win:restore(); check'vM'
+
+	--restore to normal from minimized
+	win:shownormal()
+	win:minimize(); check'vm'
+	win:restore(); check'v'
+
+	--restore to normal from maximized
+	win:shownormal()
+	win:maximize(); check'vM'
+	win:restore(); check'v'
+
+	--maximize from minimized
+	win:shownormal()
+	win:minimize(); check'vm'
+	win:maximize(); check'vM'
+
+	--show normal from minimized
+	win:shownormal()
+	win:maximize()
+	win:minimize(); check'vmM'
+	win:shownormal(); check'v'
+
+	--minimize from hidden
+	win:shownormal()
+	win:hide(); check''
+	win:minimize(); check'vm'
+
+	--shownormal from hidden
+	win:shownormal()
+	win:hide(); check''
+	win:shownormal(); check'v'
+
+	--show from hidden
+	win:shownormal()
+	win:hide(); check''
+	win:show(); check'v'
+
+	--maximize from hidden
+	win:shownormal()
+	win:hide(); check''
+	win:maximize(); check'vM'
+
+	--restore to normal from hidden
+	win:shownormal()
+	win:hide(); check''
+	win:restore(); check'v'
+
+	--restore to normal from hidden/maximized
+	win:shownormal()
+	win:maximized()
+	win:hide(); check''
+	win:restore(); check'v'
+
+	--restore to maximized from hidden/minimized
+	win:maximize()
+	win:minimize()
+	win:hide(); check'mM'
+	win:restore(); check'vM'
+
+	--show minimized and then restore to normal from hidden
+	win:shownormal()
+	win:minimize()
+	win:hide(); check'm'
+	win:show(); check'vm'
+	win:restore(); check'v'
+
+	--show minimized and then restore to maximized from hidden
+	win:maximize()
+	win:minimize()
+	win:hide(); check'mM'
+	win:show(); check'vmM'
+	win:restore(); check'vM'
+
+	win:close()
+end)
+
+--test default flags
+
+add('defaults', function()
+	local win = app:window(winpos())
+	assert(win:visible())
+	assert(not win:minimized())
+	assert(not win:fullscreen())
+	assert(not win:maximized())
+	assert(win:title() == '')
+	assert(win:frame() == 'normal')
+	assert(not win:topmost())
+	assert(win:minimizable())
+	assert(win:maximizable())
+	assert(win:closeable())
+	assert(win:resizeable())
+end)
+
+--test closeable
+
+add('closeable', function()
+	local win = app:window(winpos{title = 'cannot close', closeable = false})
+	assert(not win:closeable())
+end)
+
+--test resizeable
+
+add('resizeable', function()
+	local win = app:window(winpos{title = 'fixed size', resizeable = false})
+	assert(not win:resizeable())
+end)
+
+--test get/set title
+
+add('title', function()
+	local win = app:window(winpos{title = 'with title'})
+	assert(win:title() == 'with title')
+	win:title'changed'
+	assert(win:title() == 'changed')
+	win:close()
+end)
+
+--test get/set topmost
+
+add('topmost', function()
+	local win = app:window(winpos{topmost = true})
+	assert(win:topmost())
+	win:topmost(false)
+	assert(not win:topmost())
+	win:topmost(true)
+	assert(win:topmost())
+	win:close()
+end)
+
+--frame types
+
+add('frameless', function()
+	local win = app:window(winpos{frame = 'none'})
+	assert(win:frame() == 'none')
+end)
+
+add('transparent', function()
+	local win = app:window(winpos{frame = 'transparent'})
+	assert(win:frame() == 'transparent')
+end)
+
+--test('flags', true)
+--test'states'
+--test'frameless'
+--test'transparent'
+
+--app:run()
+
+--[[
+
+local win1 = app:window{x = 100, y = 100, w = 800, h = 400, title = 'win1', visible = false,
+								frame = 'transparent'}
+local win2 = app:window{x = 200, y = 400, w = 600, h = 200, title = 'win2', visible = false,
+								frame = 'none', resizeable = false, minimizable = false, maximizable = false,
+								closeable = true}
+
+assert(win1:display() == win2:display())
+assert(win1:display() == app:main_display())
 
 for win in app:windows() do
 	win:title('[' .. win:title() .. ']')
@@ -130,8 +467,8 @@ function win1:wheel(delta) print('wheel win1', delta) end
 function win2:wheel(delta) print('wheel win2', delta) end
 
 local commands = {
-	Q = function(self) win1:state(win1:state() == 'maximized' and 'normal' or 'maximized') end,
-	W = function(self) win1:show'maximized' end,
+	Q = function(self) if win1:maximized() then win1:restore() else win1:maximize() end end,
+	W = function(self) win1:maximize() end,
 	E = function(self) if win1:visible() then win1:hide() else win1:show() end end,
 	R = function(self) self:frame('allow_resize', not self:frame'allow_resize') end,
 
@@ -206,10 +543,11 @@ function win2:keychar(char) print('keychar', char) end
 win1:show()
 win2:show()
 
-app:run()
-
 assert(win1:dead())
 assert(win2:dead())
 
-win1:free() --ignored
-win2:free() --ignored
+win1:close() --ignored
+win2:close() --ignored
+
+]]
+

@@ -1,4 +1,4 @@
---native widgets winapi implementation
+--native widgets winapi backend
 local winapi = require'winapi'
 require'winapi.windowclass'
 require'winapi.spi'
@@ -20,8 +20,8 @@ end
 
 local nw = {}
 
-function nw:app()
-	return self.app_class:new()
+function nw:app(delegate)
+	return self.app_class:new(delegate)
 end
 
 --app impl
@@ -29,19 +29,29 @@ end
 local app = {}
 nw.app_class = app
 
-function app:new()
-	return glue.inherit({}, self)
+function app:new(delegate)
+	return glue.inherit({delegate = delegate}, self)
 end
 
 function app:run()
-	return winapi.MessageLoop()
+	winapi.MessageLoop()
+	self.delegate:event'terminated'
+	os.exit()
 end
 
 function app:quit()
+	if self.delegate:event'terminating' == false then
+		return
+	end
+	--force-close all windows
+	for win in self.delegate:windows() do
+		win:close(true)
+	end
+	--stop the message loop
 	winapi.PostQuitMessage()
 end
 
-function app:monitors()
+function app:displays()
 	local monitors = winapi.EnumDisplayMonitors()
 	local i = 0
 	return function()
@@ -51,17 +61,17 @@ function app:monitors()
 	end
 end
 
-function app:primary_monitor()
+function app:main_display()
 	return winapi.MonitorFromPoint(nil, winapi.MONITOR_DEFAULTTOPRIMARY)
 end
 
 function app:screen_rect(monitor)
-	monitor = monitor or self:primary_monitor()
+	monitor = monitor or self:main_display()
 	return unpack_rect(winapi.GetMonitorInfo(monitor).monitor_rect)
 end
 
-function app:client_rect(monitor)
-	monitor = monitor or self:primary_monitor()
+function app:desktop_rect(monitor)
+	monitor = monitor or self:main_display()
 	return unpack_rect(winapi.GetMonitorInfo(monitor).work_rect)
 end
 
@@ -81,13 +91,12 @@ end
 
 function app:timediff(start_time, end_time)
 	self.qpf = self.qpf or tonumber(winapi.QueryPerformanceFrequency().QuadPart)
-	end_time = end_time or winapi.QueryPerformanceCounter().QuadPart
 	local interval = end_time - start_time
 	return tonumber(interval * 1000) / self.qpf --milliseconds
 end
 
-function app:window(t)
-	return self.window_class:new(self, t)
+function app:window(delegate, t)
+	return self.window_class:new(self, delegate, t)
 end
 
 --window impl
@@ -97,8 +106,8 @@ app.window_class = window
 
 local Window = winapi.subclass({}, winapi.Window)
 
-function window:new(app, t)
-	self = glue.inherit({app = app}, self)
+function window:new(app, delegate, t)
+	self = glue.inherit({app = app, delegate = delegate}, self)
 
 	local framed = t.frame == 'normal'
 
@@ -115,7 +124,6 @@ function window:new(app, t)
 		border = framed,
 		frame = framed,
 		window_edge = framed,
-		double_border = framed,
 		layered = t.frame == 'transparent',
 		--behavior
 		topmost = t.topmost,
@@ -127,8 +135,7 @@ function window:new(app, t)
 	}
 
 	self.win.__wantallkeys = true --don't let IsDialogMessage() filter out our precious WM_CHARs
-	self.delegate = t.delegate
-	self.win.delegate = t.delegate
+	self.win.delegate = delegate
 
 	--init mouse state
 	local m = self.delegate.mouse
@@ -145,7 +152,7 @@ function window:new(app, t)
 	--start tracking mouse leave
 	winapi.TrackMouseEvent{hwnd = self.win.hwnd, flags = winapi.TME_LEAVE}
 
-	self._state = t.state
+	self._minimized = t.minimized
 	self._fullscreen = t.fullscreen
 
 	return self
@@ -153,22 +160,35 @@ end
 
 --lifetime
 
-function window:free()
+function window:close(force)
+	if self.win._closed then return end
+	self.win._forceclose = force
 	self.win:close()
 end
 
 function window:dead()
-	return self.win.dead
+	return self.win._dead
 end
 
 function Window:on_close()
+	if self._forceclose then
+		self._forceclose = nil
+		return
+	end
 	if self.delegate:event'closing' == false then
 		return 0
 	end
 end
 
 function Window:on_destroy()
+	--from here on, closing the window is a no op, but dead() still returns false.
+	if self._closed then
+		return
+	end
+	self._closed = true
+
 	self.delegate:event'closed'
+	self._dead = true
 	self:free_surface()
 end
 
@@ -191,13 +211,11 @@ function Window:on_deactivate()
 end
 
 function Window:on_activate_app()
-	self.delegate.app:activated()
-	self.delegate:event'activated'
+	self.delegate.app:event'activated'
 end
 
 function Window:on_deactivate_app()
-	self.delegate:event'deactivated'
-	self.delegate.app:deactivated()
+	self.delegate.app:event'deactivated'
 end
 
 --state
@@ -206,51 +224,88 @@ function window:hide()
 	self.win:hide()
 end
 
-function window:shownormal()
-	self.win:shownormal()
+function window:show()
+	if self._minimized then
+		self:minimize()
+		self._minimized = nil
+	end
+	self.win:show()
 end
 
-function window:showminimized()
+function window:minimize()
+	self._minimized = nil
 	self.win:minimize()
 end
 
-function window:showmaximized()
+function window:maximize()
+	self._minimized = nil
 	self.win:maximize()
 	--frameless windows maximize to the entire screen, covering the taskbar. fix that.
 	if not self.win.frame then
-		self.win.rect = winapi.GetMonitorInfo(self:monitor()).work_rect
+		self.win:move(self.app:desktop_rect(self:display()))
 	end
 end
 
-function window:showfullscreen()
-	--[[
-		self._fs = {
-			state = self.win.state,
-			normal_rect = self.win.normal_rect,
-			titlebar = self.win.titlebar,
-			sizeable = self.win.sizeable,
-		}
-		self.win.visible = false
-		self.win.normal_rect = winapi.GetMonitorInfo(self:monitor()).monitor_rect
-		self.win.titlebar = false
-		self.win.sizeable = false
-		self.win.state = 'normal'
-		self.win.visible = true
-		self._fullscreen = true
-	else
-		self.win.visible = false
-		self.win.normal_rect = self._fs.normal_rect
-		self.win.titlebar = self._fs.titlebar
-		self.win.sizeable = self._fs.sizeable
-		self.win.visible = true
-		self.win.state = self._fs.state
-		--frameless windows maximize to the entire screen, covering the taskbar. fix that.
-		if self.win.state == 'maximized' and not self.win.titlebar then
-			self.win.rect = winapi.GetMonitorInfo(self:monitor()).work_rect
-		end
-		self._fullscreen = false
+function window:restore()
+	self._minimized = nil
+	self.win:restore()
+end
+
+function window:shownormal()
+	self._minimized = nil
+	self.win:shownormal()
+end
+
+function window:enter_fullscreen()
+	self._fs = {
+		state = self.win.state,
+		normal_rect = self.win.normal_rect,
+		titlebar = self.win.titlebar,
+		sizeable = self.win.sizeable,
+	}
+	self.win.visible = false
+	self.win.normal_rect = winapi.GetMonitorInfo(self:monitor()).monitor_rect
+	self.win.titlebar = false
+	self.win.sizeable = false
+	self.win.state = 'normal'
+	self.win.visible = true
+	self._fullscreen = true
+end
+
+function window:leave_fullscreen()
+	self.win.visible = false
+	self.win.normal_rect = self._fs.normal_rect
+	self.win.titlebar = self._fs.titlebar
+	self.win.sizeable = self._fs.sizeable
+	self.win.visible = true
+	self.win.state = self._fs.state
+	--frameless windows maximize to the entire screen, covering the taskbar. fix that.
+	if self.win.state == 'maximized' and not self.win.titlebar then
+		self.win.rect = winapi.GetMonitorInfo(self:monitor()).work_rect
 	end
-	]]
+	self._fullscreen = false
+end
+
+function window:visible()
+	return self.win.visible
+end
+
+function window:minimized()
+	if self._minimized then
+		return self._minimized
+	end
+	return self.win.minimized
+end
+
+function window:maximized()
+	if self.win.minimized then
+		return self.win.restore_to_maximized
+	end
+	return self.win.maximized
+end
+
+function window:fullscreen()
+	return self._fullscreen
 end
 
 --positioning
@@ -316,17 +371,25 @@ function Window:on_pos_changed(info)
 	--self.delegate:event'frame_changed'
 end
 
-function window:monitor()
+function window:display()
 	return self.win.monitor
 end
 
 --frame
 
-function window:title(newtitle)
-	if newtitle then
-		self.win.title = newtitle
+function window:title(title)
+	if title then
+		self.win.title = title
 	else
 		return self.win.title
+	end
+end
+
+function window:topmost(topmost)
+	if topmost ~= nil then
+		self.win.topmost = topmost
+	else
+		return self.win.topmost
 	end
 end
 

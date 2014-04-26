@@ -31,7 +31,7 @@ function win:keypress(key)
 	if key == 'F11' then
 		self:fullscreen(not self:fullscreen())
 	elseif key == 'enter' then
-		if self:state() == 'maximized' then self:state'normal' else self:state'maximized' end
+		if self:maximized() then self:restore() else self:maximize() end
 	end
 end
 
