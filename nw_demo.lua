@@ -1,9 +1,10 @@
 local nw = require'nw'
 local glue = require'glue'
+io.stdout:setvbuf'no'
 
 local app = nw:app()
 
---collection of tests
+--collecting and running tests
 
 local tests = {}
 
@@ -28,57 +29,73 @@ end
 
 --system info
 
+--double click time is sane
+--target area is sane
 add('double-click metrics', function()
+
 	local t = app.impl:double_click_time()
+	print('double_click_time', t)
 	assert(t > 0 and t < 5000)
-	print('impl.double_click_time', t)
+
 	local w, h = app.impl:double_click_target_area()
+	print('double_click_target_area', w, h)
 	assert(w > 0 and w < 100)
 	assert(h > 0 and h < 100)
-	print('impl.double_click_target_area', w, h)
 end)
 
---displays
+--display info
 
+--client rect is be fully enclosed in screen rect
+local function test_display(display)
+
+	local x, y, w, h = display:rect()
+	print('rect',  x, y, w, h)
+
+	local cx, cy, cw, ch = display:client_rect()
+	print('client_rect', cx, cy, cw, ch)
+
+	--client rect must be fully enclosed in screen rect
+	assert(cx >= x)
+	assert(cy >= y)
+	assert(cw <= w)
+	assert(ch <= h)
+end
+
+--there's at least one display and its values are sane
 add('displays', function()
-	local main_display = app:main_display()
-	local found_main = false
-
+	local i = 0
 	for display in app:displays() do
-		print('screen_rect',  app:screen_rect(display))
-		print('desktop_rect', app:desktop_rect(display))
-
-		if main_display == display then
-			found_main = true
-		end
+		i = i + 1
+		test_display(display)
 	end
-	assert(found_main)
+	assert(i > 0) --there must be at least 1 display
 end)
 
+--main display is at (0, 0)
+--main display has sane size
 add('main display', function()
 	local display = app:main_display()
-
-	local x, y, w, h = app:screen_rect(display)
-	print('screen_rect',  x, y, w, h)
+	test_display(display)
+	local x, y, w, h = display:rect()
+	--main screen is at (0, 0)
 	assert(x == 0)
 	assert(y == 0)
-	assert(w > 100)
-	assert(h > 100)
-
-	local x, y, w, h = app:desktop_rect(display)
-	print('desktop_rect', x, y, w, h)
-	assert(x >= 0)
-	assert(y >= 0)
+	--sane size
 	assert(w > 100)
 	assert(h > 100)
 end)
 
 --time
 
+--time and timediff values are sane
 add('time', function()
 	local t = app:time()
-	print('app:time', t)
-	print('app:timediff', app:timediff(t))
+	print('time', t)
+	assert(t > 0)
+
+	local d = app:timediff(t)
+	print('timediff', d)
+	assert(d > 0 and d < 1000)
 end)
 
 --window position generator
@@ -97,31 +114,85 @@ local function winpos(t, same_pos)
 	return glue.update({x = x, y = y, w = 140, h = 90}, t)
 end
 
+--event recorder/checker
 
---app running and termination
+local function recorder(app)
+	local t = {}
+	local function record(...)
+		t[#t+1] = {n = select('#', ...), ...}
+	end
+	--app:observe('event', record)
+	return function(expected)
+		--for
+	end
+end
 
+--app running, quitting and window closing
+
+--run() is a no-op until there are windows
+--quit() is a no-op if not already running
+--run() is a no-op if already running
+--running() check works
+--run() doesn't return
+--closing() query works
+--quitting after the last window is closed works
+--close() from closed() event is a no-op
+--dead() from closed() is false (window is not dead yet, we can still release any resources tied to it)
+--exit() query works
+--TODO: quit() from closed() event works
 add('run', function()
-	app:run() --no op: there are no windows yet
-	local win1 = app:window(winpos{title = 'win1'})
-	local win2 = app:window(winpos{title = 'win2'})
-	function win1:closing()
-		app:run() --no op: already running
-		print(self:title(), 'closing')
+	app:run() --no-op: there are no windows yet
+	app:quit() --no-op: not running yet
+	assert(not app:running())
+	local win = app:window(winpos{title = 'win'})
+	function win:closed()
+		assert(app:running())
+		app:run() --no-op: already running
+		self:close() --no-op: already closed
+		assert(not self:dead()) --but not dead yet
+		print('closed')
 	end
-	local _closed
-	function win1:closed()
-		print(self:title(), 'closed')
-		if _closed then return end
-		_closed = true
-		print'quitting'
-		app:quit()
+	local allow
+	function win:closing()
+		if not allow then --don't allow the first time
+			print'not allowing'
+			allow = true
+			return false
+		else --allow the second time
+			print'allowing'
+			return true
+		end
 	end
-	win2.closing = win1.closing
-	win2.closed = win1.closed
+	function app:exit()
+		print'exit'
+		return -1
+	end
 	app:run()
+	assert(false) --can't reach here
 end)
 
 test'run'
+
+--window closing query
+
+add('closing', function()
+	local win = app:window(winpos{})
+	local allow
+	function win:closing()
+		return allow
+	end
+	allow = false; win:close()
+	assert(not win:dead())
+	allow = true; win:close()
+	--process didn't exit because app wasn't running
+	print'still here'
+	assert(win:dead())
+	--TODO: segmentation fault !!!
+end)
+
+--test'closing'
+
+--test'closing'
 
 --generate value combinations for sets of binary flags
 

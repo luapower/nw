@@ -1,4 +1,4 @@
---native widgets osx backend
+--native widgets cococa backend
 
 --cocoa lessons:
 --windows are created hidden by default.
@@ -6,42 +6,40 @@
 --orderOut() doesn't hide window if it's the key window (instead it disables mouse on it making it appear frozen).
 --makeKeyWindow() and makeKeyAndOrderFront() do the same thing (both bring the window to front).
 --isVisible() returns false both when the window is orderOut() and when it's minimized().
---activateIgnoringOtherApps(false) puts windows behind the active app.
---activateIgnoringOtherApps(true) puts windows in front of the active app.
+--activateIgnoringOtherApps(false) puts windows created after behind the active app.
+--activateIgnoringOtherApps(true) puts windows created after in front of the active app.
 --only the windows made key after the call to activateIgnoringOtherApps(true) are put in front of the active app!
 --quitting the app from the app's Dock menu doesn't call windowShouldClose (but does call windowWillClose).
 --there's no windowDidClose event so windowDidResignKey comes after windowWillClose.
+--screen:visibleFrame() is in virtual screen coordinates just like winapi's MONITORINFO.
+--applicationWillTerminate() is never called.
 
-io.stdout:setvbuf'no'
-local glue = require'glue'
 local ffi = require'ffi'
-assert(ffi.abi'32bit', 'use luajit32 with this')
+local glue = require'glue'
 local objc = require'objc'
---objc.debug = true
 local bs = require'objc.BridgeSupport'
 bs.loadFramework'Foundation'
 bs.loadFramework'AppKit'
 bs.loadFramework'System'
 bs.loadFramework'CoreServices'
 
-ffi.cdef[[
-typedef uint32_t CGDirectDisplayID;
-]]
+io.stdout:setvbuf'no'
+--objc.debug = true
 
 local function unpack_rect(r)
 	return r.origin.x, r.origin.y, r.size.width, r.size.height
 end
 
-local nw = {}
+local backend = {}
 
-function nw:app(delegate)
+function backend:app(delegate)
 	return self.app_class:new(delegate)
 end
 
---app impl
+--app class
 
 local app = {}
-nw.app_class = app
+backend.app_class = app
 
 function app:new(delegate)
 	self = glue.inherit({delegate = delegate}, self)
@@ -55,11 +53,14 @@ function app:new(delegate)
 	self.nsapp:setActivationPolicy(bs.NSApplicationActivationPolicyRegular)
 
 	objc.addMethod(self.nsappclass, objc.SEL'applicationShouldTerminate:', function(_, sel, app)
-		return self.delegate:event'terminating' ~= false
+		if self.delegate:_backend_quitting() then
+			os.exit(self.delegate:_backend_exit())
+		end
+		return 0
 	end, 'i@:@')
 
-	objc.addMethod(self.nsappclass, objc.SEL'applicationWillTerminate:', function(_, sel, app)
-		self.delegate:event'terminated'
+	objc.addMethod(self.nsappclass, objc.SEL'applicationDidChangeScreenParameters:', function(_, sel, app)
+		self.delegate:_backend_displays_changed()
 	end, 'v@:@')
 
 	return self
@@ -77,28 +78,49 @@ function app:quit()
 	self.nsapp:terminate(nil)
 end
 
+--displays
+
+--convert rect from bottom-up relative-to-main-screen space to top-down relative-to-main-screen space
+local function flip_rect(main_h, x, y, w, h)
+	return x,  main_h - h - y, w, h
+end
+
+local function display(main_h, screen)
+	local t = {}
+	t.x, t.y, t.w, t.h = flip_rect(main_h, unpack_rect(screen:frame()))
+	t.client_x, t.client_y, t.client_w, t.client_h = flip_rect(main_h, unpack_rect(screen:visibleFrame()))
+	return t
+end
+
 function app:displays()
+	objc.NSScreen:mainScreen() --calling this before :screens() prevents a weird NSRecursiveLock error
 	local screens = objc.NSScreen:screens()
-	local n = screens:count()
-	local i = 0
-	return function()
-		i = i + 1
-		if i > n then return end
-		return screens:objectAtIndex(i-1)
+
+	--find the main screen in the array (don't query it again because it might be different)
+	local main_h
+	for i = 0, screens:count()-1 do
+		local screen = screens:objectAtIndex(i)
+		local frame = screen:frame()
+		if frame.origin.x == 0 and frame.origin.y == 0 then --main screen
+			main_h = frame.size.height
+		end
 	end
+	assert(main_h)
+
+	--build the list of display objects to return
+	local displays = {}
+	for i = 0, screens:count()-1 do
+		table.insert(displays, display(main_h, screens:objectAtIndex(i)))
+	end
+	return displays
 end
 
 function app:main_display()
-	return objc.NSScreen:mainScreen()
+	local screen = objc.NSScreen:mainScreen()
+	return display(screen:frame().size.height, screen)
 end
 
-function app:screen_rect(display)
-	return unpack_rect(display:frame())
-end
-
-function app:desktop_rect(display)
-	return unpack_rect(display:visibleFrame())
-end
+--double-clicking info
 
 function app:double_click_time() --milliseconds
 	return objc.NSEvent:doubleClickInterval() * 1000
@@ -107,6 +129,8 @@ end
 function app:double_click_target_area()
 	return 4, 4 --like in windows
 end
+
+--time
 
 function app:time()
 	return bs.mach_absolute_time()
@@ -124,7 +148,7 @@ function app:window(delegate, t)
 	return self.window_class:new(self, delegate, t)
 end
 
---window impl
+--window backend
 
 local window = {}
 app.window_class = window
@@ -146,55 +170,63 @@ function window:new(app, delegate, t)
 	self.nswinclass = objc.createClass(objc.NSWindow, gen_classname(), {})
 
 	objc.addMethod(self.nswinclass, objc.SEL'windowShouldClose:', function(nswin, sel, sender)
-		return self.delegate:event'closing' ~= false
+		return self.delegate:_backend_closing() and 1 or 0
 	end, 'B@:@')
 
 	objc.addMethod(self.nswinclass, objc.SEL'windowWillClose:', function(nswin, sel, notification)
+		self._closed = true
 
-		--windowWillClose is sent again if calling app:terminate() in a 'closed' event
-		if self._closed then
-			return
-		end
-
-		--defer closing on deactivation so that 'deactivated' event is sent before it
+		--defer closing on deactivation so that 'deactivated' event is sent before the 'closed' event
 		if self:active() then
 			self._close_on_deactivate = true
 		else
-			self._closed = true
-			self.delegate:event'closed'
+			self.delegate:_backend_closed()
 			self._dead = true
 		end
 	end, 'v@:@')
 
 	objc.addMethod(self.nswinclass, objc.SEL'windowDidBecomeKey:', function(nswin, sel, notification)
-		self.delegate:event'activated'
+		self.delegate:_backend_activated()
 	end, 'v@:@')
 
 	objc.addMethod(self.nswinclass, objc.SEL'windowDidResignKey:', function(nswin, sel, notification)
-		self.delegate:event'deactivated'
+		self.delegate:_backend_deactivated()
 
 		--check for defered close
 		if self._close_on_deactivate then
-			self._closed = true
-			self.delegate:event'closed'
+			self.delegate:_backend_closed()
 			self._dead = true
 		end
 
 	end, 'v@:@')
 
-	self.nswin = self.nswinclass:alloc():initWithContentRect_styleMask_backing_defer(
-						{{t.x, t.y}, {t.w, t.h}},
-						t.frame == 'normal' and bit.bor(
+	local style = t.frame == 'normal' and bit.bor(
 							bs.NSTitledWindowMask,
 							t.closeable and bs.NSClosableWindowMask or 0,
 							t.minimizable and bs.NSMiniaturizableWindowMask or 0,
 							t.resizeable and bs.NSResizableWindowMask or 0) or
 						t.frame == 'none' and bit.bor(bs.NSBorderlessWindowMask) or
-						t.frame == 'transparent' and bit.bor(bs.NSBorderlessWindowMask), --TODO
-						bs.NSBackingStoreBuffered,
-						false)
+						t.frame == 'transparent' and bit.bor(bs.NSBorderlessWindowMask) --TODO
 
-	self.nswin.delegate = self.nswin
+	local main_h = objc.NSScreen:mainScreen():frame().size.height
+	local frame_rect = bs.NSMakeRect(flip_rect(main_h, t.x, t.y, t.w, t.h))
+	local content_rect = objc.NSWindow:contentRectForFrameRect_styleMask(frame_rect, style)
+
+	self.nswin = self.nswinclass:alloc():initWithContentRect_styleMask_backing_defer(
+											content_rect, style, bs.NSBackingStoreBuffered, false)
+
+	self.nswin:setAcceptsMouseMovedEvents(true)
+
+	if not t.maximizable then
+
+		--emulate windows behavior of hiding the minimize and maximize buttons when they're both disabled
+		if not t.minimizable then
+			self.nswin:standardWindowButton(bs.NSWindowZoomButton):setHidden(true)
+			self.nswin:standardWindowButton(bs.NSWindowMiniaturizeButton):setHidden(true)
+		else
+			self.nswin:standardWindowButton(bs.NSWindowZoomButton):setEnabled(false)
+		end
+	end
 
 	self.nswin:setTitle(objc.NSStr(t.title))
 
@@ -204,8 +236,12 @@ function window:new(app, delegate, t)
 		end
 	end
 
+	--enable events
+	self.nswin.delegate = self.nswin
+
+	--minimize on the next show()
 	if t.minimized then
-		self._showminimized = true
+		self._minimize = true
 	end
 
 	return self
@@ -215,13 +251,13 @@ function window:dead()
 	return self._dead
 end
 
-function window:close(force)
-	if not force then
-		if self.delegate:event'closing' ~= false then
-			return
-		end
+function window:close()
+	if self._closed then return end
+	--because windowShouldClose will not be called...
+	if not self.delegate:_backend_closing() then
+		return
 	end
-	self.nswin:close() --windowShouldClose is not sent here
+	self.nswin:close()
 end
 
 function window:activate()
@@ -233,9 +269,9 @@ function window:active()
 end
 
 function window:show()
-	if self._showminimized then
+	if self._minimize then
 		self.nswin:miniaturize(nil)
-		self._showminimized = nil
+		self._minimize = nil
 		return
 	end
 	self.nswin:makeKeyAndOrderFront(nil)
@@ -297,8 +333,4 @@ function window:title(title)
 	end
 end
 
---set the api impl and return it
-
-local api = require'nw_api'
-api.impl = nw
-return api
+return backend

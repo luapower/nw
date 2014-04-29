@@ -16,18 +16,16 @@ local function unpack_rect(rect)
 	return rect.x, rect.y, rect.w, rect.h
 end
 
---nw impl
+local backend = {}
 
-local nw = {}
-
-function nw:app(delegate)
+function backend:app(delegate)
 	return self.app_class:new(delegate)
 end
 
---app impl
+--app backend
 
 local app = {}
-nw.app_class = app
+backend.app_class = app
 
 function app:new(delegate)
 	return glue.inherit({delegate = delegate}, self)
@@ -35,44 +33,43 @@ end
 
 function app:run()
 	winapi.MessageLoop()
-	self.delegate:event'terminated'
-	os.exit()
+	os.exit(self.delegate:_backend_exit())
 end
 
 function app:quit()
-	if self.delegate:event'terminating' == false then
+	if not self.delegate:_backend_quitting() then
 		return
-	end
-	--force-close all windows
-	for win in self.delegate:windows() do
-		win:close(true)
 	end
 	--stop the message loop
 	winapi.PostQuitMessage()
 end
 
+local function display(monitor)
+	local ok, info = pcall(winapi.GetMonitorInfo, monitor)
+	if not ok then return end
+	return {
+		x = info.monitor_rect.x,
+		y = info.monitor_rect.y,
+		w = info.monitor_rect.w,
+		h = info.monitor_rect.h,
+		client_x = info.work_rect.x,
+		client_y = info.work_rect.y,
+		client_w = info.work_rect.w,
+		client_h = info.work_rect.h,
+	}
+end
+
 function app:displays()
 	local monitors = winapi.EnumDisplayMonitors()
-	local i = 0
-	return function()
-		i = i + 1
-		if i > #monitors then return end
-		return monitors[i]
+	local displays = {}
+	for i = 1, #monitors do
+		table.insert(displays, display(monitors[i])) --invalid displays are skipped
 	end
+	return displays
 end
 
 function app:main_display()
-	return winapi.MonitorFromPoint(nil, winapi.MONITOR_DEFAULTTOPRIMARY)
-end
-
-function app:screen_rect(monitor)
-	monitor = monitor or self:main_display()
-	return unpack_rect(winapi.GetMonitorInfo(monitor).monitor_rect)
-end
-
-function app:desktop_rect(monitor)
-	monitor = monitor or self:main_display()
-	return unpack_rect(winapi.GetMonitorInfo(monitor).work_rect)
+	return display(winapi.MonitorFromPoint(nil, winapi.MONITOR_DEFAULTTOPRIMARY))
 end
 
 function app:double_click_time() --milliseconds
@@ -99,7 +96,7 @@ function app:window(delegate, t)
 	return self.window_class:new(self, delegate, t)
 end
 
---window impl
+--window backend
 
 local window = {}
 app.window_class = window
@@ -160,9 +157,8 @@ end
 
 --lifetime
 
-function window:close(force)
+function window:close()
 	if self.win._closed then return end
-	self.win._forceclose = force
 	self.win:close()
 end
 
@@ -171,23 +167,14 @@ function window:dead()
 end
 
 function Window:on_close()
-	if self._forceclose then
-		self._forceclose = nil
-		return
-	end
-	if self.delegate:event'closing' == false then
+	if not self.delegate:_backend_closing() then
 		return 0
 	end
 end
 
 function Window:on_destroy()
-	--from here on, closing the window is a no op, but dead() still returns false.
-	if self._closed then
-		return
-	end
 	self._closed = true
-
-	self.delegate:event'closed'
+	self.delegate:_backend_closed()
 	self._dead = true
 	self:free_surface()
 end
@@ -203,19 +190,19 @@ function window:active()
 end
 
 function Window:on_activate()
-	self.delegate:event'activated'
+	self.delegate:_backend_activated()
 end
 
 function Window:on_deactivate()
-	self.delegate:event'deactivated'
+	self.delegate:_backend_deactivated()
 end
 
 function Window:on_activate_app()
-	self.delegate.app:event'activated'
+	self.delegate.app:_backend_activated()
 end
 
 function Window:on_deactivate_app()
-	self.delegate.app:event'deactivated'
+	self.delegate.app:_backend_deactivated()
 end
 
 --state
@@ -242,7 +229,8 @@ function window:maximize()
 	self.win:maximize()
 	--frameless windows maximize to the entire screen, covering the taskbar. fix that.
 	if not self.win.frame then
-		self.win:move(self.app:desktop_rect(self:display()))
+		local t = self:display()
+		self.win:move(t.client_x, t.client_y, t.client_w, t.client_h)
 	end
 end
 
@@ -327,7 +315,7 @@ function window:frame_rect(x, y, w, h)
 end
 
 function Window:frame_changing(how, rect)
-	local x, y, w, h = self.delegate:event('resizing', how, unpack_rect(rect))
+	local x, y, w, h = self.delegate:_backend_resizing(how, unpack_rect(rect))
 	rect.x = x or rect.x
 	rect.y = y or rect.y
 	rect.w = w or rect.w
@@ -357,22 +345,28 @@ end
 
 function Window:on_resized(flag)
 	if flag == 'minimized' then
-		self.delegate:event'minimized'
+		self.delegate:_backend_minimized()
 	elseif flag == 'maximized' then
 		self:resized()
-		self.delegate:event'maximized'
+		self.delegate:_backend_maximized()
 	elseif flag == 'restored' then
 		self:resized()
-		self.delegate:event'resized'
+		self.delegate:_backend_resized()
 	end
 end
 
 function Window:on_pos_changed(info)
-	--self.delegate:event'frame_changed'
+	--self.delegate:_event'frame_changed'
 end
 
 function window:display()
-	return self.win.monitor
+	return display(self.win.monitor)
+end
+
+--displays
+
+function Window:on_display_change(x, y, bpp)
+	self.delegate.app:_backend_displays_changed()
 end
 
 --frame
@@ -439,13 +433,13 @@ end
 function Window:on_key_down(vk, flags)
 	local key = keyname(vk)
 	if not flags.prev_key_state then
-		self.delegate:event('keydown', key)
+		self.delegate:_backend_keydown(key)
 	end
-	self.delegate:event('keypress', key)
+	self.delegate:_backend_keypress(key)
 end
 
 function Window:on_key_up(vk)
-	self.delegate:event('keyup', keyname(vk))
+	self.delegate:_backend_keyup(keyname(vk))
 end
 
 --we get the ALT key with these messages instead
@@ -453,7 +447,7 @@ Window.on_syskey_down = Window.on_key_down
 Window.on_syskey_up = Window.on_key_up
 
 function Window:on_key_down_char(char)
-	self.delegate:event('keychar', char)
+	self.delegate:_backend_keychar(char)
 end
 
 Window.on_syskey_down_char = Window.on_key_down_char
@@ -480,6 +474,10 @@ end
 
 --TODO: get lost mouse events http://blogs.msdn.com/b/oldnewthing/archive/2012/03/14/10282406.aspx
 
+local function unpack_buttons(b)
+	return b.lbutton, b.rbutton, b.mbutton, b.xbutton1, b.xbutton2
+end
+
 function Window:setmouse(x, y, buttons)
 
 	--set mouse state
@@ -496,7 +494,7 @@ function Window:setmouse(x, y, buttons)
 	if not m.inside then
 		m.inside = true
 		winapi.TrackMouseEvent{hwnd = self.hwnd, flags = winapi.TME_LEAVE}
-		self.delegate:event'hover'
+		self.delegate:_backend_mouseenter(x, y, unpack_buttons(buttons))
 	end
 end
 
@@ -505,14 +503,14 @@ function Window:on_mouse_move(x, y, buttons)
 	local moved = x ~= m.x or y ~= m.y
 	self:setmouse(x, y, buttons)
 	if moved then
-		self.delegate:event('mousemove', x, y)
+		self.delegate:_backend_mousemove(x, y, unpack_buttons(buttons))
 	end
 end
 
 function Window:on_mouse_leave()
 	if not self.delegate.mouse.inside then return end
 	self.delegate.mouse.inside = false
-	self.delegate:event'leave'
+	self.delegate:_backend_mouseleave()
 end
 
 function Window:capture_mouse()
@@ -530,73 +528,73 @@ end
 function Window:on_lbutton_down(x, y, buttons)
 	self:setmouse(x, y, buttons)
 	self:capture_mouse()
-	self.delegate:event('mousedown', 'left')
+	self.delegate:_backend_mousedown'left'
 end
 
 function Window:on_mbutton_down(x, y, buttons)
 	self:setmouse(x, y, buttons)
 	self:capture_mouse()
-	self.delegate:event('mousedown', 'middle')
+	self.delegate:_backend_mousedown'middle'
 end
 
 function Window:on_rbutton_down(x, y, buttons)
 	self:setmouse(x, y, buttons)
 	self:capture_mouse()
-	self.delegate:event('mousedown', 'right')
+	self.delegate:_backend_mousedown'right'
 end
 
 function Window:on_xbutton_down(x, y, buttons)
 	self:setmouse(x, y, buttons)
 	if buttons.xbutton1 then
 		self:capture_mouse()
-		self.delegate:event('mousedown', 'xbutton1')
+		self.delegate:_backend_mousedown'xbutton1'
 	end
 	if buttons.xbutton2 then
 		self:capture_mouse()
-		self.delegate:event('mousedown', 'xbutton2')
+		self.delegate:_backend_mousedown'xbutton2'
 	end
 end
 
 function Window:on_lbutton_up(x, y, buttons)
 	self:setmouse(x, y, buttons)
 	self:uncapture_mouse()
-	self.delegate:event('mouseup', 'left')
+	self.delegate:_backend_mouseup'left'
 end
 
 function Window:on_mbutton_up(x, y, buttons)
 	self:setmouse(x, y, buttons)
 	self:uncapture_mouse()
-	self.delegate:event('mouseup', 'middle')
+	self.delegate:_backend_mouseup'middle'
 end
 
 function Window:on_rbutton_up(x, y, buttons)
 	self:setmouse(x, y, buttons)
 	self:uncapture_mouse()
-	self.delegate:event('mouseup', 'right')
+	self.delegate:_backend_mouseup'right'
 end
 
 function Window:on_xbutton_up(x, y, buttons)
 	self:setmouse(x, y, buttons)
 	if buttons.xbutton1 then
 		self:uncapture_mouse()
-		self.delegate:event('mouseup', 'xbutton1')
+		self.delegate:_backend_mouseup'xbutton1'
 	end
 	if buttons.xbutton2 then
 		self:uncapture_mouse()
-		self.delegate:event('mouseup', 'xbutton2')
+		self.delegate:_backend_mouseup'xbutton2'
 	end
 end
 
 function Window:on_mouse_wheel(x, y, buttons, delta)
 	delta = math.floor(delta / 120) --note: when scrolling backwards I get -119 instead of -120
 	self:setmouse(x, y, buttons)
-	self.delegate:event('wheel', delta)
+	self.delegate:_backend_mousewheel(delta)
 end
 
 function Window:on_mouse_hwheel(x, y, buttons, delta)
 	delta = delta / 120
 	self:setmouse(x, y, buttons)
-	self.delegate:event('hwheel', delta)
+	self.delegate:_backend_mousehwheel(delta)
 end
 
 --rendering
@@ -674,7 +672,7 @@ function Window:repaint_surface()
 	self.pixman_cr:set_operator(cairo.CAIRO_OPERATOR_SOURCE)
 	self.pixman_cr:paint()
 	self.pixman_cr:set_operator(cairo.CAIRO_OPERATOR_OVER)
-	self.delegate:event('render', self.pixman_cr)
+	self.delegate:_backend_render(self.pixman_cr)
 end
 
 function Window:update_layered()
@@ -682,10 +680,7 @@ function Window:update_layered()
 										self.bmp_pos, 0, self.blendfunc, winapi.ULW_ALPHA)
 end
 
-if not ... then require'nw_demo2' end
+if not ... then require'nw_demo' end
 
---set the api impl and return it
-local api = require'nw_api'
-api.impl = nw
-return api
+return backend
 
