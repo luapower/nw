@@ -22,7 +22,7 @@ function backend:app(delegate)
 	return self.app_class:new(delegate)
 end
 
---app backend
+--app class
 
 local app = {}
 backend.app_class = app
@@ -31,18 +31,33 @@ function app:new(delegate)
 	return glue.inherit({delegate = delegate}, self)
 end
 
+--run/quit
+
+function printmsg(msg)
+	--print(winapi.findname('WM_', msg.message))
+end
+
 function app:run()
-	winapi.MessageLoop()
-	os.exit(self.delegate:_backend_exit())
+	winapi.MessageLoop(printmsg)
+	--WM_QUIT from the outside (improbable)
+	self:_backend_quit() --calls quit() which exits the process or returns which means refusal to quit.
+	self:run()
 end
 
 function app:quit()
-	if not self.delegate:_backend_quitting() then
-		return
-	end
-	--stop the message loop
+	--process any left-over messages and exit
 	winapi.PostQuitMessage()
+	winapi.ProcessMessages()
+	os.exit(self.delegate:_backend_exit())
 end
+
+--activation
+
+function app:activate()
+	--TODO
+end
+
+--displays
 
 local function display(monitor)
 	local ok, info = pcall(winapi.GetMonitorInfo, monitor)
@@ -82,6 +97,8 @@ function app:double_click_target_area()
 	return w, h
 end
 
+--time
+
 function app:time()
 	return winapi.QueryPerformanceCounter().QuadPart
 end
@@ -96,7 +113,7 @@ function app:window(delegate, t)
 	return self.window_class:new(self, delegate, t)
 end
 
---window backend
+--window class
 
 local window = {}
 app.window_class = window
@@ -158,24 +175,18 @@ end
 --lifetime
 
 function window:close()
-	if self.win._closed then return end
-	self.win:close()
-end
-
-function window:dead()
-	return self.win._dead
+	self.win._forceclose = true
+	self.win:close() --calls on_close() hence _forceclose
 end
 
 function Window:on_close()
-	if not self.delegate:_backend_closing() then
+	if not self._forceclose and not self.delegate:_backend_closing() then
 		return 0
 	end
 end
 
 function Window:on_destroy()
-	self._closed = true
 	self.delegate:_backend_closed()
-	self._dead = true
 	self:free_surface()
 end
 
@@ -627,7 +638,7 @@ function Window:create_surface()
 	if self.bmp then return end
 	self.win_pos = winapi.POINT{x = self.x, y = self.y}
 	local w, h = self.client_w, self.client_h
-	print('create_surface', w, h)
+	--print('create_surface', w, h)
 	self.bmp_pos = winapi.POINT{x = 0, y = 0}
 	self.bmp_size = winapi.SIZE{w = w, h = h}
 
@@ -680,7 +691,7 @@ function Window:update_layered()
 										self.bmp_pos, 0, self.blendfunc, winapi.ULW_ALPHA)
 end
 
-if not ... then require'nw_demo' end
+if not ... then require'nw_test' end
 
 return backend
 

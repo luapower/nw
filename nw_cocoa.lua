@@ -9,10 +9,13 @@
 --activateIgnoringOtherApps(false) puts windows created after behind the active app.
 --activateIgnoringOtherApps(true) puts windows created after in front of the active app.
 --only the windows made key after the call to activateIgnoringOtherApps(true) are put in front of the active app!
---quitting the app from the app's Dock menu doesn't call windowShouldClose (but does call windowWillClose).
---there's no windowDidClose event so windowDidResignKey comes after windowWillClose.
+--quitting the app from the app's Dock menu (or calling terminate(nil)) calls appShouldTerminate, then calls close()
+--on all windows, thus without calling windowShouldClose, but only windowWillClose.
+--there's no windowDidClose event and so windowDidResignKey comes after windowWillClose.
 --screen:visibleFrame() is in virtual screen coordinates just like winapi's MONITORINFO.
 --applicationWillTerminate() is never called.
+--terminate() doesn't return, unless applicationShouldTerminate returns false
+--creating and closing a window and not starting the app loop at all segfaults on exit (is this TLC or cocoa?).
 
 local ffi = require'ffi'
 local glue = require'glue'
@@ -41,6 +44,8 @@ end
 local app = {}
 backend.app_class = app
 
+--app init
+
 function app:new(delegate)
 	self = glue.inherit({delegate = delegate}, self)
 
@@ -53,9 +58,7 @@ function app:new(delegate)
 	self.nsapp:setActivationPolicy(bs.NSApplicationActivationPolicyRegular)
 
 	objc.addMethod(self.nsappclass, objc.SEL'applicationShouldTerminate:', function(_, sel, app)
-		if self.delegate:_backend_quitting() then
-			os.exit(self.delegate:_backend_exit())
-		end
+		self.delegate:_backend_quit() --calls quit() which exits the process or returns which means refusal to quit.
 		return 0
 	end, 'i@:@')
 
@@ -63,19 +66,25 @@ function app:new(delegate)
 		self.delegate:_backend_displays_changed()
 	end, 'v@:@')
 
+	self.nsapp:setPresentationOptions(self.nsapp:presentationOptions() + bs.NSApplicationPresentationFullScreen)
+
 	return self
 end
+
+--run/quit
 
 function app:run()
 	self.nsapp:run()
 end
 
-function app:activate()
-	self.nsapp:activateIgnoringOtherApps(false)
+function app:quit()
+	os.exit(self.delegate:_backend_exit())
 end
 
-function app:quit()
-	self.nsapp:terminate(nil)
+--app activation
+
+function app:activate()
+	self.nsapp:activateIgnoringOtherApps(false)
 end
 
 --displays
@@ -93,23 +102,17 @@ local function display(main_h, screen)
 end
 
 function app:displays()
-	objc.NSScreen:mainScreen() --calling this before :screens() prevents a weird NSRecursiveLock error
+	objc.NSScreen:mainScreen() --calling this before calling screens() prevents a weird NSRecursiveLock error
 	local screens = objc.NSScreen:screens()
 
-	--find the main screen in the array (don't query it again because it might be different)
-	local main_h
-	for i = 0, screens:count()-1 do
-		local screen = screens:objectAtIndex(i)
-		local frame = screen:frame()
-		if frame.origin.x == 0 and frame.origin.y == 0 then --main screen
-			main_h = frame.size.height
-		end
-	end
-	assert(main_h)
+	--get main_h from the screens snapshot array
+	local frame = screens:objectAtIndex(0):frame() --main screen always comes first
+	assert(frame.origin.x == 0 and frame.origin.y == 0) --main screen alright
+	local main_h = frame.size.height
 
 	--build the list of display objects to return
 	local displays = {}
-	for i = 0, screens:count()-1 do
+	for i = 0, tonumber(screens:count()-1) do
 		table.insert(displays, display(main_h, screens:objectAtIndex(i)))
 	end
 	return displays
@@ -148,10 +151,12 @@ function app:window(delegate, t)
 	return self.window_class:new(self, delegate, t)
 end
 
---window backend
+--window class
 
 local window = {}
 app.window_class = window
+
+--window creation
 
 local function name_generator(format)
 	local n = 0
@@ -174,14 +179,11 @@ function window:new(app, delegate, t)
 	end, 'B@:@')
 
 	objc.addMethod(self.nswinclass, objc.SEL'windowWillClose:', function(nswin, sel, notification)
-		self._closed = true
-
 		--defer closing on deactivation so that 'deactivated' event is sent before the 'closed' event
 		if self:active() then
 			self._close_on_deactivate = true
 		else
 			self.delegate:_backend_closed()
-			self._dead = true
 		end
 	end, 'v@:@')
 
@@ -195,10 +197,38 @@ function window:new(app, delegate, t)
 		--check for defered close
 		if self._close_on_deactivate then
 			self.delegate:_backend_closed()
-			self._dead = true
 		end
-
 	end, 'v@:@')
+
+	--fullscreen mode
+
+	objc.addMethod(self.nswinclass, objc.SEL'windowWillEnterFullScreen:', function(nswin, sel, notification)
+		print'enter fullscreen'
+		--self.nswin:toggleFullScreen(nil)
+		self.nswin:setStyleMask(self.nswin:styleMask() + bs.NSFullScreenWindowMask)
+		--self.nswin:contentView():enterFullScreenMode_withOptions(objc.NSScreen:mainScreen(), nil)
+	end, 'v@:@')
+
+	objc.addMethod(self.nswinclass, objc.SEL'windowWillExitFullScreen:', function(nswin, sel, notification)
+		print'exit fullscreen'
+	end, 'v@:@')
+
+	objc.addMethod(self.nswinclass, objc.SEL'willUseFullScreenPresentationOptions:', function(nswin, sel, options)
+		print('here1', options)
+		return options
+	end, 'l@:@')
+
+	objc.addMethod(self.nswinclass, objc.SEL'willUseFullScreenContentSize:', function(nswin, sel, size)
+		print('here2', size)
+	end, 'd@:@dd')
+
+	objc.addMethod(self.nswinclass, objc.SEL'customWindowsToEnterFullScreenForWindow:', function(nswin, sel)
+		return objc.NSArray:arrayWithObject(nswin)
+	end, '@@:@')
+
+	objc.addMethod(self.nswinclass, objc.SEL'customWindowsToExitFullScreenForWindow:', function(nswin, sel)
+		return objc.NSArray:arrayWithObject(nswin)
+	end, '@@:@')
 
 	local style = t.frame == 'normal' and bit.bor(
 							bs.NSTitledWindowMask,
@@ -214,6 +244,15 @@ function window:new(app, delegate, t)
 
 	self.nswin = self.nswinclass:alloc():initWithContentRect_styleMask_backing_defer(
 											content_rect, style, bs.NSBackingStoreBuffered, false)
+
+
+	if t.fullscreenable then
+		self.nswin:setCollectionBehavior(bs.NSWindowCollectionBehaviorFullScreenPrimary)
+	end
+
+	if t.parent then
+		t.parent.backend.nswin:addChildWindow_ordered(self.nswin, bs.NSWindowAbove)
+	end
 
 	self.nswin:setAcceptsMouseMovedEvents(true)
 
@@ -247,18 +286,13 @@ function window:new(app, delegate, t)
 	return self
 end
 
-function window:dead()
-	return self._dead
-end
+--closing
 
 function window:close()
-	if self._closed then return end
-	--because windowShouldClose will not be called...
-	if not self.delegate:_backend_closing() then
-		return
-	end
-	self.nswin:close()
+	self.nswin:close() --doesn't call windowShouldClose
 end
+
+--activation
 
 function window:activate()
 	self.nswin:makeKeyAndOrderFront(nil)
@@ -267,6 +301,8 @@ end
 function window:active()
 	return self.nswin:isKeyWindow() ~= 0
 end
+
+--visibility
 
 function window:show()
 	if self._minimize then
@@ -280,6 +316,12 @@ end
 function window:hide()
 	self.nswin:orderOut(nil)
 end
+
+function window:visible()
+	return self.nswin:isVisible() ~= 0
+end
+
+--state
 
 function window:minimize()
 	self.nswin:miniaturize(nil)
@@ -309,10 +351,6 @@ function window:shownormal()
 	end
 end
 
-function window:visible()
-	return self.nswin:isVisible() ~= 0
-end
-
 function window:minimized()
 	return self.nswin:isMiniaturized() ~= 0
 end
@@ -320,6 +358,21 @@ end
 function window:maximized()
 	return self.nswin:isZoomed() ~= 0
 end
+
+function window:fullscreen(fullscreen)
+	if fullscreen == nil then
+		return bit.band(tonumber(self.nswin:styleMask()), bs.NSFullScreenWindowMask) == bs.NSFullScreenWindowMask
+	else
+		if fullscreen ~= self:fullscreen() then
+			print'going fullscreen'
+			--self.nswin:toggleFullScreen(nil)
+			--self.nswin:setStyleMask(self.nswin:styleMask() + bs.NSFullScreenWindowMask)
+			--self.nswin:contentView():enterFullScreenMode_withOptions(objc.NSScreen:mainScreen(), nil)
+		end
+	end
+end
+
+--frame
 
 function window:display()
 	return self.nswin:screen()
@@ -332,5 +385,7 @@ function window:title(title)
 		return self.nswin:title()
 	end
 end
+
+if not ... then require'nw_test' end
 
 return backend
