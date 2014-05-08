@@ -40,7 +40,7 @@ end
 function app:run()
 	winapi.MessageLoop(printmsg)
 	--WM_QUIT from the outside (improbable)
-	self:_backend_quit() --calls quit() which exits the process or returns which means refusal to quit.
+	self:_backend_quitting() --calls quit() which exits the process or returns which means refusal to quit.
 	self:run()
 end
 
@@ -166,8 +166,14 @@ function window:new(app, delegate, t)
 	--start tracking mouse leave
 	winapi.TrackMouseEvent{hwnd = self.win.hwnd, flags = winapi.TME_LEAVE}
 
-	self._minimized = t.minimized
 	self._fullscreen = t.fullscreen
+	self._show_minimized = t.minimized
+	self._show_fullscreen = t.fullscreen
+
+	if self._show_fullscreen then
+		--until shown, we need this for maximized()
+		self._fs = {maximized = self.win.maximized}
+	end
 
 	return self
 end
@@ -190,7 +196,7 @@ function Window:on_destroy()
 	self:free_surface()
 end
 
---focus
+--activation
 
 function window:activate()
 	self.win:activate()
@@ -223,20 +229,34 @@ function window:hide()
 end
 
 function window:show()
-	if self._minimized then
-		self:minimize()
-		self._minimized = nil
+	if self._show_minimized then
+		if self._show_fullscreen then
+			self._show_fullscreen = nil
+			self:_enter_fullscreen(true)
+		else
+			self:minimize()
+		end
+	else
+		if self._show_fullscreen then
+			self._show_fullscreen = nil
+			self:_enter_fullscreen()
+		else
+			self.win:show()
+		end
 	end
-	self.win:show()
 end
 
 function window:minimize()
-	self._minimized = nil
+	self._show_minimized = nil
 	self.win:minimize()
 end
 
 function window:maximize()
-	self._minimized = nil
+	if self:fullscreen() and not self:minimized() and not self:maximized() then
+		self:_exit_fullscreen()
+	end
+	self._show_minimized = nil
+	self._show_fullscreen = nil
 	self.win:maximize()
 	--frameless windows maximize to the entire screen, covering the taskbar. fix that.
 	if not self.win.frame then
@@ -246,43 +266,71 @@ function window:maximize()
 end
 
 function window:restore()
-	self._minimized = nil
-	self.win:restore()
+	if self:fullscreen() and not self:minimized() and not self:maximized() then
+		self:_exit_fullscreen()
+	else
+		self._show_minimized = nil
+		self.win:restore()
+	end
 end
 
 function window:shownormal()
-	self._minimized = nil
+	self._show_minimized = nil
 	self.win:shownormal()
 end
 
-function window:enter_fullscreen()
+function window:_enter_fullscreen(show_minimized)
+	self._noevents = true
+
 	self._fs = {
-		state = self.win.state,
+		maximized = self.win.maximized,
 		normal_rect = self.win.normal_rect,
-		titlebar = self.win.titlebar,
+		frame = self.win.frame,
 		sizeable = self.win.sizeable,
 	}
+
 	self.win.visible = false
-	self.win.normal_rect = winapi.GetMonitorInfo(self:monitor()).monitor_rect
-	self.win.titlebar = false
+	self.win.frame = false
+	self.win.border = false
 	self.win.sizeable = false
-	self.win.state = 'normal'
-	self.win.visible = true
+	local d = self:display()
+	local r = winapi.RECT(d.x, d.y, d.x + d.w, d.y + d.h)
+	if show_minimized then
+		self.win.normal_rect = r
+		self.restore_to_maximized = false
+		self.win:minimize()
+	else
+		self.win.normal_rect = r
+		if not self.win.visible then
+			self.win:shownormal()
+		end
+	end
+
 	self._fullscreen = true
+	self._noevents = nil
 end
 
-function window:leave_fullscreen()
+function window:_exit_fullscreen()
+	self._noevents = true
+
 	self.win.visible = false
-	self.win.normal_rect = self._fs.normal_rect
-	self.win.titlebar = self._fs.titlebar
+	self.win.frame = self._fs.frame
+	self.win.border = self._fs.frame
 	self.win.sizeable = self._fs.sizeable
-	self.win.visible = true
-	self.win.state = self._fs.state
-	--frameless windows maximize to the entire screen, covering the taskbar. fix that.
-	if self.win.state == 'maximized' and not self.win.titlebar then
-		self.win.rect = winapi.GetMonitorInfo(self:monitor()).work_rect
+	self.win.normal_rect = self._fs.normal_rect
+	if self._fs.maximized then
+		self.win:maximize()
+		--frameless windows maximize to the entire screen, covering the taskbar. fix that.
+		if not self.win.frame then
+			local d = self:display()
+			self.win:move(d.client_x, d.client_y, d.client_w, d.client_h)
+		end
+	else
+		self.win:shownormal()
 	end
+
 	self._fullscreen = false
+	self._noevents = nil
 end
 
 function window:visible()
@@ -290,21 +338,33 @@ function window:visible()
 end
 
 function window:minimized()
-	if self._minimized then
-		return self._minimized
+	if self._show_minimized then
+		return self._show_minimized
 	end
 	return self.win.minimized
 end
 
 function window:maximized()
-	if self.win.minimized then
+	if self.win.visible and self.win.minimized then
 		return self.win.restore_to_maximized
+	elseif self._fullscreen then
+		return self._fs.maximized
 	end
 	return self.win.maximized
 end
 
-function window:fullscreen()
-	return self._fullscreen
+function window:fullscreen(fullscreen)
+	if fullscreen ~= nil then
+		if fullscreen ~= self._fullscreen then
+			if fullscreen then
+				self:_enter_fullscreen()
+			else
+				self:_exit_fullscreen()
+			end
+		end
+	else
+		return self._fullscreen
+	end
 end
 
 --positioning

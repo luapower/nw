@@ -22,6 +22,7 @@ local function add(name, f, expected_exitcode)
 	if prefix == '@' then --must run in subprocess
 		subproc[name] = expected_exitcode or 0
 	end
+	if type(f) == 'string' then f = tests[f] end --make an alias
 	table.insert(tests, f)
 	tests[name] = f
 	tests[f] = name
@@ -44,32 +45,34 @@ local function test(name)
 	end
 end
 
---run all tests in order
-local function testall()
+--run all tests whose names match a pattern, in order
+local function test_all_matching(patt)
 	for i,f in ipairs(tests) do
 		local name = tests[f]
-		print()
-		print(name)
-		print'========================='
-		test(name)
+		if name:match(patt) then
+			print()
+			print(name)
+			print'========================='
+			test(name)
+		end
 	end
 end
 
 --command line user interface
 local function testui(name)
 	if not name then
-		print(string.format('Usage: %s <test> | --all', arg[0]))
+		print(string.format('Usage: %s <name> | <name>*', arg[0]))
 		print'Available tests:'
 		for i,test in ipairs(tests) do
 			print('', tests[test])
 		end
-	elseif name == '--all' then
-		testall()
-	elseif not tests[select(2, parsename(name))] then
-		print'What test is that?'
-		testui()
-	else
+	elseif name:match'%*$' then
+		test_all_matching('^'..glue.escape(name:gsub('%*', ''))..'.*')
+	elseif tests[select(2, parsename(name))] then
 		test(name)
+	else
+		print'What test was that?'
+		testui()
 	end
 end
 
@@ -146,14 +149,14 @@ end
 --system info ------------------------------------------------------------------------------------------------------------
 
 --double click time is sane
-add('click-time', function()
+add('info-click-time', function()
 	local t = app.backend:double_click_time()
 	print('double_click_time', t)
 	assert(t > 0 and t < 5000)
 end)
 
 --target area is sane
-add('click-area', function()
+add('info-click-area', function()
 	local w, h = app.backend:double_click_target_area()
 	print('double_click_target_area', w, h)
 	assert(w > 0 and w < 100)
@@ -184,7 +187,7 @@ local function test_display(display)
 end
 
 --there's at least one display and its values are sane
-add('displays', function()
+add('info-displays', function()
 	local i = 0
 	for display in app:displays() do
 		i = i + 1
@@ -195,7 +198,7 @@ add('displays', function()
 end)
 
 --main display is at (0, 0)
-add('main-display', function()
+add('info-main-display', function()
 	local display = app:main_display()
 	test_display(display)
 	local x, y, w, h = display:rect()
@@ -207,37 +210,65 @@ end)
 --time -------------------------------------------------------------------------------------------------------------------
 
 --time values are sane
-add('time', function()
+add('info-time', function()
 	local t = app:time()
 	print('time    ', t)
 	assert(t > 0)
 end)
 
 --timediff values are sane (less than 1ms between 2 calls but more than 0)
-add('timediff', function()
+add('info-timediff', function()
 	local d = app:timediff(app:time())
 	print('timediff', d)
 	assert(d > 0 and d < 1)
 end)
 
+--app running ------------------------------------------------------------------------------------------------------------
+
+--run() is ignored if there are no windows
+add('@run-no-windows', function()
+	assert(not app:running())
+	app:run() --no-op: no windows
+	assert(not app:running())
+	print'ok'
+end)
+
+--running() works
+--run() is ignored while running
+--run() doesn't return
+add('@run', function()
+	local rec = recorder()
+	local win = app:window(winpos())
+	function win:closed()
+		assert(app:running())
+		app:run() --ignored, already running
+		rec'closed'
+	end
+	function app:exit()
+		rec{'closed'}
+		return -1
+	end
+	assert(not app:running())
+	app:run()
+	assert(false) --can't reach here
+end, -1)
+
 --app quitting -----------------------------------------------------------------------------------------------------------
 
---quit() exits the process even when the app is not running
+--quit() works if not running
 add('@quit-not-running', function()
 	app:quit()
 	assert(false) --can't reach here
 end)
 
 --exit() query works
-add('@exit', function()
-	function app:exit()
-		return -123
-	end
+add('@quit-exit', function()
+	function app:exit() return -123 end
 	app:quit()
 end, -123)
 
---quitting() event works (when the app is not running)
-add('@quitting', function()
+--quitting() event works
+add('@quit-quitting', function()
 	local rec = recorder()
 	local allow
 	function app:quitting()
@@ -258,30 +289,24 @@ add('@quitting', function()
 	assert(false) --can't reach here
 end, -1)
 
---while quitting, canquit() is rejected and quit() is ignored
---while force-quitting, canquit() is allowed but quit() is ignored
-add('@quit-while-quitting', function()
+--quitting() comes before closing()
+add('@quit-quitting-before-closing', function()
 	local rec = recorder()
-	local win = app:window(winpos())
-	function app:quitting()
-		assert(not self:canquit()) --rejected
-		self:quit() --ignored
-		rec'quitting'
-	end
-	function win:closed()
-		assert(app:canquit()) --allowed
-		app:quit() --ignored
-		rec'closed'
-	end
+	local win1 = app:window(winpos())
+	local win2 = app:window(winpos())
+	function app:quitting() rec'quitting' end
+	function win1:closing() rec'closing' end
+	function win2:closing() rec'closing' end
 	function app:exit()
-		rec{'quitting', 'closed'}
+		rec{'quitting', 'closing', 'closing'}
 		return -1
 	end
+	app:autoquit(false)
 	app:quit()
 end, -1)
 
---quitting fails if windows are created while quitting
-add('@quitting-fails', function()
+--quit() fails if windows are created while quitting
+add('@quit-fails', function()
 	local rec = recorder()
 	local win = app:window(winpos())
 	function win:closed()
@@ -291,18 +316,131 @@ add('@quitting-fails', function()
 		rec{'failed'}
 		return -1
 	end
+	app:autoquit(false)
 	app:quit() --fails
 	rec'failed'
 	app:quit()
 end, -1)
 
+--app:autoquit(true) works
+add('@quit-autoquit-app', function()
+	local rec = recorder()
+	local win1 = app:window(winpos())
+	local win2 = app:window(winpos())
+	function app:quitting() rec'quitting' end
+	function win1:closing() rec'closing1' end
+	function win2:closing() rec'closing2' end
+	function app:exit()
+		rec{'closing1', 'quitting', 'closing2'}
+		return -1
+	end
+	app:autoquit(true)
+	win1:close()
+	win2:close()
+	assert(false) --can't reach here
+end, -1)
+
+--window:autoquit(true) works
+add('@quit-autoquit-window', function()
+	local rec = recorder()
+	local win1 = app:window(winpos())
+	local win2 = app:window(winpos())
+	function app:quitting() rec'quitting' end
+	function win1:closing() rec'closing1' end
+	function win2:closing() rec'closing2' end
+	function app:exit()
+		rec{'quitting', 'closing1', 'closing2'}
+		return -1
+	end
+	app:autoquit(false)
+	win2:autoquit(true)
+	win2:close()
+	assert(false) --can't reach here
+end, -1)
+
+--closing() and closed() are splitted out
+add('@quit-quitting-sequence', function()
+	local rec = recorder()
+	local win1 = app:window(winpos())
+	local win2 = app:window(winpos())
+	function app:quitting() rec'quitting' end
+	function win1:closing() rec'closing1' end
+	function win2:closing() rec'closing2' end
+	function win1:closed() rec'closed1' end
+	function win2:closed() rec'closed2' end
+	function app:exit()
+		rec{'quitting', 'closing1', 'closing2', 'closed1', 'closed2'}
+		return -1
+	end
+	app:autoquit(false)
+	app:quit()
+end, -1)
+
+--quit() rejected because closing() rejected
+add('@quit-quitting-closing-query', function()
+	local rec = recorder()
+	local allow
+	local win = app:window(winpos())
+	function win:closing()
+		if not allow then --don't allow the first time
+			allow = true
+			rec'not allowing'
+			return false
+		else --allow the second time
+			rec'allowing'
+		end
+	end
+	function app:exit()
+		rec{'not allowing', 'allowing'}
+		return -1
+	end
+	app:autoquit(false)
+	app:quit() --not allowed
+	app:quit() --allowed
+	assert(false) --can't reach here
+end, -1)
+
+--quit() rejected while closing()
+add('@quit-quitting-while-closing', function()
+	local rec = recorder()
+	local allow
+	local win = app:window(winpos())
+	function win:closing()
+		app:quit() --ignored because closing() is rejected
+		rec'ignored'
+	end
+	function app:exit()
+		rec{'ignored', 'closed'}
+		return -1
+	end
+	app:autoquit(false)
+	win:close()
+	rec'closed'
+	app:quit()
+	assert(false) --can't reach here
+end, -1)
+
 --window closing ---------------------------------------------------------------------------------------------------------
 
---closing() event works
 --closed() event works
---dead() from closed() event is false (window is not dead yet, we can still call its methods)
---dead() after close() is true
-add('@closing', function()
+--dead() not yet true in the closed() event (we can still use the window)
+add('@close-closed-not-dead', function()
+	local rec = recorder()
+	local win = app:window(winpos())
+	function win:closed()
+		assert(not self:dead()) --not dead yet
+		rec'closed'
+	end
+	app:autoquit(false)
+	assert(not win:dead())
+	win:close()
+	assert(win:dead()) --dead now
+	rec{'closed'}
+	os.exit(-1)
+end, -1)
+
+--closing() event works
+add('@close-closing-query', function()
 	local rec = recorder()
 	local win = app:window(winpos())
 	local allow
@@ -316,198 +454,138 @@ add('@closing', function()
 			return true
 		end
 	end
-	function win:closed()
-		assert(not self:dead()) --not dead yet
-		rec'closed'
-	end
-	function app:exit()
-		rec{'not allowing', 'allowing', 'closed'}
-		return -1
-	end
-	assert(not win:dead())
+	app:autoquit(false)
 	win:close() --not allowed
 	assert(not win:dead())
 	win:close() --allowed
+	rec{'not allowing', 'allowing'}
+	os.exit(-1)
 end, -1)
 
 --close() is ignored from closed()
---close() is ignored after close()
 add('@close-while-closed', function()
+	local rec = recorder()
 	local win = app:window(winpos())
-	local pin = app:window(winpos())
 	function win:closed()
-		self:close() --ignored before dead
+		self:close() --ignored because not dead yet
 		assert(not self:dead()) --still not dead
+		rec'closed'
 	end
+	app:autoquit(false)
 	win:close()
 	assert(win:dead())
-	assert(win:canclose())
-	win:close() --ignored after dead
-	print'ok'
-	pin:close()
-end)
+	rec{'closed'}
+	os.exit(-1)
+end, -1)
 
 --close() is ignored from closing()
 add('@close-while-closing', function()
 	local rec = recorder()
 	local win = app:window(winpos())
 	function win:closing()
-		assert(not self:canclose()) --rejected
 		self:close() --ignored
 		assert(not self:dead())
 		rec'closing'
 	end
-	function app:exit()
-		rec{'closing'}
-		return -1
-	end
+	app:autoquit(false)
 	win:close()
+	assert(win:dead())
+	rec{'closing'}
+	os.exit(-1)
 end, -1)
 
---close() is ignored from closing(), even while quitting
-add('@close-while-closing-while-quitting', function()
-	local rec = recorder()
-	local win = app:window(winpos())
-	function win:closing()
-		assert(not self:canclose()) --rejected
-		self:close() --ignored
-		assert(not self:dead())
-		rec'closing'
-	end
-	function app:exit()
-		rec{'closing'}
-		return -1
-	end
-	app:quit()
-end, -1)
+--window activaton -------------------------------------------------------------------------------------------------------
 
---interaction between app quitting and window closing --------------------------------------------------------------------
 
---last window to close quits the app.
---close() does not return in this case.
---quitting() event happens before the closing() event.
-add('@last-window-quits-app', function()
-	local rec = recorder()
-	local win1 = app:window(winpos{title = 'win1'})
-	local win2 = app:window(winpos{title = 'win2'})
-	function app:quitting() rec'quitting' end
-	function win1:closing() rec'win1 closing' end
-	function win2:closing() rec'win2 closing' end
-	function app:exit()
-		rec{'start', 'win1 closing', 'quitting', 'win2 closing'}
-		return -1
-	end
-	rec'start'
-	assert(app:window_count() == 2)
-	win1:close()
-	assert(app:window_count() == 1)
-	win2:close()
-	assert(false) --can't reach here
-end, -1)
 
---quit() from closing() quits the app.
---quit() does not return.
-add('@quit-while-closing', function()
-	local rec = recorder()
-	local win = app:window(winpos())
-	local pin = app:window(winpos()) --prevent win:close() from closing the app implicitly
-	function win:closing()
-		rec'closing'
-		assert(app:canquit())
-		app:quit()
-		assert(false) --can't reach here
-	end
-	function app:quitting() rec'quitting' end
-	function app:exit()
-		rec{'closing', 'quitting', 'quitting'}
-		return -1
-	end
-	win:close()
-end, -1)
 
---quit() from canquit() -> closing() is rejected.
-add('@quit-while-closing-while-quitting', function()
-	local rec = recorder()
-	local win = app:window(winpos())
-	function win:closing()
-		assert(not app:canquit()) --rejected
-		assert(not app:quit()) --rejected
-		assert(not self:dead())
-		--assert(not app:forcequit()) --ignored
-		assert(not self:dead())
-		rec'closing'
-	end
-	function app:exit()
-		rec{'closing'}
-		return -1
-	end
-	app:quit()
-end, -1)
+--window initial state flags  --------------------------------------------------------------------------------------------
 
---quit() from closed() doesn't quit the app immediately, but does close all the windows and the app quits afterwards.
-add('@quit-while-closed', function()
-	local rec = recorder()
-	local win = app:window(winpos())
-	local pin = app:window(winpos()) --prevent win:close() from closing the app implicitly
-	function win:closed()
-		app:quit()
-		assert(pin:dead()) --not quitting immediately: window count is not zero yet
-	end
-	function app:exit()
-		return -1
-	end
-	win:close()
-end, -1)
+local flags = {
+	'visible', 'minimized', 'maximized', 'fullscreen',
+}
 
---quit() from closed() is ignored if already quitting.
-add('@quit-while-closed-while-quitting', function()
-	local rec = recorder()
-	local win = app:window(winpos())
-	local pin = app:window(winpos()) --prevent win:close() from closing the app implicitly
-	function win:closed()
-		app:quit() --ignored
-		assert(not pin:dead())
+local function test_name_for_combination(c, template)
+	local t = {}
+	for i,flag in ipairs(flags) do
+		if c[flag] then t[#t+1] = flag end
 	end
-	function app:exit()
-		return -1
+	return string.format(template or '@init%s', #t > 0 and '-'..table.concat(t, '-') or '')
+end
+
+local function test_combination(c)
+	local win = app:window(winpos(glue.update({w = 500, h = 200}, c)))
+	for i,flag in ipairs(flags) do
+		assert(win[flag](win) == c[flag], flag)
 	end
-	app:quit()
-end, -1)
+	function win:keydown(key)
+		if key == 'F11' then
+			self:fullscreen(not self:fullscreen())
+		end
+	end
+	return win
+end
 
---app running ------------------------------------------------------------------------------------------------------------
+for c in combinations(flags) do
+	add(test_name_for_combination(c), function()
+		test_combination(c)
+		app:run()
+	end)
+end
 
---run() is ignored if there are no windows
-add('run-no-windows', function()
-	app:run() --no-op: no windows
-	assert(not app:running())
-	print'ok'
+add('@init-all', function()
+	app:autoquit(false)
+	for c in combinations(flags) do
+		print(test_name_for_combination(c))
+		local win = test_combination(c)
+
+		--visible -> minimized | normal | maximized | fullscreen
+		if not c.visible then
+			win:show()
+			assert(win:visible())
+			assert(win:minimized() == c.minimized)
+			assert(win:maximized() == c.maximized)
+			--assert(win:fullscreen() == c.fullscreen)
+		end
+
+		-- minimized -> normal | maximized | fullscreen
+		if c.minimized then
+			win:restore()
+			assert(not win:minimized())
+			assert(win:maximized() == c.maximized)
+			--assert(win:fullscreen() == c.fullscreen)
+		end
+
+		-- fullscreen -> normal | maximized
+		if c.fullscreen then
+			win:restore()
+			assert(not win:fullscreen())
+			assert(win:maximized() == c.maximized)
+		end
+
+		-- maximized -> normal
+		if c.maximized then
+			win:restore()
+			assert(not win:maximized())
+		end
+
+		--normal
+		assert(win:visible())
+		assert(not win:minimized())
+		assert(not win:maximized())
+
+		--close
+		win:close()
+	end
 end)
-
---run() is ignored while running
---run() doesn't return
-add('@run', function()
-	local rec = recorder()
-	local win = app:window(winpos())
-	function win:closed()
-		assert(app:running())
-		app:run() --ignored, already running
-		rec'closed'
-	end
-	function app:exit()
-		rec{'closed'}
-		return -1
-	end
-	app:run()
-	assert(false) --can't reach here
-end, -1)
 
 --window initial state flags and transitions to saved states -------------------------------------------------------------
 
 --all initial (visible, minimized, maximized, fullscreen) combinations
---show() to minimized, normal, maximized
+--show() to minimized, normal or maximized, depending on the initial states
 --restore() to maximized from minimized
 --restore() to normal from maximized
---minimizable, maximizable, closeable, resizeable flags are stable
+--minimizable, maximizable, closeable, resizeable, fullscreenable flags are stable
 local function test_states(c, close_it)
 	if close_it == nil then close_it = true end
 	local function BS(b)
@@ -522,7 +600,8 @@ local function test_states(c, close_it)
 							BS(c.minimizable),
 							BS(c.maximizable),
 							BS(c.closeable),
-							BS(c.resizeable))
+							BS(c.resizeable),
+							BS(c.fullscreenable))
 	print(test)
 
 	local win = app:window(winpos(c, close_it))
@@ -532,24 +611,34 @@ local function test_states(c, close_it)
 	assert(win:fullscreen() == c.fullscreen)
 	assert(win:maximized() == c.maximized)
 
-	--visible -> minimized | normal | maximized
+	--visible -> minimized | normal | maximized | fullscreen
 	if not c.visible then
 		win:show()
 		assert(win:visible())
 		assert(win:minimized() == c.minimized)
 		assert(win:maximized() == c.maximized)
+		--assert(win:fullscreen() == c.fullscreen)
 	end
 
-	-- minimized -> normal | maximized
+	-- minimized -> normal | maximized | fullscreen
 	if c.minimized then
 		win:restore()
 		assert(not win:minimized())
+		assert(win:maximized() == c.maximized)
+		--assert(win:fullscreen() == c.fullscreen)
+	end
+
+	-- fullscreen -> normal | maximized
+	if c.fullscreen then
+		win:restore()
+		assert(not win:fullscreen())
 		assert(win:maximized() == c.maximized)
 	end
 
 	-- maximized -> normal
 	if c.maximized then
 		win:restore()
+		assert(not win:maximized())
 	end
 
 	--normal
@@ -558,10 +647,13 @@ local function test_states(c, close_it)
 	assert(not win:maximized())
 
 	--r/o flags are stable
+	--[[
 	assert(win:minimizable() == c.minimizable)
 	assert(win:maximizable() == c.maximizable)
 	assert(win:closeable() == c.closeable)
 	assert(win:resizeable() == c.resizeable)
+	assert(win:fullscreenable() == c.fullscreenable)
+	]]
 
 	--close
 	if close_it then
@@ -570,25 +662,18 @@ local function test_states(c, close_it)
 end
 
 local flags = {
-	'visible', 'minimized', 'fullscreen', 'maximized',
+	'visible', 'minimized', 'maximized',
+
 	--we include these to test that they don't prevent state changes from the programmer, only from the user
-	'minimizable', 'maximizable', 'closeable', 'resizeable',
+	--'fullscreen',
+	--'minimizable', 'maximizable', 'closeable', 'resizeable', 'fullscreenable',
 }
 
-add('flags', function(close_win)
+add('@state-flags', function(close_win)
+	app:autoquit(false)
 	for c in combinations(flags) do
 		test_states(c, close_win)
 	end
-end)
-
---fullscreen mode
-
-add('fullscreen', function()
-	local win = app:window(winpos{w = 500, h = 200})
-	assert(not win:fullscreen())
-	win:fullscreen(true)
-	print(win:fullscreen())
-	app:run()
 end)
 
 --parent/child relationship
@@ -609,7 +694,7 @@ end)
 
 --test state transitions
 
-add('states', function()
+add('@states', function()
 	local win = app:window{x = 100, y = 100, w = 300, h = 100}
 
 	local function check(s)
@@ -721,6 +806,7 @@ add('defaults', function()
 	assert(win:maximizable())
 	assert(win:closeable())
 	assert(win:resizeable())
+	assert(win:fullscreenable())
 end)
 
 --test closeable

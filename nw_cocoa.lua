@@ -58,7 +58,7 @@ function app:new(delegate)
 	self.nsapp:setActivationPolicy(bs.NSApplicationActivationPolicyRegular)
 
 	objc.addMethod(self.nsappclass, objc.SEL'applicationShouldTerminate:', function(_, sel, app)
-		self.delegate:_backend_quit() --calls quit() which exits the process or returns which means refusal to quit.
+		self.delegate:_backend_quitting() --calls quit() which exits the process or returns which means refusal to quit.
 		return 0
 	end, 'i@:@')
 

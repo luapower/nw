@@ -3,8 +3,8 @@ local nw = require'nw'
 
 local app = nw:app()
 
-print('impl.double_click_time', app.impl:double_click_time())
-print('impl.double_click_target_area', app.impl:double_click_target_area())
+print('backend.double_click_time', app.backend:double_click_time())
+print('backend.double_click_target_area', app.backend:double_click_target_area())
 
 for display in app:displays() do
 	print('screen_rect',  app:screen_rect(display))

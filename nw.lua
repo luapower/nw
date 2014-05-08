@@ -27,7 +27,7 @@ end
 
 local object = {}
 
---poor man's overriding sugar. example:
+--poor man's overriding sugar. usage:
 --		win:override('mousemove', function(self, inherited, x, y)
 --			inherited(self, x, y)
 --		end)
@@ -84,56 +84,57 @@ end
 local app = glue.update({}, object)
 nw.app_class = app
 
+app.defaults = {
+	autoquit = true, --quit after the last window closes
+}
+
 --app init
 
 function app:_new(nw)
 	self = glue.inherit({nw = nw}, self)
 	self._running = false
 	self._windows = {} --{window1, ...}
+	self._autoquit = self.defaults.autoquit
 	self.backend = self.nw.backend:app(self)
 	return self
 end
 
---run/quit
+--app loop
 
 --start the main loop
 function app:run()
-
 	if self._running then return end --ignore while running
 	if self:window_count() == 0 then return end --ignore if there are no windows
-	self._running = true
 
+	self._running = true --run() barrier
 	self.backend:run()
-	assert(false) --can't reach here
+	assert(false) --can't reach here: the loop should never return
 end
 
 function app:running()
 	return self._running
 end
 
---asks the app if it can quit, which in turn asks all the windows (they all must agree to quit).
-function app:canquit()
+--app quitting
 
-	if self._forcequitting then return true end --allow/ignore while forcequitting (FQ->CQ)
-	if self._quitting then return false end --reject/ignore while quitting (CQ->CQ)
-	self._quitting = true
+function app:autoquit(autoquit)
+	if autoquit == nil then
+		return self._autoquit
+	else
+		self._autoquit = autoquit
+	end
+end
 
-	--query app for quitting.
-	--canquit()    from quitting() will be rejected/ignored.    (CQ->CQ)
-	--forcequit()  from quitting() will pass through.           (CQ->FQ)
-	--canclose()   from quitting() will pass through.           (CQ->CC)
-	--forceclose() from quitting() will pass through.           (CQ->FC)
+--ask the app and all windows if they can quit. need unanimous agreement to quit.
+function app:_canquit()
+	self._quitting = true --quit() barrier
+
 	local allow = self:_handle'quitting' ~= false
 	self:_fire('quitting', allow)
 
-	--query top-level windows for closing.
-	--canquit()    from closing() will be rejected/ignored.     (CQ->CC->CQ, CQ->CQ)
-	--forcequit()  from closing() will pass through.            (CQ->CC->FQ, CQ->FQ)
-	--canclose()   from closing() will be rejected/ignored.     (CQ->CC->CC, CC->CC)
-	--forceclose() from closing() will pass through.            (CQ->CC->FC, CQ->FC)
 	for i,win in ipairs(self:windows()) do
-		if not win:dead() and not win:parent() and not win._closing then
-			allow = win:canclose() and allow
+		if not win:dead() and not win:parent() then
+			allow = win:_canclose() and allow
 		end
 	end
 
@@ -141,45 +142,38 @@ function app:canquit()
 	return allow
 end
 
---quit the app and exit the process, closing all the windows first without asking.
---fails if new windows are created while closing the existing windows (not probable).
-function app:forcequit()
+function app:_forcequit()
+	self._quitting = true --quit() barrier
 
-	if self._forcequitting then return true end --allow/ignore while forcequitting (FQ->FQ)
-	self._forcequitting = true
-
-	--close all top-level windows.
-	--canquit()    from closed() will be allowed/ignored.       (FQ->FC->CQ, FQ->CQ)
-	--forcequit()  from closed() will be allowed/ignored.       (FQ->FC->FQ, FQ->FQ)
-	--canclose()   from closed() will be allowed/ignored.       (FQ->FC->CC, FQ->CC)
-	--forceclose() from closed() will pass through.             (FQ->FC->FC, FQ->FC)
 	for i,win in ipairs(self:windows()) do
 		if not win:dead() and not win:parent() then
-			win:forceclose()
+			win:_forceclose()
 		end
 	end
 
-	--if there are no windows, quit the app (no windows to begin with, or none created while closing).
-	if self:window_count() == 0 then
+	if self:window_count() == 0 then --no windows created while closing
 		self.backend:quit()
-	else
-		-- (FC->FQ)
+		assert(false) --can't reach here
 	end
 
-	self._forcequitting = nil
-	return false
+	self._quitting = nil
 end
 
 function app:quit()
-	return self:canquit() and self:forcequit()
+	if self._quitting then return end --ignore if already quitting
+
+	self:check()
+	if self:_canquit() then
+		self:_forcequit()
+	end
 end
 
-function app:_backend_quit()
+function app:_backend_quitting()
 	self:quit()
 end
 
 function app:_backend_exit()
-	self._dead = true --can't create more windows
+	self._dead = true --window() and quit() barrier
 	local exit_code = self:_handle'exit' or 0
 	self:_fire('exit', exit_code)
 	return exit_code
@@ -323,6 +317,7 @@ window.defaults = {
 	closeable = true,
 	resizeable = true,
 	fullscreenable = true,
+	autoquit = false, --quit the app on closing
 }
 
 function window:_new(app, t)
@@ -339,8 +334,8 @@ function window:_new(app, t)
 		w = t.w,
 		h = t.h,
 		minimized = t.minimized,
-		fullscreen = t.fullscreen,
 		maximized = t.maximized,
+		fullscreen = t.fullscreen,
 		--frame
 		title = t.title,
 		frame = t.frame,
@@ -361,6 +356,8 @@ function window:_new(app, t)
 	self._maximizable = t.maximizable
 	self._closeable = t.closeable
 	self._resizeable = t.resizeable
+	self._fullscreenable = t.fullscreenable
+	self._autoquit = t.autoquit
 
 	app:_window_created(self)
 	self:_event'created'
@@ -375,59 +372,49 @@ end
 
 --closing
 
-function window:canclose()
+function window:_canclose()
+	if self._closing then return false end --reject while closing (from quit() and user quit)
 
-	if self._closed then return true end --allow/ignore if closed (FC->CC)
-	if self._closing then return false end --reject/ignore while closing (CC->CC)
-
-	--last window to be closed asks the app for quitting instead, which asks the window back if it can close.
-	--we use app._quitting to differentiate the two contexts and thus avoid infinite recursion.
-	if not self.app._quitting and self.app:window_count() == 1 then --it must be us since we're not closed
-		return self.app:canquit()
-	end
-
-	self._closing = true
-
-	--canquit()    from closing() will be allowed/ignored for this window. (CC->CQ->CC)
-	--forcequit()  from closing() will pass through.
-	--canclose()   from closing() will be rejected/ignored.                (CC->CC)
-	--forceclose() from closing() will pass through.
+	self._closing = true --_backend_closing() and _canclose() barrier
 	local allow = self:_handle'closing' ~= false
 	self:_fire('closing', allow)
-
 	self._closing = nil
-
 	return allow
 end
 
-function window:forceclose() --note: can be called while closing()
-	if self._closed then return true end --allow/ignore if already closed (FC->FC)
+function window:_forceclose()
 	self.backend:close()
-	return true
 end
 
 function window:close()
-	return self:canclose() and self:forceclose()
+	self:check()
+	if self:_backend_closing() then
+		self:_forceclose()
+	end
 end
 
 function window:_backend_closing()
-	return self:canclose()
+	if self._closed then return false end --reject if closed
+	if self._closing then return false end --reject while closing
+
+	if self:autoquit() or (self.app:autoquit() and self.app:window_count() == 1) then
+		self._quitting = true
+		return self.app:_canquit()
+	else
+		return self:_canclose()
+	end
 end
 
 function window:_backend_closed()
-	self._closed = true
+	if self._closed then return end --ignore if closed
 
-	--canquit()    from closed() will be allowed/ignored for this window.  (FC->CQ->CC, FC->CC)
-	--forcequit()  from closed() will fail (window count > 0).             (FC->FQ->FC, FC->FC)
-	--canclose()   from closed() will be allowed/ignored.                  (FC->CC)
-	--forceclose() from closed() will be allowed/ignored.                  (FC->FC)
+	self._closed = true --_backend_closing() and _backend_closed() barrier
 	self:_event'closed'
 	self.app:_window_closed(self)
 	self._dead = true
 
-	--no more windows left, no more chances to quit the app, so quit it now
-	if self.app:window_count() == 0 then
-		self.app:forcequit()
+	if self._quitting then
+		self.app:_forcequit()
 	end
 end
 
@@ -564,6 +551,16 @@ function window:minimizable() self:check(); return self._minimizable end
 function window:maximizable() self:check(); return self._maximizable end
 function window:closeable() self:check(); return self._closeable end
 function window:resizeable() self:check(); return self._resizeable end
+function window:fullscreenable() self:check(); return self._fullscreenable end
+
+function window:autoquit(autoquit)
+	self:check()
+	if autoquit == nil then
+		return self._autoquit
+	else
+		self._autoquit = autoquit
+	end
+end
 
 --keyboard
 
