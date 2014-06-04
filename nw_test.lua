@@ -1,9 +1,16 @@
 local nw = require'nw'
 local glue = require'glue'
 local ffi = require'ffi'
+local bit = require'bit'
+
+local objc = require'objc'
+--objc.debug.logtopics.refcount = true
+
 io.stdout:setvbuf'no'
 
-local app = nw:app()
+jit.off()
+
+local app
 
 --testing helpers --------------------------------------------------------------------------------------------------------
 
@@ -31,7 +38,12 @@ end
 --run a test in a subprocess and expect an exit code
 local function subprocess(name)
 	local exitcode = subproc[name] or 0
-	assert(os.execute(string.format('%sluajit %s @%s', ffi.os == 'Windows' and '' or './', arg[0], name)) == exitcode)
+	local cmd = string.format('%sluajit %s @%s', ffi.os == 'Windows' and '' or './', arg[0], name)
+	local ret = os.execute(cmd)
+	if ret > 255 then --system() on unix returns the exit status in the high byte
+		ret = bit.rshift(ret, 8)
+	end
+	assert(ret == exitcode, string.format('%s: [%d]', cmd, ret))
 	print(string.format('exit code: %d', exitcode))
 end
 
@@ -41,6 +53,7 @@ local function test(name)
 	if prefix == '' and subproc[name] then
 		subprocess(name)
 	else
+		app = app or nw:app()
 		tests[name]()
 	end
 end
@@ -230,42 +243,41 @@ add('@run-no-windows', function()
 	assert(not app:running())
 	app:run() --no-op: no windows
 	assert(not app:running())
-	print'ok'
-end)
+	os.exit(123)
+end, 123)
 
 --running() works
 --run() is ignored while running
---run() doesn't return
+--run() returns
 add('@run', function()
 	local rec = recorder()
+	app:activate()
 	local win = app:window(winpos())
 	function win:closed()
 		assert(app:running())
 		app:run() --ignored, already running
 		rec'closed'
 	end
-	function app:exit()
-		rec{'closed'}
-		return -1
-	end
 	assert(not app:running())
 	app:run()
-	assert(false) --can't reach here
-end, -1)
+	assert(not app:running())
+	rec{'closed'}
+	os.exit(123)
+end, 123)
 
 --app quitting -----------------------------------------------------------------------------------------------------------
 
---quit() works if not running
+--quit() works is ignored not running
 add('@quit-not-running', function()
 	app:quit()
-	assert(false) --can't reach here
-end)
+	os.exit(123)
+end, 123)
 
 --exit() query works
 add('@quit-exit', function()
-	function app:exit() return -123 end
+	function app:exit() return 123 end
 	app:quit()
-end, -123)
+end, 123)
 
 --quitting() event works
 add('@quit-quitting', function()
@@ -282,12 +294,12 @@ add('@quit-quitting', function()
 	end
 	function app:exit()
 		rec{'not allowing', 'allowing'}
-		return -1
+		return 1
 	end
 	app:quit() --not allowed
 	app:quit() --allowed
 	assert(false) --can't reach here
-end, -1)
+end, 1)
 
 --quitting() comes before closing()
 add('@quit-quitting-before-closing', function()
@@ -299,11 +311,11 @@ add('@quit-quitting-before-closing', function()
 	function win2:closing() rec'closing' end
 	function app:exit()
 		rec{'quitting', 'closing', 'closing'}
-		return -1
+		return 1
 	end
 	app:autoquit(false)
 	app:quit()
-end, -1)
+end, 1)
 
 --quit() fails if windows are created while quitting
 add('@quit-fails', function()
@@ -314,13 +326,13 @@ add('@quit-fails', function()
 	end
 	function app:exit()
 		rec{'failed'}
-		return -1
+		return 1
 	end
 	app:autoquit(false)
 	app:quit() --fails
 	rec'failed'
 	app:quit()
-end, -1)
+end, 1)
 
 --app:autoquit(true) works
 add('@quit-autoquit-app', function()
@@ -332,13 +344,13 @@ add('@quit-autoquit-app', function()
 	function win2:closing() rec'closing2' end
 	function app:exit()
 		rec{'closing1', 'quitting', 'closing2'}
-		return -1
+		return 1
 	end
 	app:autoquit(true)
 	win1:close()
 	win2:close()
 	assert(false) --can't reach here
-end, -1)
+end, 1)
 
 --window:autoquit(true) works
 add('@quit-autoquit-window', function()
@@ -350,13 +362,13 @@ add('@quit-autoquit-window', function()
 	function win2:closing() rec'closing2' end
 	function app:exit()
 		rec{'quitting', 'closing1', 'closing2'}
-		return -1
+		return 1
 	end
 	app:autoquit(false)
 	win2:autoquit(true)
 	win2:close()
 	assert(false) --can't reach here
-end, -1)
+end, 1)
 
 --closing() and closed() are splitted out
 add('@quit-quitting-sequence', function()
@@ -370,11 +382,11 @@ add('@quit-quitting-sequence', function()
 	function win2:closed() rec'closed2' end
 	function app:exit()
 		rec{'quitting', 'closing1', 'closing2', 'closed1', 'closed2'}
-		return -1
+		return 1
 	end
 	app:autoquit(false)
 	app:quit()
-end, -1)
+end, 1)
 
 --quit() rejected because closing() rejected
 add('@quit-quitting-closing-query', function()
@@ -392,13 +404,13 @@ add('@quit-quitting-closing-query', function()
 	end
 	function app:exit()
 		rec{'not allowing', 'allowing'}
-		return -1
+		return 1
 	end
 	app:autoquit(false)
 	app:quit() --not allowed
 	app:quit() --allowed
 	assert(false) --can't reach here
-end, -1)
+end, 1)
 
 --quit() rejected while closing()
 add('@quit-quitting-while-closing', function()
@@ -411,14 +423,14 @@ add('@quit-quitting-while-closing', function()
 	end
 	function app:exit()
 		rec{'ignored', 'closed'}
-		return -1
+		return 1
 	end
 	app:autoquit(false)
 	win:close()
 	rec'closed'
 	app:quit()
 	assert(false) --can't reach here
-end, -1)
+end, 1)
 
 --window closing ---------------------------------------------------------------------------------------------------------
 
@@ -436,8 +448,8 @@ add('@close-closed-not-dead', function()
 	win:close()
 	assert(win:dead()) --dead now
 	rec{'closed'}
-	os.exit(-1)
-end, -1)
+	os.exit(1)
+end, 1)
 
 --closing() event works
 add('@close-closing-query', function()
@@ -459,8 +471,8 @@ add('@close-closing-query', function()
 	assert(not win:dead())
 	win:close() --allowed
 	rec{'not allowing', 'allowing'}
-	os.exit(-1)
-end, -1)
+	os.exit(1)
+end, 1)
 
 --close() is ignored from closed()
 add('@close-while-closed', function()
@@ -475,8 +487,8 @@ add('@close-while-closed', function()
 	win:close()
 	assert(win:dead())
 	rec{'closed'}
-	os.exit(-1)
-end, -1)
+	os.exit(1)
+end, 1)
 
 --close() is ignored from closing()
 add('@close-while-closing', function()
@@ -491,8 +503,8 @@ add('@close-while-closing', function()
 	win:close()
 	assert(win:dead())
 	rec{'closing'}
-	os.exit(-1)
-end, -1)
+	os.exit(1)
+end, 1)
 
 --window activaton -------------------------------------------------------------------------------------------------------
 
@@ -501,51 +513,71 @@ end, -1)
 
 --window initial state flags  --------------------------------------------------------------------------------------------
 
-local flags = {
+local flag_list = {
 	'visible', 'minimized', 'maximized', 'fullscreen',
 }
 
-local function test_name_for_combination(c, template)
+--generate a name for a test given a combination of flags
+local function test_name_for_flags(flags, name_prefix)
 	local t = {}
-	for i,flag in ipairs(flags) do
-		if c[flag] then t[#t+1] = flag end
+	for i,flag in ipairs(flag_list) do
+		if flags[flag] then t[#t+1] = flag end
 	end
-	return string.format(template or '@init%s', #t > 0 and '-'..table.concat(t, '-') or '')
+	return name_prefix .. '-' .. table.concat(t, '-')
 end
 
-local function test_combination(c)
-	local win = app:window(winpos(glue.update({w = 500, h = 200}, c)))
-	for i,flag in ipairs(flags) do
-		assert(win[flag](win) == c[flag], flag)
-	end
-	function win:keydown(key)
-		if key == 'F11' then
-			self:fullscreen(not self:fullscreen())
-		end
+--test that initial state flags are all set
+local function test_init_flags(flags)
+	local win = app:window(winpos(glue.update({w = 500, h = 200}, flags)))
+	for i,flag in ipairs(flag_list) do
+		assert(win[flag](win) == flags[flag], flag)
 	end
 	return win
 end
 
-for c in combinations(flags) do
-	add(test_name_for_combination(c), function()
-		test_combination(c)
+--generate interactive tests for all combinations of initial state flags
+for flags in combinations(flag_list) do
+	add(test_name_for_flags(flags, '@states-init'), function()
+		local win = test_init_flags(flags)
+		function win:keydown(key)
+			if key == 'F10' then
+				self:restore()
+			elseif key == 'F11' then
+				self:fullscreen(not self:fullscreen())
+			elseif key == 'F12' then
+				self:maximize()
+			elseif key == 'F9' then
+				self:minimize()
+			end
+		end
 		app:run()
 	end)
 end
 
-add('@init-all', function()
+--run the same non-interactive test each time on a window with different initial state flags
+function test_combinations(test)
 	app:autoquit(false)
-	for c in combinations(flags) do
-		print(test_name_for_combination(c))
-		local win = test_combination(c)
+	for flags in combinations(flag_list) do
+		print(test_name_for_flags(flags, ''))
+		local win = test_init_flags(flags)
+		test(win, flags)
+		win:close()
+	end
+end
 
+--all initial (visible, minimized, maximized, fullscreen) combinations
+--show() only changes visibility
+--restore() to the correct state
+add('@states-transitions', function()
+	app:autoquit(false)
+	test_combinations(function(win, c)
 		--visible -> minimized | normal | maximized | fullscreen
 		if not c.visible then
 			win:show()
 			assert(win:visible())
 			assert(win:minimized() == c.minimized)
 			assert(win:maximized() == c.maximized)
-			--assert(win:fullscreen() == c.fullscreen)
+			assert(win:fullscreen() == c.fullscreen)
 		end
 
 		-- minimized -> normal | maximized | fullscreen
@@ -553,7 +585,7 @@ add('@init-all', function()
 			win:restore()
 			assert(not win:minimized())
 			assert(win:maximized() == c.maximized)
-			--assert(win:fullscreen() == c.fullscreen)
+			assert(win:fullscreen() == c.fullscreen)
 		end
 
 		-- fullscreen -> normal | maximized
@@ -573,108 +605,10 @@ add('@init-all', function()
 		assert(win:visible())
 		assert(not win:minimized())
 		assert(not win:maximized())
-
-		--close
-		win:close()
-	end
-end)
-
---window initial state flags and transitions to saved states -------------------------------------------------------------
-
---all initial (visible, minimized, maximized, fullscreen) combinations
---show() to minimized, normal or maximized, depending on the initial states
---restore() to maximized from minimized
---restore() to normal from maximized
---minimizable, maximizable, closeable, resizeable, fullscreenable flags are stable
-local function test_states(c, close_it)
-	if close_it == nil then close_it = true end
-	local function BS(b)
-		return b and 'Y' or 'N'
-	end
-	local test = string.format(
-		'vis: %s, min: %s, fs: %s, max: %s, @min: %s, @max: %s, @cl: %s, @res: %s',
-							BS(c.visible),
-							BS(c.minimized),
-							BS(c.fullscreen),
-							BS(c.maximized),
-							BS(c.minimizable),
-							BS(c.maximizable),
-							BS(c.closeable),
-							BS(c.resizeable),
-							BS(c.fullscreenable))
-	print(test)
-
-	local win = app:window(winpos(c, close_it))
-
-	assert(win:visible() == c.visible)
-	assert(win:minimized() == c.minimized)
-	assert(win:fullscreen() == c.fullscreen)
-	assert(win:maximized() == c.maximized)
-
-	--visible -> minimized | normal | maximized | fullscreen
-	if not c.visible then
-		win:show()
-		assert(win:visible())
-		assert(win:minimized() == c.minimized)
-		assert(win:maximized() == c.maximized)
-		--assert(win:fullscreen() == c.fullscreen)
-	end
-
-	-- minimized -> normal | maximized | fullscreen
-	if c.minimized then
-		win:restore()
-		assert(not win:minimized())
-		assert(win:maximized() == c.maximized)
-		--assert(win:fullscreen() == c.fullscreen)
-	end
-
-	-- fullscreen -> normal | maximized
-	if c.fullscreen then
-		win:restore()
 		assert(not win:fullscreen())
-		assert(win:maximized() == c.maximized)
-	end
-
-	-- maximized -> normal
-	if c.maximized then
-		win:restore()
-		assert(not win:maximized())
-	end
-
-	--normal
-	assert(win:visible())
-	assert(not win:minimized())
-	assert(not win:maximized())
-
-	--r/o flags are stable
-	--[[
-	assert(win:minimizable() == c.minimizable)
-	assert(win:maximizable() == c.maximizable)
-	assert(win:closeable() == c.closeable)
-	assert(win:resizeable() == c.resizeable)
-	assert(win:fullscreenable() == c.fullscreenable)
-	]]
-
-	--close
-	if close_it then
-		win:close()
-	end
-end
-
-local flags = {
-	'visible', 'minimized', 'maximized',
-
-	--we include these to test that they don't prevent state changes from the programmer, only from the user
-	--'fullscreen',
-	--'minimizable', 'maximizable', 'closeable', 'resizeable', 'fullscreenable',
-}
-
-add('@state-flags', function(close_win)
-	app:autoquit(false)
-	for c in combinations(flags) do
-		test_states(c, close_win)
-	end
-end)
+	end)
+	os.exit(1)
+end, 1)
 
 --parent/child relationship
 
@@ -811,7 +745,7 @@ end)
 
 --test closeable
 
-add('closeable', function()
+add('@closeable', function()
 	local win = app:window(winpos{title = 'cannot close', closeable = false})
 	assert(not win:closeable())
 end)

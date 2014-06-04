@@ -1,4 +1,4 @@
---native widgets cococa backend
+--native widgets cococa backend (Cosmin Apreutesei, public domain).
 
 --cocoa lessons:
 --windows are created hidden by default.
@@ -20,14 +20,13 @@
 local ffi = require'ffi'
 local glue = require'glue'
 local objc = require'objc'
-local bs = require'objc.BridgeSupport'
-bs.loadFramework'Foundation'
-bs.loadFramework'AppKit'
-bs.loadFramework'System'
-bs.loadFramework'CoreServices'
+
+objc.load'Foundation'
+objc.load'AppKit'
+objc.load'System'
+objc.load'CoreServices'
 
 io.stdout:setvbuf'no'
---objc.debug = true
 
 local function unpack_rect(r)
 	return r.origin.x, r.origin.y, r.size.width, r.size.height
@@ -35,8 +34,8 @@ end
 
 local backend = {}
 
-function backend:app(delegate)
-	return self.app_class:new(delegate)
+function backend:app(api)
+	return self.app_class:new(api)
 end
 
 --app class
@@ -46,27 +45,30 @@ backend.app_class = app
 
 --app init
 
-function app:new(delegate)
-	self = glue.inherit({delegate = delegate}, self)
+local NSApp = objc.class('NSApp', 'NSApplication <NSApplicationDelegate>')
+
+function NSApp:applicationShouldTerminate()
+	self.api:_backend_quitting() --calls quit() which calls stop()
+	return false
+end
+
+function NSApp:applicationDidChangeScreenParameters()
+	self.api:_backend_displays_changed()
+end
+
+function app:new(api)
+
+	self = glue.inherit({api = api}, self)
 
 	self.pool = objc.NSAutoreleasePool:new()
-	self.nsappclass = objc.createClass(objc.NSApplication, 'NSApp', {})
-	self.nsapp = self.nsappclass:sharedApplication()
-	self.nsapp.delegate = self.nsapp
 
+	self.app = NSApp:sharedApplication()
+	self.app.api = api
+
+	self.app:setDelegate(self.app)
 	--set it to be a normal app with dock and menu bar
-	self.nsapp:setActivationPolicy(bs.NSApplicationActivationPolicyRegular)
-
-	objc.addMethod(self.nsappclass, objc.SEL'applicationShouldTerminate:', function(_, sel, app)
-		self.delegate:_backend_quitting() --calls quit() which exits the process or returns which means refusal to quit.
-		return 0
-	end, 'i@:@')
-
-	objc.addMethod(self.nsappclass, objc.SEL'applicationDidChangeScreenParameters:', function(_, sel, app)
-		self.delegate:_backend_displays_changed()
-	end, 'v@:@')
-
-	self.nsapp:setPresentationOptions(self.nsapp:presentationOptions() + bs.NSApplicationPresentationFullScreen)
+	self.app:setActivationPolicy(objc.NSApplicationActivationPolicyRegular)
+	self.app:setPresentationOptions(self.app:presentationOptions() + objc.NSApplicationPresentationFullScreen)
 
 	return self
 end
@@ -74,17 +76,22 @@ end
 --run/quit
 
 function app:run()
-	self.nsapp:run()
+	self.app:run()
 end
 
-function app:quit()
-	os.exit(self.delegate:_backend_exit())
+function app:stop()
+	self.app:stop(nil)
+	--post a dummy event to trigger the stopping
+	local event = objc.NSEvent:
+		otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2(
+			objc.NSApplicationDefined, objc.NSMakePoint(0,0), 0, 0, 0, nil, 1, 1, 1)
+	self.app:postEvent_atStart(event, true)
 end
 
 --app activation
 
 function app:activate()
-	self.nsapp:activateIgnoringOtherApps(false)
+	self.app:activateIgnoringOtherApps(true)
 end
 
 --displays
@@ -136,19 +143,19 @@ end
 --time
 
 function app:time()
-	return bs.mach_absolute_time()
+	return objc.mach_absolute_time()
 end
 
 function app:timediff(start_time, end_time)
 	if not self.timebase then
 		self.timebase = ffi.new'mach_timebase_info_data_t'
-		bs.mach_timebase_info(self.timebase)
+		objc.mach_timebase_info(self.timebase)
 	end
 	return tonumber(end_time - start_time) * self.timebase.numer / self.timebase.denom / 10^6
 end
 
-function app:window(delegate, t)
-	return self.window_class:new(self, delegate, t)
+function app:window(api, t)
+	return self.window_class:new(self, api, t)
 end
 
 --window class
@@ -158,100 +165,90 @@ app.window_class = window
 
 --window creation
 
-local function name_generator(format)
-	local n = 0
-	return function()
-		n = n + 1
-		return string.format(format, n)
+local NWWindow = objc.class('NWWindow', 'NSWindow <NSWindowDelegate>')
+
+function NWWindow:windowShouldClose()
+	return self.api:_backend_closing() or false
+end
+
+function NWWindow:windowWillClose()
+	--defer closing on deactivation so that 'deactivated' event is sent before the 'closed' event
+	if self.win:active() then
+		self._close_on_deactivate = true
+	else
+		self.api:_backend_closed()
 	end
 end
-local gen_classname = name_generator'NSWindow%d'
 
-function window:new(app, delegate, t)
-	self = glue.inherit({app = app, delegate = delegate}, self)
+function NWWindow:windowDidBecomeKey()
+	self.api:_backend_activated()
+end
 
-	--create the window class which will also be used as the window's delegate
+function NWWindow:windowDidResignKey()
+	self.api:_backend_deactivated()
 
-	self.nswinclass = objc.createClass(objc.NSWindow, gen_classname(), {})
+	--check for defered close
+	if self._close_on_deactivate then
+		self.api:_backend_closed()
+	end
+end
 
-	objc.addMethod(self.nswinclass, objc.SEL'windowShouldClose:', function(nswin, sel, sender)
-		return self.delegate:_backend_closing() and 1 or 0
-	end, 'B@:@')
+--fullscreen mode
 
-	objc.addMethod(self.nswinclass, objc.SEL'windowWillClose:', function(nswin, sel, notification)
-		--defer closing on deactivation so that 'deactivated' event is sent before the 'closed' event
-		if self:active() then
-			self._close_on_deactivate = true
-		else
-			self.delegate:_backend_closed()
-		end
-	end, 'v@:@')
+function NWWindow:windowWillEnterFullScreen()
+	print'enter fullscreen'
+	--self.nswin:toggleFullScreen(nil)
+	self.nswin:setStyleMask(self.nswin:styleMask() + objc.NSFullScreenWindowMask)
+	--self.nswin:contentView():enterFullScreenMode_withOptions(objc.NSScreen:mainScreen(), nil)
+end
 
-	objc.addMethod(self.nswinclass, objc.SEL'windowDidBecomeKey:', function(nswin, sel, notification)
-		self.delegate:_backend_activated()
-	end, 'v@:@')
+function NWWindow:windowWillExitFullScreen()
+	print'exit fullscreen'
+end
 
-	objc.addMethod(self.nswinclass, objc.SEL'windowDidResignKey:', function(nswin, sel, notification)
-		self.delegate:_backend_deactivated()
+function NWWindow:willUseFullScreenPresentationOptions(options)
+	print('here1', options)
+	return options
+end
 
-		--check for defered close
-		if self._close_on_deactivate then
-			self.delegate:_backend_closed()
-		end
-	end, 'v@:@')
+--TODO: hack
+objc.override(NWWindow, 'willUseFullScreenContentSize', function(size)
+	print('here2', size)
+end, 'd@:@dd')
 
-	--fullscreen mode
+function NWWindow:customWindowsToEnterFullScreenForWindow()
+	return {self}
+end
 
-	objc.addMethod(self.nswinclass, objc.SEL'windowWillEnterFullScreen:', function(nswin, sel, notification)
-		print'enter fullscreen'
-		--self.nswin:toggleFullScreen(nil)
-		self.nswin:setStyleMask(self.nswin:styleMask() + bs.NSFullScreenWindowMask)
-		--self.nswin:contentView():enterFullScreenMode_withOptions(objc.NSScreen:mainScreen(), nil)
-	end, 'v@:@')
+function NWWindow:customWindowsToExitFullScreenForWindow()
+	return {self}
+end
 
-	objc.addMethod(self.nswinclass, objc.SEL'windowWillExitFullScreen:', function(nswin, sel, notification)
-		print'exit fullscreen'
-	end, 'v@:@')
-
-	objc.addMethod(self.nswinclass, objc.SEL'willUseFullScreenPresentationOptions:', function(nswin, sel, options)
-		print('here1', options)
-		return options
-	end, 'l@:@')
-
-	objc.addMethod(self.nswinclass, objc.SEL'willUseFullScreenContentSize:', function(nswin, sel, size)
-		print('here2', size)
-	end, 'd@:@dd')
-
-	objc.addMethod(self.nswinclass, objc.SEL'customWindowsToEnterFullScreenForWindow:', function(nswin, sel)
-		return objc.NSArray:arrayWithObject(nswin)
-	end, '@@:@')
-
-	objc.addMethod(self.nswinclass, objc.SEL'customWindowsToExitFullScreenForWindow:', function(nswin, sel)
-		return objc.NSArray:arrayWithObject(nswin)
-	end, '@@:@')
+function window:new(app, api, t)
+	self = glue.inherit({app = app, api = api}, self)
 
 	local style = t.frame == 'normal' and bit.bor(
-							bs.NSTitledWindowMask,
-							t.closeable and bs.NSClosableWindowMask or 0,
-							t.minimizable and bs.NSMiniaturizableWindowMask or 0,
-							t.resizeable and bs.NSResizableWindowMask or 0) or
-						t.frame == 'none' and bit.bor(bs.NSBorderlessWindowMask) or
-						t.frame == 'transparent' and bit.bor(bs.NSBorderlessWindowMask) --TODO
+							objc.NSTitledWindowMask,
+							t.closeable and objc.NSClosableWindowMask or 0,
+							t.minimizable and objc.NSMiniaturizableWindowMask or 0,
+							t.resizeable and objc.NSResizableWindowMask or 0) or
+						t.frame == 'none' and bit.bor(objc.NSBorderlessWindowMask) or
+						t.frame == 'transparent' and bit.bor(objc.NSBorderlessWindowMask) --TODO
 
 	local main_h = objc.NSScreen:mainScreen():frame().size.height
-	local frame_rect = bs.NSMakeRect(flip_rect(main_h, t.x, t.y, t.w, t.h))
+	local frame_rect = objc.NSMakeRect(flip_rect(main_h, t.x, t.y, t.w, t.h))
 	local content_rect = objc.NSWindow:contentRectForFrameRect_styleMask(frame_rect, style)
 
-	self.nswin = self.nswinclass:alloc():initWithContentRect_styleMask_backing_defer(
-											content_rect, style, bs.NSBackingStoreBuffered, false)
+	self.nswin = NWWindow:alloc():initWithContentRect_styleMask_backing_defer(
+							content_rect, style, objc.NSBackingStoreBuffered, false)
 
 
 	if t.fullscreenable then
-		self.nswin:setCollectionBehavior(bs.NSWindowCollectionBehaviorFullScreenPrimary)
+		self.nswin:setCollectionBehavior(objc.NSWindowCollectionBehaviorFullScreenPrimary)
 	end
 
 	if t.parent then
-		t.parent.backend.nswin:addChildWindow_ordered(self.nswin, bs.NSWindowAbove)
+		t.parent.backend.nswin:addChildWindow_ordered(self.nswin, objc.NSWindowAbove)
 	end
 
 	self.nswin:setAcceptsMouseMovedEvents(true)
@@ -260,28 +257,29 @@ function window:new(app, delegate, t)
 
 		--emulate windows behavior of hiding the minimize and maximize buttons when they're both disabled
 		if not t.minimizable then
-			self.nswin:standardWindowButton(bs.NSWindowZoomButton):setHidden(true)
-			self.nswin:standardWindowButton(bs.NSWindowMiniaturizeButton):setHidden(true)
+			self.nswin:standardWindowButton(objc.NSWindowZoomButton):setHidden(true)
+			self.nswin:standardWindowButton(objc.NSWindowMiniaturizeButton):setHidden(true)
 		else
-			self.nswin:standardWindowButton(bs.NSWindowZoomButton):setEnabled(false)
+			self.nswin:standardWindowButton(objc.NSWindowZoomButton):setEnabled(false)
 		end
 	end
 
-	self.nswin:setTitle(objc.NSStr(t.title))
+	self.nswin:setTitle(t.title)
 
 	if t.maximized then
 		if not self:maximized() then
-			self.nswin:zoom(nil) --doesn't show the window if it's not shown
+			self.nswin:zoom(nil) --doesn't show the window if it's not already visible
 		end
 	end
 
 	--enable events
-	self.nswin.delegate = self.nswin
+	self.nswin.api = api
+	self.nswin.win = self
+	self.nswin:setDelegate(self.nswin)
 
-	--minimize on the next show()
-	if t.minimized then
-		self._minimize = true
-	end
+	self._show_minimized = t.minimized --minimize on the next show()
+	self._show_fullscreen = t.fullscreen --fullscreen on the next show()
+	self._visible = false
 
 	return self
 end
@@ -295,35 +293,50 @@ end
 --activation
 
 function window:activate()
-	self.nswin:makeKeyAndOrderFront(nil)
+	if not self._visible then
+		self.app:activate() --activate the app but leave the window hidden like in windows
+	else
+		self.nswin:makeKeyAndOrderFront(nil)
+	end
 end
 
 function window:active()
-	return self.nswin:isKeyWindow() ~= 0
+	return self.nswin:isKeyWindow()
 end
 
 --visibility
 
 function window:show()
-	if self._minimize then
-		self.nswin:miniaturize(nil)
-		self._minimize = nil
-		return
+	self._visible = true
+	if self._show_minimized then
+		self._show_minimized = nil
+		if self._show_fullscreen then
+			self:_enter_fullscreen(true)
+		else
+			self.nswin:miniaturize(nil)
+		end
+	else
+		if self._show_fullscreen then
+			self:_enter_fullscreen()
+		else
+			self.nswin:makeKeyAndOrderFront(nil)
+		end
 	end
-	self.nswin:makeKeyAndOrderFront(nil)
 end
 
 function window:hide()
+	self._visible = false
 	self.nswin:orderOut(nil)
 end
 
 function window:visible()
-	return self.nswin:isVisible() ~= 0
+	return self._visible
 end
 
 --state
 
 function window:minimize()
+	self._visible = true
 	self.nswin:miniaturize(nil)
 end
 
@@ -352,23 +365,37 @@ function window:shownormal()
 end
 
 function window:minimized()
-	return self.nswin:isMiniaturized() ~= 0
+	return self.nswin:isMiniaturized()
 end
 
 function window:maximized()
-	return self.nswin:isZoomed() ~= 0
+	return self.nswin:isZoomed()
+end
+
+function window:_enter_fullscreen(show_minimized)
+	self._show_fullscreen = nil
+	self.nswin:toggleFullScreen(nil)
+	--self.nswin:setStyleMask(self.nswin:styleMask() + objc.NSFullScreenWindowMask)
+	--self.nswin:contentView():enterFullScreenMode_withOptions(objc.NSScreen:mainScreen(), nil)
+end
+
+function window:_exit_fullscreen(show_maximized)
+	self.nswin:toggleFullScreen(nil)
+	--
 end
 
 function window:fullscreen(fullscreen)
-	if fullscreen == nil then
-		return bit.band(tonumber(self.nswin:styleMask()), bs.NSFullScreenWindowMask) == bs.NSFullScreenWindowMask
-	else
+	if fullscreen ~= nil then
 		if fullscreen ~= self:fullscreen() then
-			print'going fullscreen'
-			--self.nswin:toggleFullScreen(nil)
-			--self.nswin:setStyleMask(self.nswin:styleMask() + bs.NSFullScreenWindowMask)
-			--self.nswin:contentView():enterFullScreenMode_withOptions(objc.NSScreen:mainScreen(), nil)
+			if fullscreen then
+				self:_enter_fullscreen()
+			else
+				self:_exit_fullscreen()
+			end
 		end
+	else
+		return self._show_fullscreen or
+			bit.band(tonumber(self.nswin:styleMask()), objc.NSFullScreenWindowMask) == objc.NSFullScreenWindowMask
 	end
 end
 

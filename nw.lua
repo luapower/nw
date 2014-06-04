@@ -108,7 +108,7 @@ function app:run()
 
 	self._running = true --run() barrier
 	self.backend:run()
-	assert(false) --can't reach here: the loop should never return
+	self._running = false
 end
 
 function app:running()
@@ -152,8 +152,7 @@ function app:_forcequit()
 	end
 
 	if self:window_count() == 0 then --no windows created while closing
-		self.backend:quit()
-		assert(false) --can't reach here
+		self.backend:stop()
 	end
 
 	self._quitting = nil
@@ -161,8 +160,8 @@ end
 
 function app:quit()
 	if self._quitting then return end --ignore if already quitting
+	if not self._running then return end --ignore if not running
 
-	self:check()
 	if self:_canquit() then
 		self:_forcequit()
 	end
@@ -170,13 +169,6 @@ end
 
 function app:_backend_quitting()
 	self:quit()
-end
-
-function app:_backend_exit()
-	self._dead = true --window() and quit() barrier
-	local exit_code = self:_handle'exit' or 0
-	self:_fire('exit', exit_code)
-	return exit_code
 end
 
 --app activation
