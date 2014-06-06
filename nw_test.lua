@@ -3,12 +3,12 @@ local glue = require'glue'
 local ffi = require'ffi'
 local bit = require'bit'
 
-local objc = require'objc'
---objc.debug.logtopics.refcount = true
+if ffi.os == 'OSX' then --loading objc over winapi will get you a crash
+	objc = require'objc'
+	--objc.debug.logtopics.refcount = true
+end
 
 io.stdout:setvbuf'no'
-
-jit.off()
 
 local app
 
@@ -121,6 +121,7 @@ local function recorder(app)
 		for i=1,t.n do
 			assert(t[i] == expected[i])
 		end
+		print'ok'
 	end
 	return function(e, ...)
 		if type(e) == 'table' then
@@ -238,49 +239,66 @@ end)
 
 --app running ------------------------------------------------------------------------------------------------------------
 
---run() is ignored if there are no windows
-add('@run-no-windows', function()
-	assert(not app:running())
-	app:run() --no-op: no windows
-	assert(not app:running())
-	os.exit(123)
-end, 123)
-
+--run() starts the loop even if there are no windows
+--runafter() calls its handler
+--quit() is ignored if not running
+--quit() stops the loop
+--quit() returns
+--run() returns
 --running() works
 --run() is ignored while running
---run() returns
-add('@run', function()
+add('run-quit', function()
 	local rec = recorder()
-	app:activate()
-	local win = app:window(winpos())
-	function win:closed()
-		assert(app:running())
+	app:runafter(0.01, function()
 		app:run() --ignored, already running
-		rec'closed'
-	end
+		assert(app:running())
+		rec'before-quit'
+		app:quit()
+		rec'after-quit'
+	end)
 	assert(not app:running())
+	app:quit() --ignored, not running
 	app:run()
 	assert(not app:running())
-	rec{'closed'}
-	os.exit(123)
-end, 123)
+	rec{'before-quit', 'after-quit'}
+end)
+
+--run() returns after the last window is closed
+add('run-autoquit', function()
+	local rec = recorder()
+	local win = app:window(winpos())
+	app:runafter(0.01, function()
+		win:close()
+	end)
+	app:run()
+	print'ok'
+end)
+
+--app timers -------------------------------------------------------------------------------------------------------------
+
+add('timer', function()
+	local rec = recorder()
+	app:runafter(0.01, function()
+		rec(1)
+		app:runafter(0.01, function()
+			rec(2)
+		end)
+		app:runafter(0.03, function()
+			rec(3)
+		end)
+	end)
+	app:runafter(0.1, function()
+		rec(4)
+		app:quit()
+	end)
+	app:run()
+	rec{1, 2, 3, 4}
+end)
 
 --app quitting -----------------------------------------------------------------------------------------------------------
 
---quit() works is ignored not running
-add('@quit-not-running', function()
-	app:quit()
-	os.exit(123)
-end, 123)
-
---exit() query works
-add('@quit-exit', function()
-	function app:exit() return 123 end
-	app:quit()
-end, 123)
-
---quitting() event works
-add('@quit-quitting', function()
+--quitting() event works, even if there are no windows
+add('quit-quitting', function()
 	local rec = recorder()
 	local allow
 	function app:quitting()
@@ -292,86 +310,84 @@ add('@quit-quitting', function()
 			rec'allowing'
 		end
 	end
-	function app:exit()
-		rec{'not allowing', 'allowing'}
-		return 1
-	end
-	app:quit() --not allowed
-	app:quit() --allowed
-	assert(false) --can't reach here
-end, 1)
+	app:autoquit(false)
+	app:runafter(0.01, function()
+		app:quit()
+		app:quit()
+	end)
+	app:run()
+	rec{'not allowing', 'allowing'}
+end)
 
---quitting() comes before closing()
-add('@quit-quitting-before-closing', function()
+--quitting() comes before closing() on all windows
+--closing() called in creation order
+add('quit-quitting-before-closing', function()
 	local rec = recorder()
 	local win1 = app:window(winpos())
 	local win2 = app:window(winpos())
 	function app:quitting() rec'quitting' end
-	function win1:closing() rec'closing' end
-	function win2:closing() rec'closing' end
-	function app:exit()
-		rec{'quitting', 'closing', 'closing'}
-		return 1
-	end
+	function win1:closing() rec'closing1' end
+	function win2:closing() rec'closing2' end
 	app:autoquit(false)
-	app:quit()
-end, 1)
+	app:runafter(0.01, function() app:quit() end)
+	app:run()
+	rec{'quitting', 'closing1', 'closing2'}
+end)
 
 --quit() fails if windows are created while quitting
-add('@quit-fails', function()
+add('quit-fails', function()
 	local rec = recorder()
 	local win = app:window(winpos())
 	function win:closed()
 		app:window(winpos())
 	end
-	function app:exit()
-		rec{'failed'}
-		return 1
-	end
 	app:autoquit(false)
-	app:quit() --fails
-	rec'failed'
-	app:quit()
-end, 1)
+	app:runafter(0.01, function()
+		app:quit()
+		rec(app:window_count())
+		app:quit()
+		rec(app:window_count())
+	end)
+	app:run()
+	rec{1,0}
+end)
 
 --app:autoquit(true) works
-add('@quit-autoquit-app', function()
+add('quit-autoquit-app', function()
 	local rec = recorder()
 	local win1 = app:window(winpos())
 	local win2 = app:window(winpos())
 	function app:quitting() rec'quitting' end
 	function win1:closing() rec'closing1' end
 	function win2:closing() rec'closing2' end
-	function app:exit()
-		rec{'closing1', 'quitting', 'closing2'}
-		return 1
-	end
 	app:autoquit(true)
-	win1:close()
-	win2:close()
-	assert(false) --can't reach here
-end, 1)
+	app:runafter(0.01, function()
+		win1:close()
+		win2:close()
+	end)
+	app:run()
+	rec{'closing1', 'quitting', 'closing2'}
+end)
 
 --window:autoquit(true) works
-add('@quit-autoquit-window', function()
+add('quit-autoquit-window', function()
 	local rec = recorder()
 	local win1 = app:window(winpos())
 	local win2 = app:window(winpos())
 	function app:quitting() rec'quitting' end
 	function win1:closing() rec'closing1' end
 	function win2:closing() rec'closing2' end
-	function app:exit()
-		rec{'quitting', 'closing1', 'closing2'}
-		return 1
-	end
 	app:autoquit(false)
 	win2:autoquit(true)
-	win2:close()
-	assert(false) --can't reach here
-end, 1)
+	app:runafter(0.01, function()
+		win2:close()
+	end)
+	app:run()
+	rec{'quitting', 'closing1', 'closing2'}
+end)
 
 --closing() and closed() are splitted out
-add('@quit-quitting-sequence', function()
+add('quit-quitting-sequence', function()
 	local rec = recorder()
 	local win1 = app:window(winpos())
 	local win2 = app:window(winpos())
@@ -380,16 +396,16 @@ add('@quit-quitting-sequence', function()
 	function win2:closing() rec'closing2' end
 	function win1:closed() rec'closed1' end
 	function win2:closed() rec'closed2' end
-	function app:exit()
-		rec{'quitting', 'closing1', 'closing2', 'closed1', 'closed2'}
-		return 1
-	end
 	app:autoquit(false)
-	app:quit()
-end, 1)
+	app:runafter(0.01, function()
+		app:quit()
+	end)
+	app:run()
+	rec{'quitting', 'closing1', 'closing2', 'closed1', 'closed2'}
+end)
 
 --quit() rejected because closing() rejected
-add('@quit-quitting-closing-query', function()
+add('quit-quitting-closing-query', function()
 	local rec = recorder()
 	local allow
 	local win = app:window(winpos())
@@ -402,18 +418,17 @@ add('@quit-quitting-closing-query', function()
 			rec'allowing'
 		end
 	end
-	function app:exit()
-		rec{'not allowing', 'allowing'}
-		return 1
-	end
 	app:autoquit(false)
-	app:quit() --not allowed
-	app:quit() --allowed
-	assert(false) --can't reach here
-end, 1)
+	app:runafter(0.01, function()
+		app:quit() --not allowed
+		app:quit() --allowed
+	end)
+	app:run()
+	rec{'not allowing', 'allowing'}
+end)
 
 --quit() rejected while closing()
-add('@quit-quitting-while-closing', function()
+add('quit-quitting-while-closing', function()
 	local rec = recorder()
 	local allow
 	local win = app:window(winpos())
@@ -421,22 +436,21 @@ add('@quit-quitting-while-closing', function()
 		app:quit() --ignored because closing() is rejected
 		rec'ignored'
 	end
-	function app:exit()
-		rec{'ignored', 'closed'}
-		return 1
-	end
 	app:autoquit(false)
-	win:close()
-	rec'closed'
-	app:quit()
-	assert(false) --can't reach here
-end, 1)
+	app:runafter(0.01, function()
+		win:close()
+		rec'closed'
+		app:quit()
+	end)
+	app:run()
+	rec{'ignored', 'closed'}
+end)
 
 --window closing ---------------------------------------------------------------------------------------------------------
 
 --closed() event works
 --dead() not yet true in the closed() event (we can still use the window)
-add('@close-closed-not-dead', function()
+add('close-closed-not-dead', function()
 	local rec = recorder()
 	local win = app:window(winpos())
 	function win:closed()
@@ -448,11 +462,10 @@ add('@close-closed-not-dead', function()
 	win:close()
 	assert(win:dead()) --dead now
 	rec{'closed'}
-	os.exit(1)
-end, 1)
+end)
 
 --closing() event works
-add('@close-closing-query', function()
+add('close-closing-query', function()
 	local rec = recorder()
 	local win = app:window(winpos())
 	local allow
@@ -471,11 +484,10 @@ add('@close-closing-query', function()
 	assert(not win:dead())
 	win:close() --allowed
 	rec{'not allowing', 'allowing'}
-	os.exit(1)
-end, 1)
+end)
 
 --close() is ignored from closed()
-add('@close-while-closed', function()
+add('close-while-closed', function()
 	local rec = recorder()
 	local win = app:window(winpos())
 	function win:closed()
@@ -487,11 +499,10 @@ add('@close-while-closed', function()
 	win:close()
 	assert(win:dead())
 	rec{'closed'}
-	os.exit(1)
-end, 1)
+end)
 
 --close() is ignored from closing()
-add('@close-while-closing', function()
+add('close-while-closing', function()
 	local rec = recorder()
 	local win = app:window(winpos())
 	function win:closing()
@@ -503,8 +514,7 @@ add('@close-while-closing', function()
 	win:close()
 	assert(win:dead())
 	rec{'closing'}
-	os.exit(1)
-end, 1)
+end)
 
 --window activaton -------------------------------------------------------------------------------------------------------
 
@@ -537,16 +547,16 @@ end
 
 --generate interactive tests for all combinations of initial state flags
 for flags in combinations(flag_list) do
-	add(test_name_for_flags(flags, '@states-init'), function()
+	add(test_name_for_flags(flags, 'states-init'), function()
 		local win = test_init_flags(flags)
 		function win:keydown(key)
-			if key == 'F10' then
+			if key == 'F10' or key == 'R' then
 				self:restore()
-			elseif key == 'F11' then
+			elseif key == 'F11' or key == 'F' then
 				self:fullscreen(not self:fullscreen())
-			elseif key == 'F12' then
+			elseif key == 'F12' or key == 'M' then
 				self:maximize()
-			elseif key == 'F9' then
+			elseif key == 'F9' or key == 'N' then
 				self:minimize()
 			end
 		end
@@ -568,7 +578,7 @@ end
 --all initial (visible, minimized, maximized, fullscreen) combinations
 --show() only changes visibility
 --restore() to the correct state
-add('@states-transitions', function()
+add('states-transitions', function()
 	app:autoquit(false)
 	test_combinations(function(win, c)
 		--visible -> minimized | normal | maximized | fullscreen
@@ -607,8 +617,7 @@ add('@states-transitions', function()
 		assert(not win:maximized())
 		assert(not win:fullscreen())
 	end)
-	os.exit(1)
-end, 1)
+end)
 
 --parent/child relationship
 
@@ -791,6 +800,60 @@ add('transparent', function()
 	assert(win:frame() == 'transparent')
 end)
 
+--mouse events
+
+add('mouse', function()
+	local win1 = app:window(winpos())
+	local win2 = app:window(winpos())
+	function win1:mouseenter() print'mouseenter win1' end
+	function win2:mouseenter() print'mouseenter win2' end
+	function win1:mouseleave() print'mouseleave win1' end
+	function win2:mouseleave() print'mouseleave win2' end
+	function win1:mousemove() print('mousemove win1', win1.mouse.x, win1.mouse.y) end
+	function win2:mousemove() print('mousemove win2', win2.mouse.x, win2.mouse.y) end
+	function win1:mousedown(button) print('mousedown win1', button) end
+	function win2:mousedown(button) print('mousedown win2', button) end
+	function win1:mouseup(button) print('mouseup win1', button) end
+	function win2:mouseup(button) print('mouseup win2', button) end
+	function win1:click(button, click_count)
+		print('click win1', button, click_count)
+		if click_count == 2 then return true end
+	end
+	function win2:click(button, click_count)
+		print('click win2', button, click_count)
+		if click_count == 3 then return true end
+	end
+	function win1:mousewheel(delta) print('wheel win1', delta) end
+	function win2:mousewheel(delta) print('wheel win2', delta) end
+	app:run()
+end)
+
+add('keys', function()
+	local win1 = app:window(winpos())
+	local win2 = app:window(winpos())
+
+	function win2:keypress(key)
+		print('keypress', key)--, self:key(key))
+	end
+
+	function win2:keydown(key)
+		print('keydown', key)--, self:key(key))
+	end
+
+	win1.keydown = win2.keydown
+	win1.keypress = win2.keypress
+
+	function win2:keyup(key)
+		print('keyup', key)--, self:key(key))
+	end
+
+	function win2:keychar(char)
+		print('keychar', char)
+	end
+
+	app:run()
+end)
+
 --[[
 
 local win1 = app:window{x = 100, y = 100, w = 800, h = 400, title = 'win1', visible = false,
@@ -847,27 +910,6 @@ end
 
 win2.render = win1.render
 
-function win1:hover() print'hover win1' end
-function win2:hover() print'hover win2' end
-function win1:leave() print'leave win1' end
-function win2:leave() print'leave win2' end
-function win1:mousemove() print('mousemove win1', win1.mouse.x, win1.mouse.y) end
-function win2:mousemove() print('mousemove win2', win2.mouse.x, win2.mouse.y) end
-function win1:mousedown(button, click_count) print('mousedown win1', button) end
-function win2:mousedown(button, click_count) print('mousedown win2', button) end
-function win1:mouseup(button, click_count) print('mouseup win1', button) end
-function win2:mouseup(button, click_count) print('mouseup win2', button) end
-function win1:click(button, click_count)
-	print('click win1', button, click_count)
-	if click_count == 2 then return true end
-end
-function win2:click(button, click_count)
-	print('click win2', button, click_count)
-	if click_count == 3 then return true end
-end
-function win1:wheel(delta) print('wheel win1', delta) end
-function win2:wheel(delta) print('wheel win2', delta) end
-
 local commands = {
 	Q = function(self) if win1:maximized() then win1:restore() else win1:maximize() end end,
 	W = function(self) win1:maximize() end,
@@ -921,26 +963,6 @@ local commands = {
 		print('ctrl-key', self:key'lctrl' and 'left' or 'right')
 	end,
 }
-
-function win2:keypress(key)
-	print('keypress', key, self:key(key))
-	if commands[key] then
-		commands[key](self)
-	end
-end
-
-function win2:keydown(key)
-	print('keydown', key, self:key(key))
-end
-
-win1.keydown = win2.keydown
-win1.keypress = win2.keypress
-
-function win2:keyup(key)
-	print('keyup', key, self:key(key))
-end
-
-function win2:keychar(char) print('keychar', char) end
 
 win1:show()
 win2:show()

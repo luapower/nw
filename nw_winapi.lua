@@ -6,6 +6,7 @@ require'winapi.mouse'
 require'winapi.keyboard'
 require'winapi.time'
 require'winapi.systemmetrics'
+require'winapi.spi'
 require'winapi.gdi'
 require'winapi.monitor'
 local glue = require'glue'
@@ -45,6 +46,20 @@ function app:stop()
 	winapi.PostQuitMessage()
 end
 
+--timers
+
+function app:runafter(seconds, func)
+	self.timer_cb = self.timer_cb or ffi.cast('TIMERPROC', function(hwnd, wm_timer, id, ellapsed_ms)
+		local func = self.timers[id]
+		self.timers[id] = nil
+		winapi.KillTimer(nil, id)
+		func()
+	end)
+	local id = winapi.SetTimer(nil, 0, seconds * 1000, self.timer_cb)
+	self.timers = self.timers or {}
+	self.timers[id] = func
+end
+
 --activation
 
 function app:activate()
@@ -81,6 +96,8 @@ function app:main_display()
 	return display(winapi.MonitorFromPoint(nil, winapi.MONITOR_DEFAULTTOPRIMARY))
 end
 
+--system info
+
 function app:double_click_time() --milliseconds
 	return winapi.GetDoubleClickTime()
 end
@@ -89,6 +106,18 @@ function app:double_click_target_area()
 	local w = winapi.GetSystemMetrics(winapi.SM_CXDOUBLECLK)
 	local h = winapi.GetSystemMetrics(winapi.SM_CYDOUBLECLK)
 	return w, h
+end
+
+function app:wheel_scroll_chars()
+	self.wsc_buf = self.wsc_buf or ffi.new'UINT[1]'
+	winapi.SystemParametersInfo(winapi.SPI_GETWHEELSCROLLCHARS, 0, self.wsc_buf)
+	return self.wsc_buf[0]
+end
+
+function app:wheel_scroll_lines()
+	self.wsl_buf = self.wsl_buf or ffi.new'UINT[1]'
+	winapi.SystemParametersInfo(winapi.SPI_GETWHEELSCROLLLINES, 0, self.wsl_buf)
+	return self.wsl_buf[0]
 end
 
 --time
@@ -144,6 +173,7 @@ function window:new(app, delegate, t)
 
 	self.win.__wantallkeys = true --don't let IsDialogMessage() filter out our precious WM_CHARs
 	self.win.delegate = delegate
+	self.win.app = self.app
 
 	--init mouse state
 	local m = self.delegate.mouse
@@ -454,57 +484,161 @@ end
 
 --keyboard
 
---winapi keycodes. key codes for 0-9 and A-Z keys are ascii codes.
-local keynames = {
-	[0x08] = 'backspace',[0x09] = 'tab',      [0x0d] = 'enter',    [0x10] = 'shift',    [0x11] = 'ctrl',
-	[0x12] = 'alt',      [0x13] = 'break',    [0x14] = 'capslock', [0x1b] = 'esc',      [0x20] = 'space',
-	[0x21] = 'pageup',   [0x22] = 'pagedown', [0x23] = 'end',      [0x24] = 'home',     [0x25] = 'left',
-	[0x26] = 'up',       [0x27] = 'right',    [0x28] = 'down',     [0x2c] = 'printscreen',
-	[0x2d] = 'insert',   [0x2e] = 'delete',   [0x60] = 'num0',     [0x61] = 'num1',     [0x62] = 'num2',
-	[0x63] = 'num3',     [0x64] = 'num4',     [0x65] = 'num5',     [0x66] = 'num6',     [0x67] = 'num7',
-	[0x68] = 'num8',     [0x69] = 'num9',     [0x6a] = 'num*',     [0x6b] = 'num+',     [0x6d] = 'num-',
-	[0x6e] = 'num.',     [0x6f] = 'num/',     [0x70] = 'F1',       [0x71] = 'F2',       [0x72] = 'F3',
-	[0x73] = 'F4',       [0x74] = 'F5',       [0x75] = 'F6',       [0x76] = 'F7',       [0x77] = 'F8',
-	[0x78] = 'F9',       [0x79] = 'F10',      [0x7a] = 'F11',      [0x7b] = 'F12',      [0x90] = 'numlock',
-	[0x91] = 'scrolllock',
-	--varying by keyboard
-	[0xba] = ';',        [0xbb] = '+',        [0xbc] = ',',        [0xbd] = '-',        [0xbe] = '.',
-	[0xbf] = '/',        [0xc0] = '`',        [0xdb] = '[',        [0xdc] = '\\',       [0xdd] = ']',
-	[0xde] = "'",
+local keycodes = {
+
+	[';'] = winapi.VK_OEM_1, --US only
+	['+'] = winapi.VK_OEM_PLUS,
+ 	[','] = winapi.VK_OEM_COMMA,
+	['-'] = winapi.VK_OEM_MINUS,
+	['.'] = winapi.VK_OEM_PERIOD,
+	['/'] = winapi.VK_OEM_2, --US only
+	['`'] = winapi.VK_OEM_3, --US only
+	['['] = winapi.VK_OEM_4, --US only
+	['\\'] = winapi.VK_OEM_5, --US only
+	[']'] = winapi.VK_OEM_6, --US only
+	['\''] = winapi.VK_OEM_7, --US only
+
+	backspace = winapi.VK_BACK,
+	tab       = winapi.VK_TAB,
+	enter     = winapi.VK_RETURN,
+	space     = winapi.VK_SPACE,
+	esc       = winapi.VK_ESCAPE,
+
+	F1 = winapi.VK_F1,
+	F2 = winapi.VK_F2,
+	F3 = winapi.VK_F3,
+	F4 = winapi.VK_F4,
+	F5 = winapi.VK_F5,
+	F6 = winapi.VK_F6,
+	F7 = winapi.VK_F7,
+	F8 = winapi.VK_F8,
+	F9 = winapi.VK_F9,
+	F10 = winapi.VK_F10,
+	F11 = winapi.VK_F11, --note: not on osx
+	F12 = winapi.VK_F12, --note: not on osx
+
+	lshift = winapi.VK_LSHIFT,
+	rshift = winapi.VK_RSHIFT,
+	lctrl  = winapi.VK_CONTROL,
+	lalt   = winapi.VK_MENU,
+
+	capslock    = winapi.VK_CAPITAL,
+	numlock     = winapi.VK_NUMLOCK,
+	scrolllock  = winapi.VK_SCROLL, --note: not on osx
+	['break']   = winapi.VK_PAUSE,  --note: not on osx
+	printscreen = winapi.VK_SNAPSHOT,
+
+	--numpad with numlock on
+	numpad0 = winapi.VK_NUMPAD0,
+	numpad1 = winapi.VK_NUMPAD1,
+	numpad2 = winapi.VK_NUMPAD2,
+	numpad3 = winapi.VK_NUMPAD3,
+	numpad4 = winapi.VK_NUMPAD4,
+	numpad5 = winapi.VK_NUMPAD5,
+	numpad6 = winapi.VK_NUMPAD6,
+	numpad7 = winapi.VK_NUMPAD7,
+	numpad8 = winapi.VK_NUMPAD8,
+	numpad9 = winapi.VK_NUMPAD9,
+	['numpad.'] = winapi.VK_DECIMAL,
+
+	--numpad with numlock off
+	numpadclear     = winapi.VK_CLEAR, --numpad 5 with numlock off
+	numpadleft      = winapi.VK_LEFT,
+	numpadup        = winapi.VK_UP,
+	numpadright     = winapi.VK_RIGHT,
+	numpaddown      = winapi.VK_DOWN,
+	numpadpageup    = winapi.VK_PRIOR,
+	numpadpagedown  = winapi.VK_NEXT,
+	numpadend       = winapi.VK_END,
+	numpadhome      = winapi.VK_HOME,
+	numpadinsert    = winapi.VK_INSERT,
+	numpaddelete    = winapi.VK_DELETE,
+
+	--numpad (single function)
+	['numpad*'] = winapi.VK_MULTIPLY,
+	['numpad+'] = winapi.VK_ADD,
+	['numpad-'] = winapi.VK_SUBTRACT,
+	['numpad/'] = winapi.VK_DIVIDE,
+	numpadenter = winapi.VK_RETURN,
+
+	--multimedia
+	mute = winapi.VK_VOLUME_MUTE,
+	volumedown = winapi.VK_VOLUME_DOWN,
+	volumeup = winapi.VK_VOLUME_UP,
+
 	--windows keyboard
-	[0xff] = 'lwin',     [0x5c] = 'rwin',     [0x5d] = 'menu',
-	--query only
-	[0xa0] = 'lshift',   [0xa1] = 'rshift',   [0xa2] = 'lctrl',    [0xa3] = 'rctrl',    [0xa4] = 'lalt',
-	[0xa5] = 'ralt',
+	lwin = 0xff,
+	rwin = winapi.VK_RWIN,
+	menu = winapi.VK_APPS,
 }
 
-local B = string.byte
+--key codes for 0-9 and A-Z keys are ascii codes
 
-local function keyname(vk)
-	return ((vk >= B'0' and vk <= B'9') or (vk >= B'A' and vk <= B'Z'))
-				and string.char(vk) or keynames[vk] or vk
+for ascii = string.byte('0'), string.byte('9') do
+	keycodes[string.char(ascii)] = ascii
 end
 
-local keycodes = glue.index(keynames)
+for ascii = string.byte('A'), string.byte('Z') do
+	keycodes[string.char(ascii)] = ascii
+end
 
-local function keycode(name)
-	return keycodes[name] or
-		(type(name) == 'string' and
-		  ((B(name) >= B'0' and B(name) <= B'9') or
-		   (B(name) >= B'A' and B(name) <= B'Z')) and B(name)
-		) or name
+--key codes when the extended_key flag is set
+
+local ext_keycodes = {
+
+	rctrl = winapi.VK_CONTROL,
+	ralt  = winapi.VK_MENU,
+
+	left  = winapi.VK_LEFT,
+	up    = winapi.VK_UP,
+	right = winapi.VK_RIGHT,
+	down  = winapi.VK_DOWN,
+
+	pageup   = winapi.VK_PRIOR,
+	pagedown = winapi.VK_NEXT,
+	['end']  = winapi.VK_END,
+	home     = winapi.VK_HOME,
+	insert   = winapi.VK_INSERT,
+	delete   = winapi.VK_DELETE,
+}
+
+--translation of keys so that numlock doesn't matter
+local numlock_on_keys = {
+	numpadleft      = 'numpad4',
+	numpadup        = 'numpad8',
+	numpadright     = 'numpad6',
+	numpaddown      = 'numpad2',
+	numpadpageup    = 'numpad9',
+	numpadpagedown  = 'numpad3',
+	numpadend       = 'numpad1',
+	numpadhome      = 'numpad7',
+	numpadinsert    = 'numpad0',
+	numpaddelete    = 'numpad.',
+}
+
+local keynames = glue.index(keycodes)
+local ext_keynames = glue.index(ext_keycodes)
+
+local function keyname(vk, flags)
+	if vk == winapi.VK_SHIFT then
+		vk = winapi.MapVirtualKey(flags.scan_code, winapi.MAPVK_VSC_TO_VK_EX)
+	end
+	local key = flags.extended_key and ext_keynames[vk] or keynames[vk]
+	if not key then return end
+	return numlock_on_keys[key] or key
 end
 
 function Window:on_key_down(vk, flags)
-	local key = keyname(vk)
+	local lkey, pkey = keyname(vk, flags)
 	if not flags.prev_key_state then
-		self.delegate:_backend_keydown(key)
+		self.delegate:_backend_keydown(lkey, pkey)
 	end
-	self.delegate:_backend_keypress(key)
+	self.delegate:_backend_keypress(lkey, pkey)
 end
 
-function Window:on_key_up(vk)
-	self.delegate:_backend_keyup(keyname(vk))
+function Window:on_key_up(vk, flags)
+	local lkey, pkey = keyname(vk, flags)
+	self.delegate:_backend_keyup(lkey, pkey)
 end
 
 --we get the ALT key with these messages instead
@@ -517,7 +651,6 @@ end
 
 Window.on_syskey_down_char = Window.on_key_down_char
 
-
 --take control of the ALT and F10 keys
 function Window:WM_SYSCOMMAND(sc, char_code)
 	if sc == winapi.SC_KEYMENU and char_code == 0 then
@@ -528,7 +661,7 @@ end
 local toggle_key = {capslock = true, numlock = true, scrolllock = true}
 
 function window:key(key) --down[, toggled]
-	local down, toggled = winapi.GetKeyState(assert(keycode(key), 'invalid key name'))
+	local down, toggled = winapi.GetKeyState(assert(keycodes[key] or ext_keycodes[key], 'invalid key name'))
 	if toggle_key[key] then
 		return down, toggled
 	end
@@ -568,7 +701,7 @@ function Window:on_mouse_move(x, y, buttons)
 	local moved = x ~= m.x or y ~= m.y
 	self:setmouse(x, y, buttons)
 	if moved then
-		self.delegate:_backend_mousemove(x, y, unpack_buttons(buttons))
+		self.delegate:_backend_mousemove(x, y)
 	end
 end
 
@@ -651,13 +784,16 @@ function Window:on_xbutton_up(x, y, buttons)
 end
 
 function Window:on_mouse_wheel(x, y, buttons, delta)
-	delta = math.floor(delta / 120) --note: when scrolling backwards I get -119 instead of -120
+	if (delta - 1) % 120 == 0 then --correction for my ms mouse when scrolling back
+		delta = delta - 1
+	end
+	delta = delta / 120 * self.app:wheel_scroll_lines()
 	self:setmouse(x, y, buttons)
 	self.delegate:_backend_mousewheel(delta)
 end
 
 function Window:on_mouse_hwheel(x, y, buttons, delta)
-	delta = delta / 120
+	delta = delta / 120 * self.app:wheel_scroll_chars()
 	self:setmouse(x, y, buttons)
 	self.delegate:_backend_mousehwheel(delta)
 end
@@ -692,7 +828,6 @@ function Window:create_surface()
 	if self.bmp then return end
 	self.win_pos = winapi.POINT{x = self.x, y = self.y}
 	local w, h = self.client_w, self.client_h
-	--print('create_surface', w, h)
 	self.bmp_pos = winapi.POINT{x = 0, y = 0}
 	self.bmp_size = winapi.SIZE{w = w, h = h}
 

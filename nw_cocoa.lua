@@ -18,6 +18,7 @@
 --creating and closing a window and not starting the app loop at all segfaults on exit (is this TLC or cocoa?).
 
 local ffi = require'ffi'
+local bit = require'bit'
 local glue = require'glue'
 local objc = require'objc'
 
@@ -25,6 +26,7 @@ objc.load'Foundation'
 objc.load'AppKit'
 objc.load'System'
 objc.load'CoreServices'
+objc.load'/System/Library/Frameworks/Carbon.framework/Versions/Current/Frameworks/HIToolbox.framework' --for key codes
 
 io.stdout:setvbuf'no'
 
@@ -64,11 +66,14 @@ function app:new(api)
 
 	self.app = NSApp:sharedApplication()
 	self.app.api = api
+	self.app.app = self
 
 	self.app:setDelegate(self.app)
 	--set it to be a normal app with dock and menu bar
 	self.app:setActivationPolicy(objc.NSApplicationActivationPolicyRegular)
 	self.app:setPresentationOptions(self.app:presentationOptions() + objc.NSApplicationPresentationFullScreen)
+
+	objc.NSEvent:setMouseCoalescingEnabled(false)
 
 	return self
 end
@@ -81,11 +86,26 @@ end
 
 function app:stop()
 	self.app:stop(nil)
-	--post a dummy event to trigger the stopping
+	--post a dummy event to ensure the stopping
 	local event = objc.NSEvent:
 		otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2(
 			objc.NSApplicationDefined, objc.NSMakePoint(0,0), 0, 0, 0, nil, 1, 1, 1)
 	self.app:postEvent_atStart(event, true)
+end
+
+--timers
+
+objc.addmethod('NSApp', 'timerEvent', function(self, timer)
+	local func = self.app.timers[objc.nptr(timer)]
+	self.app.timers[objc.nptr(timer)] = nil
+	func()
+end, 'v@:@')
+
+function app:runafter(seconds, func)
+	local timer = objc.NSTimer:scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
+		seconds, self.app, 'timerEvent', nil, false)
+	self.timers = self.timers or {}
+	self.timers[objc.nptr(timer)] = func --the timer is retained by the scheduler so we don't have to ref it
 end
 
 --app activation
@@ -197,9 +217,9 @@ end
 
 function NWWindow:windowWillEnterFullScreen()
 	print'enter fullscreen'
-	--self.nswin:toggleFullScreen(nil)
-	self.nswin:setStyleMask(self.nswin:styleMask() + objc.NSFullScreenWindowMask)
-	--self.nswin:contentView():enterFullScreenMode_withOptions(objc.NSScreen:mainScreen(), nil)
+	--self:toggleFullScreen(nil)
+	self:setStyleMask(self:styleMask() + objc.NSFullScreenWindowMask)
+	--self:contentView():enterFullScreenMode_withOptions(objc.NSScreen:mainScreen(), nil)
 end
 
 function NWWindow:windowWillExitFullScreen()
@@ -241,7 +261,7 @@ function window:new(app, api, t)
 
 	self.nswin = NWWindow:alloc():initWithContentRect_styleMask_backing_defer(
 							content_rect, style, objc.NSBackingStoreBuffered, false)
-
+	self.nswin:setReleasedWhenClosed(false)
 
 	if t.fullscreenable then
 		self.nswin:setCollectionBehavior(objc.NSWindowCollectionBehaviorFullScreenPrimary)
@@ -251,7 +271,17 @@ function window:new(app, api, t)
 		t.parent.backend.nswin:addChildWindow_ordered(self.nswin, objc.NSWindowAbove)
 	end
 
-	self.nswin:setAcceptsMouseMovedEvents(true)
+	--self.nswin:setAcceptsMouseMovedEvents(true)
+
+	local opts = bit.bor(
+		objc.NSTrackingActiveAlways,
+		objc.NSTrackingInVisibleRect,
+		objc.NSTrackingMouseEnteredAndExited,
+		objc.NSTrackingMouseMoved)
+
+	local area = objc.NSTrackingArea:alloc():initWithRect_options_owner_userInfo(
+		self.nswin:contentView():bounds(), opts, self.nswin:contentView(), nil)
+	self.nswin:contentView():addTrackingArea(area)
 
 	if not t.maximizable then
 
@@ -308,6 +338,7 @@ end
 
 function window:show()
 	self._visible = true
+	self.app:activate()
 	if self._show_minimized then
 		self._show_minimized = nil
 		if self._show_fullscreen then
@@ -410,6 +441,249 @@ function window:title(title)
 		self.nswin:setTitle(NSStr(title))
 	else
 		return self.nswin:title()
+	end
+end
+
+--keyboard
+
+local keycodes = {
+
+	['0'] = objc.kVK_ANSI_0,
+	['1'] = objc.kVK_ANSI_1,
+	['2'] = objc.kVK_ANSI_2,
+	['3'] = objc.kVK_ANSI_3,
+	['4'] = objc.kVK_ANSI_4,
+	['5'] = objc.kVK_ANSI_5,
+	['6'] = objc.kVK_ANSI_6,
+	['7'] = objc.kVK_ANSI_7,
+	['8'] = objc.kVK_ANSI_8,
+	['9'] = objc.kVK_ANSI_9,
+
+	A = objc.kVK_ANSI_A,
+	B = objc.kVK_ANSI_B,
+	C = objc.kVK_ANSI_C,
+	D = objc.kVK_ANSI_D,
+	E = objc.kVK_ANSI_E,
+	F = objc.kVK_ANSI_F,
+	G = objc.kVK_ANSI_G,
+	H = objc.kVK_ANSI_H,
+	I = objc.kVK_ANSI_I,
+	J = objc.kVK_ANSI_J,
+	K = objc.kVK_ANSI_K,
+	L = objc.kVK_ANSI_L,
+	M = objc.kVK_ANSI_M,
+	N = objc.kVK_ANSI_N,
+	O = objc.kVK_ANSI_O,
+	P = objc.kVK_ANSI_P,
+	Q = objc.kVK_ANSI_Q,
+	R = objc.kVK_ANSI_R,
+	S = objc.kVK_ANSI_S,
+	T = objc.kVK_ANSI_T,
+	U = objc.kVK_ANSI_U,
+	V = objc.kVK_ANSI_V,
+	W = objc.kVK_ANSI_W,
+	X = objc.kVK_ANSI_X,
+	Y = objc.kVK_ANSI_Y,
+	Z = objc.kVK_ANSI_Z,
+
+	[';'] = objc.kVK_ANSI_Semicolon,
+	['+'] = objc.kVK_ANSI_Equal,
+	[','] = objc.kVK_ANSI_Comma,
+	['-'] = objc.kVK_ANSI_Minus,
+	['.'] = objc.kVK_ANSI_Period,
+	['/'] = objc.kVK_ANSI_Slash,
+	['`'] = objc.kVK_ANSI_Grave,
+	['['] = objc.kVK_ANSI_LeftBracket,
+	['\\'] = objc.kVK_ANSI_Backslash,
+	[']'] = objc.kVK_ANSI_RightBracket,
+	["'"] = objc.kVK_ANSI_Quote,
+
+	backspace   = objc.kVK_Delete,
+	tab         = objc.kVK_Tab,
+	enter       = objc.kVK_Return,
+	space       = objc.kVK_Space,
+	esc         = objc.kVK_Escape,
+
+	F1 = objc.kVK_F1,
+	F2 = objc.kVK_F2,
+	F3 = objc.kVK_F3,
+	F4 = objc.kVK_F4,
+	F5 = objc.kVK_F5,
+	F6 = objc.kVK_F6,
+	F7 = objc.kVK_F7,
+	F8 = objc.kVK_F8,
+	F9 = objc.kVK_F9,
+	F10 = objc.kVK_F10,
+	F11 = objc.kVK_F11, --captured: show desktop
+	F12 = objc.kVK_F12, --captured: show the wachamacalit wall with the calendar and clock
+
+	shift  = objc.kVK_Shift,
+	ctrl   = objc.kVK_Control,
+	alt    = objc.kVK_Option,
+	lshift = objc.kVK_Shift,
+	rshift = objc.kVK_RightShift,
+	lctrl  = objc.kVK_Control,
+	rctrl  = objc.kVK_RightControl,
+	lalt   = objc.kVK_Option,
+	ralt   = objc.kVK_RightOption,
+
+	capslock    = objc.kVK_CapsLock,
+	numlock     = 71,  --but no light (also this is kVK_ANSI_KeypadClear wtf)
+	scrolllock  = nil, --captured: brightness down
+	['break']   = nil, --captured: brightness up
+	printscreen = objc.kVK_F13,
+
+	left        = objc.kVK_LeftArrow,
+	up          = objc.kVK_UpArrow,
+	right       = objc.kVK_RightArrow,
+	down        = objc.kVK_DownArrow,
+
+	pageup      = objc.kVK_PageUp,
+	pagedown    = objc.kVK_PageDown,
+	home        = objc.kVK_Home,
+	['end']     = objc.kVK_End,
+	insert      = objc.kVK_Help,
+	delete      = objc.kVK_ForwardDelete,
+
+	--numpad (numlock doesn't work)
+	numpad0 = objc.kVK_ANSI_Keypad0,
+	numpad1 = objc.kVK_ANSI_Keypad1,
+	numpad2 = objc.kVK_ANSI_Keypad2,
+	numpad3 = objc.kVK_ANSI_Keypad3,
+	numpad4 = objc.kVK_ANSI_Keypad4,
+	numpad5 = objc.kVK_ANSI_Keypad5,
+	numpad6 = objc.kVK_ANSI_Keypad6,
+	numpad7 = objc.kVK_ANSI_Keypad7,
+	numpad8 = objc.kVK_ANSI_Keypad8,
+	numpad9 = objc.kVK_ANSI_Keypad9,
+	['numpad.'] = objc.kVK_ANSI_KeypadDecimal,
+
+	--numpad (single function)
+	['numpad*'] = objc.kVK_ANSI_KeypadMultiply,
+	['numpad+'] = objc.kVK_ANSI_KeypadPlus,
+	['numpad-'] = objc.kVK_ANSI_KeypadMinus,
+	['numpad/'] = objc.kVK_ANSI_KeypadDivide,
+	numpadenter = objc.kVK_ANSI_KeypadEnter,
+
+	--multimedia
+	mute       = objc.kVK_Mute,
+	volumedown = objc.kVK_VolumeDown,
+	volumeup   = objc.kVK_VolumeUp,
+
+	--mac keyboard
+	command = objc.kVK_Command,
+
+	--windows keyboard
+	menu = 110,
+}
+
+local keynames = glue.index(keycodes)
+
+local function keyname(event)
+	local keycode = event:keyCode()
+	return keynames[keycode] or tostring(keycode)
+end
+
+function NWWindow:keyDown(event)
+	local key = keyname(event)
+	if not key then return end
+	self.api:_backend_keypress(key)
+end
+
+function NWWindow:keyUp(event)
+	local key = keyname(event)
+	if not key then return end
+	self.api:_backend_keyup(key)
+end
+
+--mouse
+
+function NWWindow:setmouse(event)
+	local m = self.api.mouse
+	local pos = event:mouseLocation()
+	m.x = pos.x
+	m.y = pos.y
+	local btns = tonumber(event:pressedMouseButtons())
+	m.left = bit.band(btns, 1) ~= 0
+	m.right = bit.band(btns, 2) ~= 0
+	m.middle = bit.band(btns, 4) ~= 0
+	m.xbutton1 = bit.band(btns, 8) ~= 0
+	m.xbutton2 = bit.band(btns, 16) ~= 0
+	return m
+end
+
+function NWWindow:mouseDown(event)
+	self:setmouse(event)
+	self.api:_backend_mousedown'left'
+end
+
+function NWWindow:mouseUp(event)
+	self:setmouse(event)
+	self.api:_backend_mouseup'left'
+end
+
+function NWWindow:rightMouseDown(event)
+	self:setmouse(event)
+	self.api:_backend_mousedown'right'
+end
+
+function NWWindow:rightMouseUp(event)
+	self:setmouse(event)
+	self.api:_backend_mouseup'right'
+end
+
+local other_buttons = {'', 'middle', 'xbutton1', 'xbutton2'}
+
+function NWWindow:otherMouseDown(event)
+	local btn = other_buttons[tonumber(event:buttonNumber())]
+	if not btn then return end
+	self:setmouse(event)
+	self.api:_backend_mousedown(btn)
+end
+
+function NWWindow:otherMouseUp(event)
+	local btn = other_buttons[tonumber(event:buttonNumber())]
+	if not btn then return end
+	self:setmouse(event)
+	self.api:_backend_mouseup(btn)
+end
+
+function NWWindow:mouseMoved(event)
+	local m = self:setmouse(event)
+	self.api:_backend_mousemove(m.x, m.y)
+end
+
+function NWWindow:mouseDragged(event)
+	self:mouseMoved(event)
+end
+
+function NWWindow:rightMouseDragged(event)
+	self:mouseMoved(event)
+end
+
+function NWWindow:otherMouseDragged(event)
+	self:mouseMoved(event)
+end
+
+function NWWindow:mouseEntered(event)
+	self:setmouse(event)
+	self.api:_backend_mouseenter()
+end
+
+function NWWindow:mouseExited(event)
+	self:setmouse(event)
+	self.api:_backend_mouseleave()
+end
+
+function NWWindow:scrollWheel(event)
+	self:setmouse(event)
+	local dx = event:deltaX()
+	if dx ~= 0 then
+		self.api:_backend_mousehwheel(dx)
+	end
+	local dy = event:deltaY()
+	if dy ~= 0 then
+		self.api:_backend_mousewheel(dy)
 	end
 end
 

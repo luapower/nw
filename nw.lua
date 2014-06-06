@@ -104,7 +104,6 @@ end
 --start the main loop
 function app:run()
 	if self._running then return end --ignore while running
-	if self:window_count() == 0 then return end --ignore if there are no windows
 
 	self._running = true --run() barrier
 	self.backend:run()
@@ -161,7 +160,6 @@ end
 function app:quit()
 	if self._quitting then return end --ignore if already quitting
 	if not self._running then return end --ignore if not running
-
 	if self:_canquit() then
 		self:_forcequit()
 	end
@@ -169,6 +167,16 @@ end
 
 function app:_backend_quitting()
 	self:quit()
+end
+
+function app:stop()
+	self.backend:stop()
+end
+
+--timers
+
+function app:runafter(seconds, func)
+	self.backend:runafter(seconds, func)
 end
 
 --app activation
@@ -633,6 +641,14 @@ function window:_backend_mousemove(x, y)
 	self:_event('mousemove', x, y)
 end
 
+function window:_backend_mousewheel(delta)
+	self:_event('mousewheel', delta)
+end
+
+function window:_backend_mousehwheel(delta)
+	self:_event('mousehwheel', delta)
+end
+
 --rendering
 
 function window:invalidate()
@@ -643,6 +659,13 @@ end
 function window:_backend_render(cr)
 	self:_event('render', cr)
 end
+
+--buttons
+
+function window:button(...)
+	return self.backend:button(...)
+end
+
 
 if not ... then require'nw_test' end
 
