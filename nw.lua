@@ -526,7 +526,7 @@ function window:client_rect() --x, y, w, h
 end
 
 function window:_backend_resizing(how, x, y, w, h)
-	local x1, y1, w1, h1 = x, y, w, h
+	local x1, y1, w1, h1
 	if self.resizing then
 		x1, y1, w1, h1 = self:_handle('resizing', how, x, y, w, h)
 	end
@@ -541,6 +541,12 @@ end
 function window:display()
 	self:check()
 	return self.display_class:_new(self.backend:display())
+end
+
+--cursors
+
+function window:cursor(name)
+	return self.backend:cursor(name)
 end
 
 --frame, behavior

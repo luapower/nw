@@ -1,6 +1,6 @@
 --native widgets cococa backend (Cosmin Apreutesei, public domain)
 
---cocoa notes, or why cocoa sucks:
+--cocoa notes, or why cocoa sucks oh so, so much:
 
 --zoom()'ing a hidden window does not show it (but does change its maximized flag).
 --orderOut() doesn't hide a window if it's the key window (instead it disables mouse on it making it appear frozen).
@@ -23,6 +23,8 @@
 --  holding down these keys won't trigger repeated key events.
 --  can't know when capslock is depressed, only when it is pressed.
 --no event while moving a window - frame() is not updated while moving the window either.
+--can't know which corner/side a window is dragged by to be resized. good luck implementing edge snapping correctly.
+--can't reference resizing cursors directly with constants, must dig and get them yourself.
 
 local ffi = require'ffi'
 local bit = require'bit'
@@ -191,6 +193,8 @@ app.window_class = window
 
 local NWWindow = objc.class('NWWindow', 'NSWindow <NSWindowDelegate>')
 
+local NWView = objc.class('NSView')
+
 function window:new(app, api, t)
 	self = glue.inherit({app = app, api = api}, self)
 
@@ -207,8 +211,11 @@ function window:new(app, api, t)
 
 	self.nswin = NWWindow:alloc():initWithContentRect_styleMask_backing_defer(
 							content_rect, style, objc.NSBackingStoreBuffered, false)
-
 	ffi.gc(self.nswin, nil) --disown
+
+	local view = NWView:alloc():initWithFrame(objc.NSMakeRect(0, 0, 100, 100))
+	self.nswin:setContentView(view)
+	ffi.gc(view, nil) --disown, nswin owns it now
 
 	self.nswin:setMovable(false)
 
@@ -226,7 +233,8 @@ function window:new(app, api, t)
 		objc.NSTrackingActiveInKeyWindow,
 		objc.NSTrackingInVisibleRect,
 		objc.NSTrackingMouseEnteredAndExited,
-		objc.NSTrackingMouseMoved)
+		objc.NSTrackingMouseMoved,
+		objc.NSTrackingCursorUpdate)
 
 	local area = objc.NSTrackingArea:alloc():initWithRect_options_owner_userInfo(
 		self.nswin:contentView():bounds(), opts, self.nswin:contentView(), nil)
@@ -415,6 +423,10 @@ function window:maximized()
 	return self.nswin:isZoomed()
 end
 
+function NWWindow:canBecomeKeyWindow() --windows with NSBorderlessWindowMask can't become key by default
+	return true
+end
+
 function window:_enter_fullscreen(show_minimized)
 	self._show_fullscreen = nil
 	self.nswin:toggleFullScreen(nil)
@@ -495,7 +507,7 @@ function NWWindow:sendEvent(event)
 			local frame = self:frame()
 			local x, y, w, h = self.api:_backend_resizing('move', mp.x, mp.y, frame.size.width, frame.size.height)
 			if x then
-				self:setFrame(NSMakeRect(x, y, w, h))
+				self:setFrame_display(objc.NSMakeRect(x, y, w, h), false)
 			else
 				self:setFrameOrigin(mp)
 			end
@@ -517,14 +529,15 @@ function NWWindow:sendEvent(event)
 	objc.callsuper(self, 'sendEvent', event)
 end
 
-function NWWindow:windowWillStartLiveResize(notification)
+function NWWindow:windowWillStartLiveResize()
 	self.oldframe = self:frame()
-	self.margins = {} --{left = true, ...}
 end
 
-function NWWindow:windowDidResize(notification)
+function NWWindow:windowDidResize()
 	local x1, y1, w1, h1 = flip_screen_rect(nil, unpack_rect(self.oldframe))
 	local x2, y2, w2, h2 = flip_screen_rect(nil, unpack_rect(self:frame()))
+
+	self.margins = {}
 
 	if x2 ~= x1 then
 		self.margins.left = true
@@ -539,15 +552,74 @@ function NWWindow:windowDidResize(notification)
 		self.margins.bottom = true
 	end
 
-	local how = (self.margins.top and 'top') or (self.margins.bottom and 'bottom') or ''
-	how = how .. ((self.margins.left and 'left') or (self.margins.right and 'right') or '')
+	local how = (self.margins.top and 'top' or '') .. (self.margins.bottom and 'bottom' or '') ..
+					(self.margins.left and 'left' or '') .. (self.margins.right and 'right' or '')
 
 	local x, y, w, h = self.api:_backend_resizing(how, x2, y2, w2, h2)
 	if x then
-		self:setFrame_display(NSMakeRect(x, y, w, h))
+		x, y, w, h = flip_screen_rect(nil, x, y, w, h)
+		self:setFrame_display(objc.NSMakeRect(x, y, w, h), true)
 	end
 
+	if w2 > 500 then
+		local x, y, w, h = unpack_rect(self:frame())
+		w = 500
+		self:setFrame_display(objc.NSMakeRect(x, y, w, h), true)
+	end
 	self.api:_backend_resized()
+
+	self.oldframe = self:frame()
+end
+
+--cursors
+
+local cursors = {
+	--pointers
+	arrow      = 'arrowCursor',
+	text       = 'IBeamCursor',
+	link       = 'openHandCursor',
+	crosshair  = 'crosshairCursor',
+}
+
+local hi_cursors = {
+	--pointers
+	invalid    = 'notallowed',
+	--move and resize
+	resize_nesw       = 'resizenortheastsouthwest',
+	resize_nesw       = 'resizenorthwestsoutheast',
+	resize_horizontal = 'resizeeastwest',
+	resize_vertical   = 'resizenorthsouth',
+	move              = 'move',
+	--app state
+	busyarrow = 'busybutclickable',
+}
+
+local load_hicursor = objc.memoize(function(name)
+	basepath = basepath or (objc.findframework'ApplicationServices.HIServices' .. '/Versions/Current/Resources/cursors')
+	local curpath = string.format('%s/%s/cursor.pdf', basepath, name)
+	local infopath = string.format('%s/%s/info.plist', basepath, name)
+	local image = objc.NSImage:alloc():initByReferencingFile(curpath)
+	local info = objc.NSDictionary:dictionaryWithContentsOfFile(infopath)
+	local hotx = info:valueForKey('hotx'):doubleValue()
+	local hoty = info:valueForKey('hoty'):doubleValue()
+	return objc.NSCursor:alloc():initWithImage_hotSpot(image, NSMakePoint(hotx, hoty))
+end)
+
+function window:cursor(name)
+	if name ~= nil then
+		self.cursor = name
+	else
+		return self.cursor
+	end
+end
+
+function NWWindow:cursorUpdate(event)
+	local name = self.win.cursor
+	if cursors[name] then
+		objc.NSCursor[cursors[name]](objc.NSCursor):set()
+	elseif hi_cursors[name] then
+		load_hicursor(hi_cursors[name]):set()
+	end
 end
 
 --frame
@@ -906,3 +978,26 @@ end
 if not ... then require'nw_test' end
 
 return backend
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+--

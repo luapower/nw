@@ -14,6 +14,7 @@ require'winapi.mouse'
 require'winapi.keyboard'
 require'winapi.rawinput'
 require'winapi.gdi'
+require'winapi.cursor'
 
 local function unpack_rect(rect)
 	return rect.x, rect.y, rect.w, rect.h
@@ -474,6 +475,42 @@ end
 
 function window:display()
 	return display(self.win.monitor)
+end
+
+--cursors
+
+local cursors = {
+	--pointers
+	arrow     = winapi.IDC_ARROW,
+	text      = winapi.IDC_IBEAM,
+	link      = winapi.IDC_HAND,
+	crosshair = winapi.IDC_CROSS,
+	invalid   = winapi.IDC_NO,
+	--move and resize
+	resize_nwse       = winapi.IDC_SIZENWSE,
+	resize_nesw       = winapi.IDC_SIZENESW,
+	resize_horizontal = winapi.IDC_SIZEWE,
+	resize_vertical   = winapi.IDC_SIZENS,
+	move              = winapi.IDC_SIZEALL,
+	--app state
+	--busy      = winapi.IDC_WAIT, --not in OSX
+	busyarrow = winapi.IDC_APPSTARTING,
+}
+
+function window:cursor(name)
+	if name ~= nil then
+		self.cursor = name
+	else
+		return self.cursor
+	end
+end
+
+function Window:on_set_cursor(_, ht)
+	if ht ~= winapi.HTCLIENT then return end
+	local cursor = cursors[self.win.cursor]
+	if not cursor then return end
+	winapi.SetCursor(winapi.LoadCursor(cursor))
+	return true
 end
 
 --displays

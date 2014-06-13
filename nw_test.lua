@@ -689,12 +689,23 @@ end)
 
 add('size', function()
 	local win = app:window(winpos())
+	function win:mousemove(x, y)
+		print('mousemove', x, y)
+	end
 	function win:resizing(how, x, y, w, h)
 		print('resizing', how, x, y, w, h)
 	end
 	function win:resized()
 		print('resized')
 	end
+	app:run()
+end)
+
+--cursors ----------------------------------------------------------------------------------------------------------------
+
+add('cursors', function()
+	local win = app:window(winpos())
+	win:cursor'link'
 	app:run()
 end)
 
