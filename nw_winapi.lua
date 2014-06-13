@@ -1,17 +1,19 @@
---native widgets winapi backend
+--native widgets winapi backend (Cosmin Apreutesei, public domain)
+
+local ffi = require'ffi'
+local bit = require'bit'
+local glue = require'glue'
+local box2d = require'box2d'
 local winapi = require'winapi'
-require'winapi.windowclass'
+require'winapi.time'
 require'winapi.spi'
+require'winapi.systemmetrics'
+require'winapi.monitor'
+require'winapi.windowclass'
 require'winapi.mouse'
 require'winapi.keyboard'
-require'winapi.time'
-require'winapi.systemmetrics'
-require'winapi.spi'
+require'winapi.rawinput'
 require'winapi.gdi'
-require'winapi.monitor'
-local glue = require'glue'
-local ffi = require'ffi'
-local box2d = require'box2d'
 
 local function unpack_rect(rect)
 	return rect.x, rect.y, rect.w, rect.h
@@ -29,7 +31,19 @@ local app = {}
 backend.app_class = app
 
 function app:new(delegate)
+
+	--enable WM_INPUT for keyboard events
+	local rid = winapi.types.RAWINPUTDEVICE()
+	rid.dwFlags = 0
+	rid.usUsagePage = 1 --generic desktop controls
+	rid.usUsage     = 6 --keyboard
+	winapi.RegisterRawInputDevices(rid, 1, ffi.sizeof(rid))
+
 	return glue.inherit({delegate = delegate}, self)
+end
+
+function app:ignore_numlock()
+	return self.delegate:ignore_numlock()
 end
 
 --run/quit
@@ -173,18 +187,21 @@ function window:new(app, delegate, t)
 
 	self.win.__wantallkeys = true --don't let IsDialogMessage() filter out our precious WM_CHARs
 	self.win.delegate = delegate
-	self.win.app = self.app
+	self.win.win = self
+	self.win.app = app
+
+	self:reset_keystate()
 
 	--init mouse state
 	local m = self.delegate.mouse
 	local pos = self.win.cursor_pos
 	m.x = pos.x
 	m.y = pos.y
-	m.left = winapi.GetKeyState(winapi.VK_LBUTTON)
+	m.left   = winapi.GetKeyState(winapi.VK_LBUTTON)
 	m.middle = winapi.GetKeyState(winapi.VK_MBUTTON)
-	m.right = winapi.GetKeyState(winapi.VK_RBUTTON)
-	m.xbutton1 = winapi.GetKeyState(winapi.VK_XBUTTON1)
-	m.xbutton2 = winapi.GetKeyState(winapi.VK_XBUTTON2)
+	m.right  = winapi.GetKeyState(winapi.VK_RBUTTON)
+	m.ex1    = winapi.GetKeyState(winapi.VK_XBUTTON1)
+	m.ex2    = winapi.GetKeyState(winapi.VK_XBUTTON2)
 	m.inside = box2d.hit(m.x, m.y, unpack_rect(self.win.client_rect))
 
 	--start tracking mouse leave
@@ -193,7 +210,6 @@ function window:new(app, delegate, t)
 	self._fullscreen = t.fullscreen
 	self._show_minimized = t.minimized
 	self._show_fullscreen = t.fullscreen
-
 	if self._show_fullscreen then
 		--until shown, we need this for maximized()
 		self._fs = {maximized = self.win.maximized}
@@ -231,10 +247,12 @@ function window:active()
 end
 
 function Window:on_activate()
+	self.win:reset_keystate()
 	self.delegate:_backend_activated()
 end
 
 function Window:on_deactivate()
+	self.win:reset_keystate()
 	self.delegate:_backend_deactivated()
 end
 
@@ -484,161 +502,219 @@ end
 
 --keyboard
 
-local keycodes = {
+local keynames = { --vkey code -> vkey name
 
-	[';'] = winapi.VK_OEM_1, --US only
-	['+'] = winapi.VK_OEM_PLUS,
- 	[','] = winapi.VK_OEM_COMMA,
-	['-'] = winapi.VK_OEM_MINUS,
-	['.'] = winapi.VK_OEM_PERIOD,
-	['/'] = winapi.VK_OEM_2, --US only
-	['`'] = winapi.VK_OEM_3, --US only
-	['['] = winapi.VK_OEM_4, --US only
-	['\\'] = winapi.VK_OEM_5, --US only
-	[']'] = winapi.VK_OEM_6, --US only
-	['\''] = winapi.VK_OEM_7, --US only
+	[winapi.VK_OEM_1]      = ';',  --on US keyboards
+	[winapi.VK_OEM_PLUS]   = '=',
+ 	[winapi.VK_OEM_COMMA]  = ',',
+	[winapi.VK_OEM_MINUS]  = '-',
+	[winapi.VK_OEM_PERIOD] = '.',
+	[winapi.VK_OEM_2]      = '/',  --on US keyboards
+	[winapi.VK_OEM_3]      = '`',  --on US keyboards
+	[winapi.VK_OEM_4]      = '[',  --on US keyboards
+	[winapi.VK_OEM_5]      = '\\', --on US keyboards
+	[winapi.VK_OEM_6]      = ']',  --on US keyboards
+	[winapi.VK_OEM_7]      = '\'', --on US keyboards
 
-	backspace = winapi.VK_BACK,
-	tab       = winapi.VK_TAB,
-	enter     = winapi.VK_RETURN,
-	space     = winapi.VK_SPACE,
-	esc       = winapi.VK_ESCAPE,
+	[winapi.VK_BACK]   = 'backspace',
+	[winapi.VK_TAB]    = 'tab',
+	[winapi.VK_SPACE]  = 'space',
+	[winapi.VK_ESCAPE] = 'esc',
 
-	F1 = winapi.VK_F1,
-	F2 = winapi.VK_F2,
-	F3 = winapi.VK_F3,
-	F4 = winapi.VK_F4,
-	F5 = winapi.VK_F5,
-	F6 = winapi.VK_F6,
-	F7 = winapi.VK_F7,
-	F8 = winapi.VK_F8,
-	F9 = winapi.VK_F9,
-	F10 = winapi.VK_F10,
-	F11 = winapi.VK_F11, --note: not on osx
-	F12 = winapi.VK_F12, --note: not on osx
+	[winapi.VK_F1]  = 'F1',
+	[winapi.VK_F2]  = 'F2',
+	[winapi.VK_F3]  = 'F3',
+	[winapi.VK_F4]  = 'F4',
+	[winapi.VK_F5]  = 'F5',
+	[winapi.VK_F6]  = 'F6',
+	[winapi.VK_F7]  = 'F7',
+	[winapi.VK_F8]  = 'F8',
+	[winapi.VK_F9]  = 'F9',
+	[winapi.VK_F10] = 'F10',
+	[winapi.VK_F11] = 'F11',
+	[winapi.VK_F12] = 'F12',
 
-	lshift = winapi.VK_LSHIFT,
-	rshift = winapi.VK_RSHIFT,
-	lctrl  = winapi.VK_CONTROL,
-	lalt   = winapi.VK_MENU,
+	[winapi.VK_CAPITAL]  = 'capslock',
+	[winapi.VK_NUMLOCK]  = 'numlock',     --win keyboard; mapped to 'numclear' on mac
+	[winapi.VK_SNAPSHOT] = 'printscreen', --win keyboard; mapped to 'F13' on mac; taken on windows (screen snapshot)
+	[winapi.VK_SCROLL]   = 'scrolllock',  --win keyboard; mapped to 'F14' on mac
+	[winapi.VK_PAUSE]    = 'break',       --win keyboard; mapped to 'F15' on mac
 
-	capslock    = winapi.VK_CAPITAL,
-	numlock     = winapi.VK_NUMLOCK,
-	scrolllock  = winapi.VK_SCROLL, --note: not on osx
-	['break']   = winapi.VK_PAUSE,  --note: not on osx
-	printscreen = winapi.VK_SNAPSHOT,
+	[winapi.VK_NUMPAD0] = 'num0',
+	[winapi.VK_NUMPAD1] = 'num1',
+	[winapi.VK_NUMPAD2] = 'num2',
+	[winapi.VK_NUMPAD3] = 'num3',
+	[winapi.VK_NUMPAD4] = 'num4',
+	[winapi.VK_NUMPAD5] = 'num5',
+	[winapi.VK_NUMPAD6] = 'num6',
+	[winapi.VK_NUMPAD7] = 'num7',
+	[winapi.VK_NUMPAD8] = 'num8',
+	[winapi.VK_NUMPAD9] = 'num9',
+	[winapi.VK_DECIMAL] = 'num.',
+	[winapi.VK_MULTIPLY] = 'num*',
+	[winapi.VK_ADD]      = 'num+',
+	[winapi.VK_SUBTRACT] = 'num-',
+	[winapi.VK_DIVIDE]   = 'num/',
+	[winapi.VK_CLEAR]    = 'numclear',
 
-	--numpad with numlock on
-	numpad0 = winapi.VK_NUMPAD0,
-	numpad1 = winapi.VK_NUMPAD1,
-	numpad2 = winapi.VK_NUMPAD2,
-	numpad3 = winapi.VK_NUMPAD3,
-	numpad4 = winapi.VK_NUMPAD4,
-	numpad5 = winapi.VK_NUMPAD5,
-	numpad6 = winapi.VK_NUMPAD6,
-	numpad7 = winapi.VK_NUMPAD7,
-	numpad8 = winapi.VK_NUMPAD8,
-	numpad9 = winapi.VK_NUMPAD9,
-	['numpad.'] = winapi.VK_DECIMAL,
+	[winapi.VK_VOLUME_MUTE] = 'mute',
+	[winapi.VK_VOLUME_DOWN] = 'volumedown',
+	[winapi.VK_VOLUME_UP]   = 'volumeup',
 
-	--numpad with numlock off
-	numpadclear     = winapi.VK_CLEAR, --numpad 5 with numlock off
-	numpadleft      = winapi.VK_LEFT,
-	numpadup        = winapi.VK_UP,
-	numpadright     = winapi.VK_RIGHT,
-	numpaddown      = winapi.VK_DOWN,
-	numpadpageup    = winapi.VK_PRIOR,
-	numpadpagedown  = winapi.VK_NEXT,
-	numpadend       = winapi.VK_END,
-	numpadhome      = winapi.VK_HOME,
-	numpadinsert    = winapi.VK_INSERT,
-	numpaddelete    = winapi.VK_DELETE,
+	[0xff]           = 'lwin', --win keyboard; mapped to 'lcommand' on mac
+	[winapi.VK_RWIN] = 'rwin', --win keyboard; mapped to 'rcommand' on mac
+	[winapi.VK_APPS] = 'menu', --win keyboard
 
-	--numpad (single function)
-	['numpad*'] = winapi.VK_MULTIPLY,
-	['numpad+'] = winapi.VK_ADD,
-	['numpad-'] = winapi.VK_SUBTRACT,
-	['numpad/'] = winapi.VK_DIVIDE,
-	numpadenter = winapi.VK_RETURN,
-
-	--multimedia
-	mute = winapi.VK_VOLUME_MUTE,
-	volumedown = winapi.VK_VOLUME_DOWN,
-	volumeup = winapi.VK_VOLUME_UP,
-
-	--windows keyboard
-	lwin = 0xff,
-	rwin = winapi.VK_RWIN,
-	menu = winapi.VK_APPS,
+	[winapi.VK_OEM_NEC_EQUAL] = 'num=', --mac keyboard
 }
 
---key codes for 0-9 and A-Z keys are ascii codes
-
-for ascii = string.byte('0'), string.byte('9') do
-	keycodes[string.char(ascii)] = ascii
+for ascii = string.byte('0'), string.byte('9') do --ASCII 0-9 -> '0'-'9'
+	keynames[ascii] = string.char(ascii)
 end
 
-for ascii = string.byte('A'), string.byte('Z') do
-	keycodes[string.char(ascii)] = ascii
+for ascii = string.byte('A'), string.byte('Z') do --ASCII A-Z -> 'A'-'Z'
+	keynames[ascii] = string.char(ascii)
 end
 
---key codes when the extended_key flag is set
+local keynames_ext = {}
 
-local ext_keycodes = {
+keynames_ext[false] = { --vkey code -> vkey name when flags.extended_key is false
 
-	rctrl = winapi.VK_CONTROL,
-	ralt  = winapi.VK_MENU,
+	[winapi.VK_CONTROL] = 'lctrl',
+	[winapi.VK_MENU]    = 'lalt',
 
-	left  = winapi.VK_LEFT,
-	up    = winapi.VK_UP,
-	right = winapi.VK_RIGHT,
-	down  = winapi.VK_DOWN,
-
-	pageup   = winapi.VK_PRIOR,
-	pagedown = winapi.VK_NEXT,
-	['end']  = winapi.VK_END,
-	home     = winapi.VK_HOME,
-	insert   = winapi.VK_INSERT,
-	delete   = winapi.VK_DELETE,
+	[winapi.VK_LEFT]   = 'numleft',
+	[winapi.VK_UP]     = 'numup',
+	[winapi.VK_RIGHT]  = 'numright',
+	[winapi.VK_DOWN]   = 'numdown',
+	[winapi.VK_PRIOR]  = 'numpageup',
+	[winapi.VK_NEXT]   = 'numpagedown',
+	[winapi.VK_END]    = 'numend',
+	[winapi.VK_HOME]   = 'numhome',
+	[winapi.VK_INSERT] = 'numinsert',
+	[winapi.VK_DELETE] = 'numdelete',
+	[winapi.VK_RETURN] = 'enter!',
 }
 
---translation of keys so that numlock doesn't matter
-local numlock_on_keys = {
-	numpadleft      = 'numpad4',
-	numpadup        = 'numpad8',
-	numpadright     = 'numpad6',
-	numpaddown      = 'numpad2',
-	numpadpageup    = 'numpad9',
-	numpadpagedown  = 'numpad3',
-	numpadend       = 'numpad1',
-	numpadhome      = 'numpad7',
-	numpadinsert    = 'numpad0',
-	numpaddelete    = 'numpad.',
+keynames_ext[true] = { --vkey code -> vkey name when flags.extended_key is true
+
+	[winapi.VK_CONTROL] = 'rctrl',
+	[winapi.VK_MENU]    = 'ralt',
+
+	[winapi.VK_LEFT]    = 'left!',
+	[winapi.VK_UP]      = 'up!',
+	[winapi.VK_RIGHT]   = 'right!',
+	[winapi.VK_DOWN]    = 'down!',
+	[winapi.VK_PRIOR]   = 'pageup!',
+	[winapi.VK_NEXT]    = 'pagedown!',
+	[winapi.VK_END]     = 'end!',
+	[winapi.VK_HOME]    = 'home!',
+	[winapi.VK_INSERT]  = 'insert!',
+	[winapi.VK_DELETE]  = 'delete!',
+	[winapi.VK_RETURN]  = 'numenter',
 }
 
-local keynames = glue.index(keycodes)
-local ext_keynames = glue.index(ext_keycodes)
+local keycodes  = glue.index(keynames)
 
-local function keyname(vk, flags)
+--additional key codes that we can query directly
+keycodes.lctrl    = winapi.VK_LCONTROL
+keycodes.lalt     = winapi.VK_LMENU
+keycodes.rctrl    = winapi.VK_RCONTROL
+keycodes.ralt     = winapi.VK_RMENU
+
+--ambiguous key codes that we can query directly
+keycodes.ctrl     = winapi.VK_CONTROL
+keycodes.alt      = winapi.VK_MENU
+keycodes.left     = winapi.VK_LEFT
+keycodes.up       = winapi.VK_UP
+keycodes.right    = winapi.VK_RIGHT
+keycodes.down     = winapi.VK_DOWN
+keycodes.pageup   = winapi.VK_PRIOR
+keycodes.pagedown = winapi.VK_NEXT
+keycodes['end']   = winapi.VK_END
+keycodes.home     = winapi.VK_HOME
+keycodes.insert   = winapi.VK_INSERT
+keycodes.delete   = winapi.VK_DELETE
+keycodes.enter    = winapi.VK_RETURN
+
+local ignore_numlock_keys = {
+	numdelete   = 'num.',
+	numinsert   = 'num0',
+	numend      = 'num1',
+	numdown     = 'num2',
+	numpagedown = 'num3',
+	numleft     = 'num4',
+	numclear    = 'num5',
+	numright    = 'num6',
+	numhome     = 'num7',
+	numup       = 'num8',
+	numpageup   = 'num9',
+}
+
+local numlock_off_keys = glue.index(ignore_numlock_keys)
+
+local keystate
+local repeatstate
+local altgr
+
+function window:reset_keystate()
+	keystate = {}
+	repeatstate = {}
+	altgr = nil
+end
+
+function Window:setkey(vk, flags, down)
 	if vk == winapi.VK_SHIFT then
-		vk = winapi.MapVirtualKey(flags.scan_code, winapi.MAPVK_VSC_TO_VK_EX)
+		return --shift is handled using raw input because we don't get key up on shift if the other shift is pressed!
 	end
-	local key = flags.extended_key and ext_keynames[vk] or keynames[vk]
-	if not key then return end
-	return numlock_on_keys[key] or key
+	if winapi.IsAltGr(vk, flags) then
+		altgr = true --next key is 'ralt' which we'll make into 'altgr'
+		return
+	end
+	local name = keynames_ext[flags.extended_key][vk] or keynames[vk]
+	if altgr then
+		altgr = nil
+		if name == 'ralt' then
+			name = 'altgr'
+		end
+	end
+	if not keycodes[name] then --save the state of this key because we can't get it with GetKeyState()
+		keystate[name] = down
+	end
+	if self.app:ignore_numlock() then --ignore the state of the numlock key (for games)
+		name = ignore_numlock_keys[name] or name
+	end
+	return name
 end
+
+--prevent repeating these keys to emulate OSX behavior, and also because flags.prev_key_state
+--doesn't work for them.
+local norepeat = glue.index{'lshift', 'rshift', 'lalt', 'ralt', 'altgr', 'lctrl', 'rctrl', 'capslock'}
 
 function Window:on_key_down(vk, flags)
-	local lkey, pkey = keyname(vk, flags)
-	if not flags.prev_key_state then
-		self.delegate:_backend_keydown(lkey, pkey)
+	local key = self:setkey(vk, flags, true)
+	if not key then return end
+	if norepeat[key] then
+		if not repeatstate[key] then
+			repeatstate[key] = true
+			self.delegate:_backend_keydown(key)
+			self.delegate:_backend_keypress(key)
+		end
+	elseif not flags.prev_key_state then
+		self.delegate:_backend_keydown(key)
+		self.delegate:_backend_keypress(key)
+	else
+		self.delegate:_backend_keypress(key)
 	end
-	self.delegate:_backend_keypress(lkey, pkey)
 end
 
 function Window:on_key_up(vk, flags)
-	local lkey, pkey = keyname(vk, flags)
-	self.delegate:_backend_keyup(lkey, pkey)
+	local key = self:setkey(vk, flags, false)
+	if not key then return end
+	if norepeat[key] then
+		repeatstate[key] = false
+	end
+	self.delegate:_backend_keyup(key)
 end
 
 --we get the ALT key with these messages instead
@@ -658,15 +734,97 @@ function Window:WM_SYSCOMMAND(sc, char_code)
 	end
 end
 
-local toggle_key = {capslock = true, numlock = true, scrolllock = true}
+local toggle_keys = glue.index{'capslock', 'numlock', 'scrolllock'}
 
-function window:key(key) --down[, toggled]
-	local down, toggled = winapi.GetKeyState(assert(keycodes[key] or ext_keycodes[key], 'invalid key name'))
-	if toggle_key[key] then
-		return down, toggled
+function window:key(name)
+	if name:find'^%^' then --'^key' means get the toggle state for that key
+		name = name:sub(2)
+		if not toggle_keys[name] then return false end --windows has toggle state for all keys, we don't want that.
+		local keycode = keycodes[name]
+		if not keycode then return false end
+		local _, on = winapi.GetKeyState(keycode)
+		return on
+	else
+		if numlock_off_keys[name]
+			and self.app:ignore_numlock()
+			and not self:key'^numlock'
+		then
+			return self:key(numlock_off_keys[name])
+		end
+		local keycode = keycodes[name]
+		if keycode then
+			return (winapi.GetKeyState(keycode))
+		else
+			return keystate[name] or false
+		end
 	end
-	return down
 end
+
+function Window:on_raw_input(raw)
+
+	--handle shift key presses
+	local vk = raw.data.keyboard.VKey
+	if vk == winapi.VK_SHIFT then
+		vk = winapi.MapVirtualKey(raw.data.keyboard.MakeCode, winapi.MAPVK_VSC_TO_VK_EX)
+		local key = vk == winapi.VK_LSHIFT and 'lshift' or 'rshift'
+		if bit.band(raw.data.keyboard.Flags, 1) == 0 then --keydown
+			if not repeatstate[key] then
+				keystate.shift = true
+				keystate[key] = true
+				repeatstate[key] = true
+				self.delegate:_backend_keydown(key)
+				self.delegate:_backend_keypress(key)
+			end
+		else
+			keystate.shift = false
+			keystate[key] = false
+			repeatstate[key] = false
+			self.delegate:_backend_keyup(key)
+		end
+	end
+end
+
+--[[
+local function memoize(func)
+	local cache = setmetatable({}, {__mode = 'v'})
+	return function(k)
+		local v = cache[k]
+		if v == nil then
+			v = func(k)
+			cache[k] = v
+		end
+		return v
+	end
+end
+
+local parse_shortcut = memoize(function(s) --'ctrl+shift+F10' -> {'ctrl', 'shift', 'F10'}
+	--escape '+'
+	local esc
+	if s:find('num+', nil, true) then esc = true; s = s:gsub('num%+', 'num#') end
+	if s:find('++',   nil, true) then esc = true; s = s:gsub('%+%+', '+#') end
+	if s:find'^%+'               then esc = true; s = s:gsub('^%+', '#') end
+	local t = {}
+	for s in glue.gsplit(s, '+', nil, true) do
+		if esc then s = s:gsub('#', '+') end --unescape
+		t[#t+1] = s
+	end
+	return t
+end)
+
+local function get_key_combination(s) --'name+name+...'
+	if s == '' then return end
+	for i,s in ipairs(parse_shortcut(s)) do
+		if s == '' then return end
+		local down = get_key(s)
+		if not down then return down end
+	end
+	return true
+end
+
+function window:key(s)
+	return get_key_combination(s)
+end
+]]
 
 --mouse
 
@@ -685,8 +843,8 @@ function Window:setmouse(x, y, buttons)
 	m.left = buttons.lbutton
 	m.right = buttons.rbutton
 	m.middle = buttons.mbutton
-	m.xbutton1 = buttons.xbutton1
-	m.xbutton2 = buttons.xbutton2
+	m.ex1 = buttons.xbutton1
+	m.ex2 = buttons.xbutton2
 
 	--send hover
 	if not m.inside then
@@ -745,11 +903,11 @@ function Window:on_xbutton_down(x, y, buttons)
 	self:setmouse(x, y, buttons)
 	if buttons.xbutton1 then
 		self:capture_mouse()
-		self.delegate:_backend_mousedown'xbutton1'
+		self.delegate:_backend_mousedown'ex1'
 	end
 	if buttons.xbutton2 then
 		self:capture_mouse()
-		self.delegate:_backend_mousedown'xbutton2'
+		self.delegate:_backend_mousedown'ex2'
 	end
 end
 
@@ -775,11 +933,11 @@ function Window:on_xbutton_up(x, y, buttons)
 	self:setmouse(x, y, buttons)
 	if buttons.xbutton1 then
 		self:uncapture_mouse()
-		self.delegate:_backend_mouseup'xbutton1'
+		self.delegate:_backend_mouseup'ex1'
 	end
 	if buttons.xbutton2 then
 		self:uncapture_mouse()
-		self.delegate:_backend_mouseup'xbutton2'
+		self.delegate:_backend_mouseup'ex2'
 	end
 end
 

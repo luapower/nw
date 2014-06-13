@@ -1,34 +1,39 @@
---native widgets cococa backend (Cosmin Apreutesei, public domain).
+--native widgets cococa backend (Cosmin Apreutesei, public domain)
 
---cocoa lessons:
---windows are created hidden by default.
+--cocoa notes, or why cocoa sucks:
+
 --zoom()'ing a hidden window does not show it (but does change its maximized flag).
---orderOut() doesn't hide window if it's the key window (instead it disables mouse on it making it appear frozen).
+--orderOut() doesn't hide a window if it's the key window (instead it disables mouse on it making it appear frozen).
 --makeKeyWindow() and makeKeyAndOrderFront() do the same thing (both bring the window to front).
 --isVisible() returns false both when the window is orderOut() and when it's minimized().
---activateIgnoringOtherApps(false) puts windows created after behind the active app.
---activateIgnoringOtherApps(true) puts windows created after in front of the active app.
+--windows created after calling activateIgnoringOtherApps(false) go behind the active app.
+--windows created after calling activateIgnoringOtherApps(true) go in front of the active app.
 --only the windows made key after the call to activateIgnoringOtherApps(true) are put in front of the active app!
 --quitting the app from the app's Dock menu (or calling terminate(nil)) calls appShouldTerminate, then calls close()
---on all windows, thus without calling windowShouldClose, but only windowWillClose.
+--  on all windows, thus without calling windowShouldClose, but only windowWillClose.
 --there's no windowDidClose event and so windowDidResignKey comes after windowWillClose.
 --screen:visibleFrame() is in virtual screen coordinates just like winapi's MONITORINFO.
 --applicationWillTerminate() is never called.
---terminate() doesn't return, unless applicationShouldTerminate returns false
---creating and closing a window and not starting the app loop at all segfaults on exit (is this TLC or cocoa?).
+--terminate() doesn't return, unless applicationShouldTerminate() returns false.
+--no keyDown() for modifier keys, must use flagsChanged().
+--flagsChanged() returns undocumented, and possibly not portable bits to distinguish between left/right modifier keys.
+--these bits are not given with NSEvent:modifierFlags(), so we can't get the initial state of specific modifier keys.
+--no keyDown() on the 'help' key (which is the 'insert' key on a win keyboard).
+--flagsChanged() can only get you so far in simulating keyDown/keyUp events for the modifier keys:
+--  holding down these keys won't trigger repeated key events.
+--  can't know when capslock is depressed, only when it is pressed.
+--no event while moving a window - frame() is not updated while moving the window either.
 
 local ffi = require'ffi'
 local bit = require'bit'
 local glue = require'glue'
 local objc = require'objc'
+local box2d = require'box2d'
 
 objc.load'Foundation'
 objc.load'AppKit'
-objc.load'System'
-objc.load'CoreServices'
-objc.load'/System/Library/Frameworks/Carbon.framework/Versions/Current/Frameworks/HIToolbox.framework' --for key codes
-
-io.stdout:setvbuf'no'
+objc.load'System' --for mach_absolute_time
+objc.load'Carbon.HIToolbox' --for key codes
 
 local function unpack_rect(r)
 	return r.origin.x, r.origin.y, r.size.width, r.size.height
@@ -117,19 +122,19 @@ end
 --displays
 
 --convert rect from bottom-up relative-to-main-screen space to top-down relative-to-main-screen space
-local function flip_rect(main_h, x, y, w, h)
-	return x,  main_h - h - y, w, h
+local function flip_screen_rect(main_h, x, y, w, h)
+	main_h = main_h or objc.NSScreen:mainScreen():frame().size.height
+	return x, main_h - h - y, w, h
 end
 
 local function display(main_h, screen)
 	local t = {}
-	t.x, t.y, t.w, t.h = flip_rect(main_h, unpack_rect(screen:frame()))
-	t.client_x, t.client_y, t.client_w, t.client_h = flip_rect(main_h, unpack_rect(screen:visibleFrame()))
+	t.x, t.y, t.w, t.h = flip_screen_rect(main_h, unpack_rect(screen:frame()))
+	t.client_x, t.client_y, t.client_w, t.client_h = flip_screen_rect(main_h, unpack_rect(screen:visibleFrame()))
 	return t
 end
 
 function app:displays()
-	objc.NSScreen:mainScreen() --calling this before calling screens() prevents a weird NSRecursiveLock error
 	local screens = objc.NSScreen:screens()
 
 	--get main_h from the screens snapshot array
@@ -146,8 +151,7 @@ function app:displays()
 end
 
 function app:main_display()
-	local screen = objc.NSScreen:mainScreen()
-	return display(screen:frame().size.height, screen)
+	return display(nil, screen)
 end
 
 --double-clicking info
@@ -187,63 +191,6 @@ app.window_class = window
 
 local NWWindow = objc.class('NWWindow', 'NSWindow <NSWindowDelegate>')
 
-function NWWindow:windowShouldClose()
-	return self.api:_backend_closing() or false
-end
-
-function NWWindow:windowWillClose()
-	--defer closing on deactivation so that 'deactivated' event is sent before the 'closed' event
-	if self.win:active() then
-		self._close_on_deactivate = true
-	else
-		self.api:_backend_closed()
-	end
-end
-
-function NWWindow:windowDidBecomeKey()
-	self.api:_backend_activated()
-end
-
-function NWWindow:windowDidResignKey()
-	self.api:_backend_deactivated()
-
-	--check for defered close
-	if self._close_on_deactivate then
-		self.api:_backend_closed()
-	end
-end
-
---fullscreen mode
-
-function NWWindow:windowWillEnterFullScreen()
-	print'enter fullscreen'
-	--self:toggleFullScreen(nil)
-	self:setStyleMask(self:styleMask() + objc.NSFullScreenWindowMask)
-	--self:contentView():enterFullScreenMode_withOptions(objc.NSScreen:mainScreen(), nil)
-end
-
-function NWWindow:windowWillExitFullScreen()
-	print'exit fullscreen'
-end
-
-function NWWindow:willUseFullScreenPresentationOptions(options)
-	print('here1', options)
-	return options
-end
-
---TODO: hack
-objc.override(NWWindow, 'willUseFullScreenContentSize', function(size)
-	print('here2', size)
-end, 'd@:@dd')
-
-function NWWindow:customWindowsToEnterFullScreenForWindow()
-	return {self}
-end
-
-function NWWindow:customWindowsToExitFullScreenForWindow()
-	return {self}
-end
-
 function window:new(app, api, t)
 	self = glue.inherit({app = app, api = api}, self)
 
@@ -255,13 +202,17 @@ function window:new(app, api, t)
 						t.frame == 'none' and bit.bor(objc.NSBorderlessWindowMask) or
 						t.frame == 'transparent' and bit.bor(objc.NSBorderlessWindowMask) --TODO
 
-	local main_h = objc.NSScreen:mainScreen():frame().size.height
-	local frame_rect = objc.NSMakeRect(flip_rect(main_h, t.x, t.y, t.w, t.h))
+	local frame_rect = objc.NSMakeRect(flip_screen_rect(nil, t.x, t.y, t.w, t.h))
 	local content_rect = objc.NSWindow:contentRectForFrameRect_styleMask(frame_rect, style)
 
 	self.nswin = NWWindow:alloc():initWithContentRect_styleMask_backing_defer(
 							content_rect, style, objc.NSBackingStoreBuffered, false)
-	self.nswin:setReleasedWhenClosed(false)
+
+	ffi.gc(self.nswin, nil) --disown
+
+	self.nswin:setMovable(false)
+
+	self.nswin:reset_keystate()
 
 	if t.fullscreenable then
 		self.nswin:setCollectionBehavior(objc.NSWindowCollectionBehaviorFullScreenPrimary)
@@ -271,10 +222,8 @@ function window:new(app, api, t)
 		t.parent.backend.nswin:addChildWindow_ordered(self.nswin, objc.NSWindowAbove)
 	end
 
-	--self.nswin:setAcceptsMouseMovedEvents(true)
-
 	local opts = bit.bor(
-		objc.NSTrackingActiveAlways,
+		objc.NSTrackingActiveInKeyWindow,
 		objc.NSTrackingInVisibleRect,
 		objc.NSTrackingMouseEnteredAndExited,
 		objc.NSTrackingMouseMoved)
@@ -312,6 +261,69 @@ function window:new(app, api, t)
 	self._visible = false
 
 	return self
+end
+
+function NWWindow:windowShouldClose()
+	return self.api:_backend_closing() or false
+end
+
+function NWWindow:windowWillClose()
+	--defer closing on deactivation so that 'deactivated' event is sent before the 'closed' event
+	if self.win:active() then
+		self._close_on_deactivate = true
+	else
+		self.api:_backend_closed()
+		self.nswin = nil
+	end
+end
+
+function NWWindow:windowDidBecomeKey()
+	self.dragging = false
+	self:reset_keystate()
+	self.api:_backend_activated()
+end
+
+function NWWindow:windowDidResignKey()
+	self.dragging = false
+	self:reset_keystate()
+	self.api:_backend_deactivated()
+
+	--check for defered close
+	if self._close_on_deactivate then
+		self.api:_backend_closed()
+		self.nswin = nil
+	end
+end
+
+--fullscreen mode
+
+function NWWindow:windowWillEnterFullScreen()
+	print'enter fullscreen'
+	--self:toggleFullScreen(nil)
+	self:setStyleMask(self:styleMask() + objc.NSFullScreenWindowMask)
+	--self:contentView():enterFullScreenMode_withOptions(objc.NSScreen:mainScreen(), nil)
+end
+
+function NWWindow:windowWillExitFullScreen()
+	print'exit fullscreen'
+end
+
+function NWWindow:willUseFullScreenPresentationOptions(options)
+	print('here1', options)
+	return options
+end
+
+--TODO: hack
+objc.override(NWWindow, 'willUseFullScreenContentSize', function(size)
+	print('here2', size)
+end, 'd@:@dd')
+
+function NWWindow:customWindowsToEnterFullScreenForWindow()
+	return {self}
+end
+
+function NWWindow:customWindowsToExitFullScreenForWindow()
+	return {self}
 end
 
 --closing
@@ -430,10 +442,118 @@ function window:fullscreen(fullscreen)
 	end
 end
 
+--positioning
+
+function NWWindow:flip_y(x, y) --flip a contentView-relative y coordinate
+	return x, self:contentView():frame().size.height - y
+end
+
+function NWWindow:titlebar_rect()
+	local cr = self:contentView():convertRect_toView(self:contentView():bounds(), nil)
+	local fr = self:convertRectFromScreen(self:frame())
+	--fr.size.width
+
+	print('cr', unpack_rect(cr))
+	print('fr', unpack_rect(fr))
+end
+
+function NWWindow:titlebar_hit(event)
+	local mp = event:locationInWindow()
+	local rc = self:contentView():bounds()
+	return not box2d.hit(mp.x, mp.y, unpack_rect(rc))
+end
+
+local buttons = {
+	objc.NSWindowCloseButton,
+	objc.NSWindowMiniaturizeButton,
+	objc.NSWindowZoomButton,
+	objc.NSWindowToolbarButton,
+	objc.NSWindowDocumentIconButton,
+	objc.NSWindowDocumentVersionsButton,
+	objc.NSWindowFullScreenButton,
+}
+function NWWindow:titlebar_buttons_hit(event)
+	for i,btn in ipairs(buttons) do
+		local button = self:standardWindowButton(btn)
+		if button then
+			if button:hitTest(button:superview():convertPoint_fromView(event:locationInWindow(), nil)) then
+				return true
+			end
+		end
+	end
+end
+
+function NWWindow:sendEvent(event)
+	--take over window dragging by the titlebar so that we can post moving events
+	local etype = event:type()
+	if self.dragging then
+		self:titlebar_rect()
+		if etype == objc.NSLeftMouseDragged then
+			local mp = event:mouseLocation() --self:convertBaseToScreen(event:locationInWindow())
+			mp.x = mp.x - self.dragoffset.x
+			mp.y = mp.y - self.dragoffset.y
+			local frame = self:frame()
+			local x, y, w, h = self.api:_backend_resizing('move', mp.x, mp.y, frame.size.width, frame.size.height)
+			if x then
+				self:setFrame(NSMakeRect(x, y, w, h))
+			else
+				self:setFrameOrigin(mp)
+			end
+			return
+		elseif etype == objc.NSLeftMouseUp then
+			self.dragging = false
+			return
+		end
+	elseif etype == objc.NSLeftMouseDown and self:titlebar_hit(event) and not self:titlebar_buttons_hit(event) then
+		self.dragging = true
+		local mp = event:mouseLocation() --self:convertBaseToScreen(event:locationInWindow())
+		local wp = self:frame().origin
+		mp.x = mp.x - wp.x
+		mp.y = mp.y - wp.y
+		self.dragoffset = mp
+		self.dragging = true
+		return
+	end
+	objc.callsuper(self, 'sendEvent', event)
+end
+
+function NWWindow:windowWillStartLiveResize(notification)
+	self.oldframe = self:frame()
+	self.margins = {} --{left = true, ...}
+end
+
+function NWWindow:windowDidResize(notification)
+	local x1, y1, w1, h1 = flip_screen_rect(nil, unpack_rect(self.oldframe))
+	local x2, y2, w2, h2 = flip_screen_rect(nil, unpack_rect(self:frame()))
+
+	if x2 ~= x1 then
+		self.margins.left = true
+	end
+	if y2 ~= y1 then
+		self.margins.top = true
+	end
+	if w2 ~= w1 then
+		self.margins.right = true
+	end
+	if h2 ~= h1 then
+		self.margins.bottom = true
+	end
+
+	local how = (self.margins.top and 'top') or (self.margins.bottom and 'bottom') or ''
+	how = how .. ((self.margins.left and 'left') or (self.margins.right and 'right') or '')
+
+	local x, y, w, h = self.api:_backend_resizing(how, x2, y2, w2, h2)
+	if x then
+		self:setFrame_display(NSMakeRect(x, y, w, h))
+	end
+
+	self.api:_backend_resized()
+end
+
 --frame
 
 function window:display()
-	return self.nswin:screen()
+	return display(nil, self.nswin:screen())
 end
 
 function window:title(title)
@@ -446,169 +566,265 @@ end
 
 --keyboard
 
-local keycodes = {
+local keynames = {
 
-	['0'] = objc.kVK_ANSI_0,
-	['1'] = objc.kVK_ANSI_1,
-	['2'] = objc.kVK_ANSI_2,
-	['3'] = objc.kVK_ANSI_3,
-	['4'] = objc.kVK_ANSI_4,
-	['5'] = objc.kVK_ANSI_5,
-	['6'] = objc.kVK_ANSI_6,
-	['7'] = objc.kVK_ANSI_7,
-	['8'] = objc.kVK_ANSI_8,
-	['9'] = objc.kVK_ANSI_9,
+	[objc.kVK_ANSI_0] = '0',
+	[objc.kVK_ANSI_1] = '1',
+	[objc.kVK_ANSI_2] = '2',
+	[objc.kVK_ANSI_3] = '3',
+	[objc.kVK_ANSI_4] = '4',
+	[objc.kVK_ANSI_5] = '5',
+	[objc.kVK_ANSI_6] = '6',
+	[objc.kVK_ANSI_7] = '7',
+	[objc.kVK_ANSI_8] = '8',
+	[objc.kVK_ANSI_9] = '9',
 
-	A = objc.kVK_ANSI_A,
-	B = objc.kVK_ANSI_B,
-	C = objc.kVK_ANSI_C,
-	D = objc.kVK_ANSI_D,
-	E = objc.kVK_ANSI_E,
-	F = objc.kVK_ANSI_F,
-	G = objc.kVK_ANSI_G,
-	H = objc.kVK_ANSI_H,
-	I = objc.kVK_ANSI_I,
-	J = objc.kVK_ANSI_J,
-	K = objc.kVK_ANSI_K,
-	L = objc.kVK_ANSI_L,
-	M = objc.kVK_ANSI_M,
-	N = objc.kVK_ANSI_N,
-	O = objc.kVK_ANSI_O,
-	P = objc.kVK_ANSI_P,
-	Q = objc.kVK_ANSI_Q,
-	R = objc.kVK_ANSI_R,
-	S = objc.kVK_ANSI_S,
-	T = objc.kVK_ANSI_T,
-	U = objc.kVK_ANSI_U,
-	V = objc.kVK_ANSI_V,
-	W = objc.kVK_ANSI_W,
-	X = objc.kVK_ANSI_X,
-	Y = objc.kVK_ANSI_Y,
-	Z = objc.kVK_ANSI_Z,
+	[objc.kVK_ANSI_A] = 'A',
+	[objc.kVK_ANSI_B] = 'B',
+	[objc.kVK_ANSI_C] = 'C',
+	[objc.kVK_ANSI_D] = 'D',
+	[objc.kVK_ANSI_E] = 'E',
+	[objc.kVK_ANSI_F] = 'F',
+	[objc.kVK_ANSI_G] = 'G',
+	[objc.kVK_ANSI_H] = 'H',
+	[objc.kVK_ANSI_I] = 'I',
+	[objc.kVK_ANSI_J] = 'J',
+	[objc.kVK_ANSI_K] = 'K',
+	[objc.kVK_ANSI_L] = 'L',
+	[objc.kVK_ANSI_M] = 'M',
+	[objc.kVK_ANSI_N] = 'N',
+	[objc.kVK_ANSI_O] = 'O',
+	[objc.kVK_ANSI_P] = 'P',
+	[objc.kVK_ANSI_Q] = 'Q',
+	[objc.kVK_ANSI_R] = 'R',
+	[objc.kVK_ANSI_S] = 'S',
+	[objc.kVK_ANSI_T] = 'T',
+	[objc.kVK_ANSI_U] = 'U',
+	[objc.kVK_ANSI_V] = 'V',
+	[objc.kVK_ANSI_W] = 'W',
+	[objc.kVK_ANSI_X] = 'X',
+	[objc.kVK_ANSI_Y] = 'Y',
+	[objc.kVK_ANSI_Z] = 'Z',
 
-	[';'] = objc.kVK_ANSI_Semicolon,
-	['+'] = objc.kVK_ANSI_Equal,
-	[','] = objc.kVK_ANSI_Comma,
-	['-'] = objc.kVK_ANSI_Minus,
-	['.'] = objc.kVK_ANSI_Period,
-	['/'] = objc.kVK_ANSI_Slash,
-	['`'] = objc.kVK_ANSI_Grave,
-	['['] = objc.kVK_ANSI_LeftBracket,
-	['\\'] = objc.kVK_ANSI_Backslash,
-	[']'] = objc.kVK_ANSI_RightBracket,
-	["'"] = objc.kVK_ANSI_Quote,
+	[objc.kVK_ANSI_Semicolon]    = ';',
+	[objc.kVK_ANSI_Equal]        = '=',
+	[objc.kVK_ANSI_Comma]        = ',',
+	[objc.kVK_ANSI_Minus]        = '-',
+	[objc.kVK_ANSI_Period]       = '.',
+	[objc.kVK_ANSI_Slash]        = '/',
+	[objc.kVK_ANSI_Grave]        = '`',
+	[objc.kVK_ANSI_LeftBracket]  = '[',
+	[objc.kVK_ANSI_Backslash]    = '\\',
+	[objc.kVK_ANSI_RightBracket] = ']',
+	[objc.kVK_ANSI_Quote]        = '\'',
 
-	backspace   = objc.kVK_Delete,
-	tab         = objc.kVK_Tab,
-	enter       = objc.kVK_Return,
-	space       = objc.kVK_Space,
-	esc         = objc.kVK_Escape,
+	[objc.kVK_Delete] = 'backspace',
+	[objc.kVK_Tab]    = 'tab',
+	[objc.kVK_Space]  = 'space',
+	[objc.kVK_Escape] = 'esc',
+	[objc.kVK_Return] = 'enter!',
 
-	F1 = objc.kVK_F1,
-	F2 = objc.kVK_F2,
-	F3 = objc.kVK_F3,
-	F4 = objc.kVK_F4,
-	F5 = objc.kVK_F5,
-	F6 = objc.kVK_F6,
-	F7 = objc.kVK_F7,
-	F8 = objc.kVK_F8,
-	F9 = objc.kVK_F9,
-	F10 = objc.kVK_F10,
-	F11 = objc.kVK_F11, --captured: show desktop
-	F12 = objc.kVK_F12, --captured: show the wachamacalit wall with the calendar and clock
+	[objc.kVK_F1]  = 'F1',
+	[objc.kVK_F2]  = 'F2',
+	[objc.kVK_F3]  = 'F3',
+	[objc.kVK_F4]  = 'F4',
+	[objc.kVK_F5]  = 'F5',
+	[objc.kVK_F6]  = 'F6',
+	[objc.kVK_F7]  = 'F7',
+	[objc.kVK_F8]  = 'F8',
+	[objc.kVK_F9]  = 'F9',
+	[objc.kVK_F10] = 'F10',
+	[objc.kVK_F11] = 'F11', --taken on mac (show desktop)
+	[objc.kVK_F12] = 'F12', --taken on mac (show dashboard)
 
-	shift  = objc.kVK_Shift,
-	ctrl   = objc.kVK_Control,
-	alt    = objc.kVK_Option,
-	lshift = objc.kVK_Shift,
-	rshift = objc.kVK_RightShift,
-	lctrl  = objc.kVK_Control,
-	rctrl  = objc.kVK_RightControl,
-	lalt   = objc.kVK_Option,
-	ralt   = objc.kVK_RightOption,
+	[objc.kVK_CapsLock] = 'capslock',
 
-	capslock    = objc.kVK_CapsLock,
-	numlock     = 71,  --but no light (also this is kVK_ANSI_KeypadClear wtf)
-	scrolllock  = nil, --captured: brightness down
-	['break']   = nil, --captured: brightness up
-	printscreen = objc.kVK_F13,
+	[objc.kVK_LeftArrow]     = 'left!',
+	[objc.kVK_UpArrow]       = 'up!',
+	[objc.kVK_RightArrow]    = 'right!',
+	[objc.kVK_DownArrow]     = 'down!',
 
-	left        = objc.kVK_LeftArrow,
-	up          = objc.kVK_UpArrow,
-	right       = objc.kVK_RightArrow,
-	down        = objc.kVK_DownArrow,
+	[objc.kVK_PageUp]        = 'pageup!',
+	[objc.kVK_PageDown]      = 'pagedown!',
+	[objc.kVK_Home]          = 'home!',
+	[objc.kVK_End]           = 'end!',
+	[objc.kVK_Help]          = 'help', --mac keyboard; 'insert!' key on win keyboard; no keydown, only keyup
+	[objc.kVK_ForwardDelete] = 'delete!',
 
-	pageup      = objc.kVK_PageUp,
-	pagedown    = objc.kVK_PageDown,
-	home        = objc.kVK_Home,
-	['end']     = objc.kVK_End,
-	insert      = objc.kVK_Help,
-	delete      = objc.kVK_ForwardDelete,
+	[objc.kVK_ANSI_Keypad0] = 'num0',
+	[objc.kVK_ANSI_Keypad1] = 'num1',
+	[objc.kVK_ANSI_Keypad2] = 'num2',
+	[objc.kVK_ANSI_Keypad3] = 'num3',
+	[objc.kVK_ANSI_Keypad4] = 'num4',
+	[objc.kVK_ANSI_Keypad5] = 'num5',
+	[objc.kVK_ANSI_Keypad6] = 'num6',
+	[objc.kVK_ANSI_Keypad7] = 'num7',
+	[objc.kVK_ANSI_Keypad8] = 'num8',
+	[objc.kVK_ANSI_Keypad9] = 'num9',
+	[objc.kVK_ANSI_KeypadDecimal]  = 'num.',
+	[objc.kVK_ANSI_KeypadMultiply] = 'num*',
+	[objc.kVK_ANSI_KeypadPlus]     = 'num+',
+	[objc.kVK_ANSI_KeypadMinus]    = 'num-',
+	[objc.kVK_ANSI_KeypadDivide]   = 'num/',
+	[objc.kVK_ANSI_KeypadEquals]   = 'num=',     --mac keyboard
+	[objc.kVK_ANSI_KeypadEnter]    = 'numenter',
+	[objc.kVK_ANSI_KeypadClear]    = 'numclear', --mac keyboard; 'numlock' key on win keyboard
 
-	--numpad (numlock doesn't work)
-	numpad0 = objc.kVK_ANSI_Keypad0,
-	numpad1 = objc.kVK_ANSI_Keypad1,
-	numpad2 = objc.kVK_ANSI_Keypad2,
-	numpad3 = objc.kVK_ANSI_Keypad3,
-	numpad4 = objc.kVK_ANSI_Keypad4,
-	numpad5 = objc.kVK_ANSI_Keypad5,
-	numpad6 = objc.kVK_ANSI_Keypad6,
-	numpad7 = objc.kVK_ANSI_Keypad7,
-	numpad8 = objc.kVK_ANSI_Keypad8,
-	numpad9 = objc.kVK_ANSI_Keypad9,
-	['numpad.'] = objc.kVK_ANSI_KeypadDecimal,
+	[objc.kVK_Mute]       = 'mute',
+	[objc.kVK_VolumeDown] = 'volumedown',
+	[objc.kVK_VolumeUp]   = 'volumeup',
 
-	--numpad (single function)
-	['numpad*'] = objc.kVK_ANSI_KeypadMultiply,
-	['numpad+'] = objc.kVK_ANSI_KeypadPlus,
-	['numpad-'] = objc.kVK_ANSI_KeypadMinus,
-	['numpad/'] = objc.kVK_ANSI_KeypadDivide,
-	numpadenter = objc.kVK_ANSI_KeypadEnter,
+	[110] = 'menu', --win keyboard
 
-	--multimedia
-	mute       = objc.kVK_Mute,
-	volumedown = objc.kVK_VolumeDown,
-	volumeup   = objc.kVK_VolumeUp,
-
-	--mac keyboard
-	command = objc.kVK_Command,
-
-	--windows keyboard
-	menu = 110,
+	[objc.kVK_F13] = 'F11', --taken (show desktop)
+	[objc.kVK_F14] = 'F12', --taken (show the wachamacalit wall with the calendar and clock)
+	[objc.kVK_F13] = 'F13', --mac keyboard; win keyboard 'printscreen' key
+	[objc.kVK_F14] = 'F14', --mac keyboard; win keyboard 'scrolllock' key; taken (brightness down)
+	[objc.kVK_F15] = 'F15', --mac keyboard; win keyboard 'break' key; taken (brightness up)
+	[objc.kVK_F16] = 'F16', --mac keyboard
+	[objc.kVK_F17] = 'F17', --mac keyboard
+	[objc.kVK_F18] = 'F18', --mac keyboard
+	[objc.kVK_F15] = 'F19', --mac keyboard
 }
 
-local keynames = glue.index(keycodes)
+local keycodes = glue.index(keynames)
+
+local function modifier_flag(mask, flags)
+	flags = flags or tonumber(objc.NSEvent:modifierFlags())
+	return bit.band(flags, mask) ~= 0
+end
+
+local function capslock_state(flags)
+	return modifier_flag(objc.NSAlphaShiftKeyMask, flags)
+end
+
+local keystate
+local capsstate
+
+function NWWindow:reset_keystate()
+	--note: platform-dependent flagbits are not given with NSEvent:modifierFlags() nor with GetKeys(),
+	--so we can't get the initial state of specific modifier keys.
+	keystate = {}
+	capsstate = capslock_state()
+end
 
 local function keyname(event)
 	local keycode = event:keyCode()
-	return keynames[keycode] or tostring(keycode)
+	return keynames[keycode]
 end
 
 function NWWindow:keyDown(event)
 	local key = keyname(event)
 	if not key then return end
+	if not event:isARepeat() then
+		self.api:_backend_keydown(key)
+	end
 	self.api:_backend_keypress(key)
 end
 
 function NWWindow:keyUp(event)
 	local key = keyname(event)
 	if not key then return end
+	if key == 'help' then --simulate the missing keydown for the help/insert key
+		self.api:_backend_keydown(key)
+	end
 	self.api:_backend_keyup(key)
+end
+
+local flagbits = {
+	--undocumented bits tested on a macbook with US keyboard
+	lctrl    = 2^0,
+	lshift   = 2^1,
+	rshift   = 2^2,
+	lcommand = 2^3, --'lwin' key on PC keyboard
+	rcommand = 2^4, --'rwin' key on PC keyboard; 'altgr' key on german PC keyboard
+	lalt     = 2^5,
+	ralt     = 2^6,
+	--bits for PC keyboard
+	rctrl    = 2^13,
+}
+
+function NWWindow:flagsChanged(event)
+	--simulate key pressing for capslock
+	local newcaps = capslock_state()
+	local oldcaps = capsstate
+	if newcaps ~= oldcaps then
+		capsstate = newcaps
+		keystate.capslock = true
+		self.api:_backend_keydown'capslock'
+		keystate.capslock = false
+		self.api:_backend_keyup'capslock'
+	end
+
+	local flags = tonumber(event:modifierFlags())
+	for name, mask in pairs(flagbits) do
+		local oldstate = keystate[name] or false
+		local newstate = bit.band(flags, mask) ~= 0
+		if oldstate ~= newstate then
+			keystate[name] = newstate
+			if newstate then
+				self.api:_backend_keydown(name)
+				self.api:_backend_keypress(name)
+			else
+				self.api:_backend_keyup(name)
+			end
+		end
+	end
+end
+
+local alt_names = { --ambiguous keys that have a single physical key mapping on mac
+	left     = 'left!',
+	up       = 'up!',
+	right    = 'right!',
+	down     = 'down!',
+	pageup   = 'pageup!',
+	pagedown = 'pagedown!',
+	['end']  = 'end!',
+	home     = 'home!',
+	insert   = 'insert!',
+	delete   = 'delete!',
+	enter    = 'enter!',
+}
+
+local keymap, pkeymap
+
+function window:key(name)
+	if name == '^capslock' then
+		return capsstate
+	elseif name == 'capslock' then
+		return keystate.capslock
+	elseif name == 'shift' then
+		return keystate.lshift or keystate.rshift or false
+	elseif name == 'ctrl' then
+		return keystate.lctrl or keystate.rctrl or false
+	elseif name == 'alt' then
+		return keystate.lalt or keystate.ralt or false
+	elseif name == 'command' then
+		return keystate.lcommand or keystate.rcommand or false
+	elseif flagbits[name] then --get modifier saved state
+		return keystate[name] or false
+	else --get normal key state
+		local keycode = keycodes[name] or keycodes[alt_names[name]]
+		if not keycode then return false end
+		keymap  = keymap or ffi.new'unsigned char[16]'
+		pkeymap = pkeymap or ffi.cast('void*', keymap)
+		objc.GetKeys(pkeymap)
+		return bit.band(bit.rshift(keymap[bit.rshift(keycode, 3)], bit.band(keycode, 7)), 1) ~= 0
+	end
 end
 
 --mouse
 
 function NWWindow:setmouse(event)
 	local m = self.api.mouse
-	local pos = event:mouseLocation()
-	m.x = pos.x
-	m.y = pos.y
+	local pos = event:locationInWindow()
+	m.x, m.y = self:flip_y(pos.x, pos.y)
 	local btns = tonumber(event:pressedMouseButtons())
 	m.left = bit.band(btns, 1) ~= 0
 	m.right = bit.band(btns, 2) ~= 0
 	m.middle = bit.band(btns, 4) ~= 0
-	m.xbutton1 = bit.band(btns, 8) ~= 0
-	m.xbutton2 = bit.band(btns, 16) ~= 0
+	m.ex1 = bit.band(btns, 8) ~= 0
+	m.ex2 = bit.band(btns, 16) ~= 0
 	return m
 end
 
@@ -632,7 +848,7 @@ function NWWindow:rightMouseUp(event)
 	self.api:_backend_mouseup'right'
 end
 
-local other_buttons = {'', 'middle', 'xbutton1', 'xbutton2'}
+local other_buttons = {'', 'middle', 'ex1', 'ex2'}
 
 function NWWindow:otherMouseDown(event)
 	local btn = other_buttons[tonumber(event:buttonNumber())]

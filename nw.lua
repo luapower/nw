@@ -86,6 +86,7 @@ nw.app_class = app
 
 app.defaults = {
 	autoquit = true, --quit after the last window closes
+	ignore_numlock = false, --ignore the state of the numlock key on keyboard events
 }
 
 --app init
@@ -95,8 +96,17 @@ function app:_new(nw)
 	self._running = false
 	self._windows = {} --{window1, ...}
 	self._autoquit = self.defaults.autoquit
+	self._ignore_numlock = self.defaults.ignore_numlock
 	self.backend = self.nw.backend:app(self)
 	return self
+end
+
+function app:ignore_numlock(on)
+	if on == nil then
+		return self._ignore_numlock
+	else
+		self._ignore_numlock = on
+	end
 end
 
 --app loop
@@ -564,29 +574,50 @@ end
 
 --keyboard
 
-function window:key(key) --down[, toggled]
-	self:check()
-	return self.backend:key(key)
+--merge virtual key names to ambiguous key names that are platform-independent
+--and can be queried on all platforms without keeping track of their state.
+local common_keynames = {
+	lshift          = 'shift',      rshift        = 'shift',
+	lctrl           = 'ctrl',       rctrl         = 'ctrl',
+	lalt            = 'alt',        ralt          = 'alt',
+	lcommand        = 'command',    rcommand      = 'command',
+
+	['left!']       = 'left',       numleft       = 'left',
+	['up!']         = 'up',         numup         = 'up',
+	['right!']      = 'right',      numright      = 'right',
+	['down!']       = 'down',       numdown       = 'down',
+	['pageup!']     = 'pageup',     numpageup     = 'pageup',
+	['pagedown!']   = 'pagedown',   numpagedown   = 'pagedown',
+	['end!']        = 'end',        numend        = 'end',
+	['home!']       = 'home',       numhome       = 'home',
+	['insert!']     = 'insert',     numinsert     = 'insert',
+	['delete!']     = 'delete',     numdelete     = 'delete',
+	['enter!']      = 'enter',      numenter      = 'enter',
+}
+
+local function translate_key(vkey)
+	return common_keynames[vkey] or vkey, vkey
 end
 
 function window:_backend_keydown(key)
-	self:_event('keydown', key)
+	self:_event('keydown', translate_key(key))
 end
 
 function window:_backend_keypress(key)
-	self:_event('keypress', key)
+	self:_event('keypress', translate_key(key))
 end
 
 function window:_backend_keyup(key)
-	self:_event('keyup', key)
-end
-
-function window:_backend_keydown(key)
-	self:_event('keydown', key)
+	self:_event('keyup', translate_key(key))
 end
 
 function window:_backend_keychar(char)
 	self:_event('keychar', char)
+end
+
+function window:key(name)
+	self:check()
+	return self.backend:key(name)
 end
 
 --mouse

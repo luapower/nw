@@ -1,3 +1,4 @@
+io.stdout:setvbuf'no'
 local nw = require'nw'
 local glue = require'glue'
 local ffi = require'ffi'
@@ -8,8 +9,6 @@ if ffi.os == 'OSX' then --loading objc over winapi will get you a crash
 	--objc.debug.logtopics.refcount = true
 end
 
-io.stdout:setvbuf'no'
-
 local app
 
 --testing helpers --------------------------------------------------------------------------------------------------------
@@ -17,75 +16,27 @@ local app
 --collecting and running tests
 
 local tests = {} --{name = test} also {test1, ...} also {test = name}
-local subproc = {} --{name = expected_exitcode}
-
-local function parsename(name) --prefix, name
-	return name:match'^(%@?)(.*)'
-end
 
 --add a named test to the tests collection
-local function add(name, f, expected_exitcode)
-	local prefix, name = parsename(name)
-	if prefix == '@' then --must run in subprocess
-		subproc[name] = expected_exitcode or 0
-	end
-	if type(f) == 'string' then f = tests[f] end --make an alias
-	table.insert(tests, f)
-	tests[name] = f
-	tests[f] = name
+local function add(name, test)
+	table.insert(tests, name)
+	tests[name] = test
 end
 
---run a test in a subprocess and expect an exit code
-local function subprocess(name)
-	local exitcode = subproc[name] or 0
-	local cmd = string.format('%sluajit %s @%s', ffi.os == 'Windows' and '' or './', arg[0], name)
-	local ret = os.execute(cmd)
-	if ret > 255 then --system() on unix returns the exit status in the high byte
-		ret = bit.rshift(ret, 8)
-	end
-	assert(ret == exitcode, string.format('%s: [%d]', cmd, ret))
-	print(string.format('exit code: %d', exitcode))
-end
-
---run a test, possibly in a subprocess if it's a '@'-marked test and not marked '@' for running.
-local function test(name)
-	local prefix, name = parsename(name)
-	if prefix == '' and subproc[name] then
-		subprocess(name)
-	else
-		app = app or nw:app()
-		tests[name]()
-	end
+local function run_test(name)
+	app = app or nw:app()
+	tests[name]()
 end
 
 --run all tests whose names match a pattern, in order
-local function test_all_matching(patt)
-	for i,f in ipairs(tests) do
-		local name = tests[f]
+local function run_all_matching(patt)
+	for i,name in ipairs(tests) do
 		if name:match(patt) then
 			print()
 			print(name)
 			print'========================='
-			test(name)
+			run_test(name)
 		end
-	end
-end
-
---command line user interface
-local function testui(name)
-	if not name then
-		print(string.format('Usage: %s <name> | <name>*', arg[0]))
-		print'Available tests:'
-		for i,test in ipairs(tests) do
-			print('', tests[test])
-		end
-	elseif name:match'%*$' then
-		test_all_matching('^'..glue.escape(name:gsub('%*', ''))..'.*')
-	elseif tests[select(2, parsename(name))] then
-		test(name)
-	else
-		print'What test was that?'
-		testui()
 	end
 end
 
@@ -521,7 +472,7 @@ end)
 
 
 
---window initial state flags  --------------------------------------------------------------------------------------------
+--window state flags  ----------------------------------------------------------------------------------------------------
 
 local flag_list = {
 	'visible', 'minimized', 'maximized', 'fullscreen',
@@ -619,25 +570,7 @@ add('states-transitions', function()
 	end)
 end)
 
---parent/child relationship
-
-add('parent', function()
-	local w1 = app:window(winpos{x = 100, y = 100, w = 500, h = 300})
-	local w2 = app:window(winpos{x = 200, y = 200, w = 500, h = 300, parent = w1})
-	function w2:closing()
-		print'w2 closing'
-	end
-	function w1:closed()
-		--w2:show()
-		--w2.backend.nswin:makeKeyAndOrderFront(nil)
-		print(w2:visible())
-	end
-	app:run()
-end)
-
---test state transitions
-
-add('@states', function()
+add('states', function()
 	local win = app:window{x = 100, y = 100, w = 300, h = 100}
 
 	local function check(s)
@@ -734,7 +667,7 @@ add('@states', function()
 	win:close()
 end)
 
---test default flags
+--default flags
 
 add('defaults', function()
 	local win = app:window(winpos())
@@ -752,14 +685,29 @@ add('defaults', function()
 	assert(win:fullscreenable())
 end)
 
---test closeable
+--positioning ------------------------------------------------------------------------------------------------------------
 
-add('@closeable', function()
+add('size', function()
+	local win = app:window(winpos())
+	function win:resizing(how, x, y, w, h)
+		print('resizing', how, x, y, w, h)
+	end
+	function win:resized()
+		print('resized')
+	end
+	app:run()
+end)
+
+--other flags ------------------------------------------------------------------------------------------------------------
+
+--closeable
+
+add('closeable', function()
 	local win = app:window(winpos{title = 'cannot close', closeable = false})
 	assert(not win:closeable())
 end)
 
---test resizeable
+--resizeable
 
 add('resizeable', function()
 	local win = app:window(winpos{title = 'fixed size', resizeable = false})
@@ -800,17 +748,35 @@ add('transparent', function()
 	assert(win:frame() == 'transparent')
 end)
 
---mouse events
+--parent/child relationship ----------------------------------------------------------------------------------------------
 
-add('mouse', function()
+add('parent', function()
+	local w1 = app:window(winpos{x = 100, y = 100, w = 500, h = 300})
+	local w2 = app:window(winpos{x = 200, y = 200, w = 500, h = 300, parent = w1})
+	function w2:closing()
+		print'w2 closing'
+	end
+	function w1:closed()
+		--w2:show()
+		--w2.backend.nswin:makeKeyAndOrderFront(nil)
+		print(w2:visible())
+	end
+	app:run()
+end)
+
+--input events -----------------------------------------------------------------------------------------------------------
+
+add('input', function()
 	local win1 = app:window(winpos())
 	local win2 = app:window(winpos())
+
+	--mouse
 	function win1:mouseenter() print'mouseenter win1' end
 	function win2:mouseenter() print'mouseenter win2' end
 	function win1:mouseleave() print'mouseleave win1' end
 	function win2:mouseleave() print'mouseleave win2' end
-	function win1:mousemove() print('mousemove win1', win1.mouse.x, win1.mouse.y) end
-	function win2:mousemove() print('mousemove win2', win2.mouse.x, win2.mouse.y) end
+	function win1:mousemove() print('mousemove win1', self.mouse.x, self.mouse.y) end
+	function win2:mousemove() print('mousemove win2', self.mouse.x, self.mouse.y) end
 	function win1:mousedown(button) print('mousedown win1', button) end
 	function win2:mousedown(button) print('mousedown win2', button) end
 	function win1:mouseup(button) print('mouseup win1', button) end
@@ -825,31 +791,33 @@ add('mouse', function()
 	end
 	function win1:mousewheel(delta) print('wheel win1', delta) end
 	function win2:mousewheel(delta) print('wheel win2', delta) end
-	app:run()
-end)
 
-add('keys', function()
-	local win1 = app:window(winpos())
-	local win2 = app:window(winpos())
-
-	function win2:keypress(key)
-		print('keypress', key)--, self:key(key))
+	--keyboard
+	function app.window_class:printkey(title, key, vkey)
+		print(string.format('%-20s %-20s %-20s %-20s %-20s', title, key, vkey, self:key(key), self:key(vkey)))
 	end
-
-	function win2:keydown(key)
-		print('keydown', key)--, self:key(key))
+	function win1:keydown(key, ...)
+		if key == 'N' then
+			app:ignore_numlock(not app:ignore_numlock())
+		end
+		self:printkey('keydown', key, ...)
+		--print(self:key('ctrl+shift+F10'))
 	end
-
-	win1.keydown = win2.keydown
-	win1.keypress = win2.keypress
-
-	function win2:keyup(key)
-		print('keyup', key)--, self:key(key))
+	function win1:keypress(...)
+		self:printkey('keypress', ...)
 	end
-
-	function win2:keychar(char)
-		print('keychar', char)
+	function win1:keyup(...)
+		self:printkey('keyup', ...)
 	end
+	function win1:keychar(char)
+		--print('keychar ', char)
+	end
+	win2.keydown = win1.keydown
+	win2.keypress = win1.keypress
+	win2.keyup = win1.keyup
+	win2.keychar = win1.keychar
+
+	--win2:close()
 
 	app:run()
 end)
@@ -975,5 +943,18 @@ win2:close() --ignored
 
 ]]
 
-testui(...)
+local name = ...
+if not name then
+	print(string.format('Usage: %s <name> | <name>*', arg[0]))
+	print'Available tests:'
+	for i,name in ipairs(tests) do
+		print('', name)
+	end
+elseif name:match'%*$' then
+	run_all_matching('^'..glue.escape(name:gsub('%*', ''))..'.*')
+elseif tests[name] then
+	run_test(name)
+else
+	print'What test was that?'
+end
 
