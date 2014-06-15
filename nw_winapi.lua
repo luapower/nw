@@ -481,25 +481,26 @@ end
 
 local cursors = {
 	--pointers
-	arrow     = winapi.IDC_ARROW,
-	text      = winapi.IDC_IBEAM,
-	link      = winapi.IDC_HAND,
-	crosshair = winapi.IDC_CROSS,
-	invalid   = winapi.IDC_NO,
+	arrow = winapi.IDC_ARROW,
+	ibeam = winapi.IDC_IBEAM,
+	hand  = winapi.IDC_HAND,
+	cross = winapi.IDC_CROSS,
+	no    = winapi.IDC_NO,
 	--move and resize
-	resize_nwse       = winapi.IDC_SIZENWSE,
-	resize_nesw       = winapi.IDC_SIZENESW,
-	resize_horizontal = winapi.IDC_SIZEWE,
-	resize_vertical   = winapi.IDC_SIZENS,
-	move              = winapi.IDC_SIZEALL,
+	nwse  = winapi.IDC_SIZENWSE,
+	nesw  = winapi.IDC_SIZENESW,
+	we    = winapi.IDC_SIZEWE,
+	ns    = winapi.IDC_SIZENS,
+	move  = winapi.IDC_SIZEALL,
 	--app state
-	--busy      = winapi.IDC_WAIT, --not in OSX
-	busyarrow = winapi.IDC_APPSTARTING,
+	--wait  = winapi.IDC_WAIT, --not in OSX
+	busy  = winapi.IDC_APPSTARTING,
 }
 
 function window:cursor(name)
 	if name ~= nil then
 		self.cursor = name
+		self:invalidate()
 	else
 		return self.cursor
 	end
@@ -510,7 +511,7 @@ function Window:on_set_cursor(_, ht)
 	local cursor = cursors[self.win.cursor]
 	if not cursor then return end
 	winapi.SetCursor(winapi.LoadCursor(cursor))
-	return true
+	return true --important
 end
 
 --displays

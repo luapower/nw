@@ -703,9 +703,14 @@ end)
 
 --cursors ----------------------------------------------------------------------------------------------------------------
 
+local cursors = {'arrow', 'ibeam', 'hand', 'cross', 'no', 'nwse', 'nesw', 'ew', 'ns', 'move', 'busy'}
+
 add('cursors', function()
-	local win = app:window(winpos())
-	win:cursor'link'
+	local win = app:window(winpos{resizeable = true})
+	function win:mousemove(x, y)
+		local cursor = cursors[math.min(math.max(math.floor(x / 10), 1), #cursors)]
+		win:cursor(cursor)
+	end
 	app:run()
 end)
 

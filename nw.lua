@@ -580,8 +580,7 @@ end
 
 --keyboard
 
---merge virtual key names to ambiguous key names that are platform-independent
---and can be queried on all platforms without keeping track of their state.
+--merge virtual key names into ambiguous key names.
 local common_keynames = {
 	lshift          = 'shift',      rshift        = 'shift',
 	lctrl           = 'ctrl',       rctrl         = 'ctrl',

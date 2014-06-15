@@ -236,8 +236,11 @@ function window:new(app, api, t)
 		objc.NSTrackingMouseMoved,
 		objc.NSTrackingCursorUpdate)
 
+	--self.nswin:setAcceptsMouseMovedEvents(true)
+
+	local r = self.nswin:contentView():bounds()
 	local area = objc.NSTrackingArea:alloc():initWithRect_options_owner_userInfo(
-		self.nswin:contentView():bounds(), opts, self.nswin:contentView(), nil)
+		r, opts, self.nswin:contentView(), nil)
 	self.nswin:contentView():addTrackingArea(area)
 
 	if not t.maximizable then
@@ -460,19 +463,10 @@ function NWWindow:flip_y(x, y) --flip a contentView-relative y coordinate
 	return x, self:contentView():frame().size.height - y
 end
 
-function NWWindow:titlebar_rect()
-	local cr = self:contentView():convertRect_toView(self:contentView():bounds(), nil)
-	local fr = self:convertRectFromScreen(self:frame())
-	--fr.size.width
-
-	print('cr', unpack_rect(cr))
-	print('fr', unpack_rect(fr))
-end
-
-function NWWindow:titlebar_hit(event)
+function NWWindow:clientarea_hit(event)
 	local mp = event:locationInWindow()
 	local rc = self:contentView():bounds()
-	return not box2d.hit(mp.x, mp.y, unpack_rect(rc))
+	return box2d.hit(mp.x, mp.y, unpack_rect(rc))
 end
 
 local buttons = {
@@ -495,13 +489,40 @@ function NWWindow:titlebar_buttons_hit(event)
 	end
 end
 
+local function resize_area_hit(mx, my, w, h)
+	local co = 15 --corner offset
+	local mo = 4 --margin offset
+	if box2d.hit(mx, my, box2d.offset(co, 0, 0, 0, 0)) then
+		return 'bottomleft'
+	elseif box2d.hit(mx, my, box2d.offset(co, w, 0, 0, 0)) then
+		return 'bottomright'
+	elseif box2d.hit(mx, my, box2d.offset(co, 0, h, 0, 0)) then
+		return 'topleft'
+	elseif box2d.hit(mx, my, box2d.offset(co, w, h, 0, 0)) then
+		return 'topright'
+	elseif box2d.hit(mx, my, box2d.offset(mo, 0, 0, w, 0)) then
+		return 'bottom'
+	elseif box2d.hit(mx, my, box2d.offset(mo, 0, h, w, 0)) then
+		return 'top'
+	elseif box2d.hit(mx, my, box2d.offset(mo, 0, 0, 0, h)) then
+		return 'left'
+	elseif box2d.hit(mx, my, box2d.offset(mo, w, 0, 0, h)) then
+		return 'right'
+	end
+end
+
+function NWWindow:resize_area_hit(event)
+	local mp = event:locationInWindow()
+	local _, _, w, h = unpack_rect(self:frame())
+	return resize_area_hit(mp.x, mp.y, w, h)
+end
+
 function NWWindow:sendEvent(event)
 	--take over window dragging by the titlebar so that we can post moving events
 	local etype = event:type()
 	if self.dragging then
-		self:titlebar_rect()
 		if etype == objc.NSLeftMouseDragged then
-			local mp = event:mouseLocation() --self:convertBaseToScreen(event:locationInWindow())
+			local mp = event:mouseLocation()
 			mp.x = mp.x - self.dragoffset.x
 			mp.y = mp.y - self.dragoffset.y
 			local frame = self:frame()
@@ -514,84 +535,64 @@ function NWWindow:sendEvent(event)
 			return
 		elseif etype == objc.NSLeftMouseUp then
 			self.dragging = false
+			self.mousepos = nil
 			return
 		end
-	elseif etype == objc.NSLeftMouseDown and self:titlebar_hit(event) and not self:titlebar_buttons_hit(event) then
+	elseif etype == objc.NSLeftMouseDown
+		and not self:clientarea_hit(event)
+		and not self:titlebar_buttons_hit(event)
+		and not self:resize_area_hit(event)
+	then
 		self.dragging = true
-		local mp = event:mouseLocation() --self:convertBaseToScreen(event:locationInWindow())
+		local mp = event:mouseLocation()
 		local wp = self:frame().origin
 		mp.x = mp.x - wp.x
 		mp.y = mp.y - wp.y
 		self.dragoffset = mp
 		self.dragging = true
 		return
+	elseif etype == objc.NSLeftMouseDown then
+		self.mousepos = event:locationInWindow() --for resizing
 	end
 	objc.callsuper(self, 'sendEvent', event)
 end
 
 function NWWindow:windowWillStartLiveResize()
-	self.oldframe = self:frame()
+	local mx, my = self.mousepos.x, self.mousepos.y
+	local _, _, w, h = unpack_rect(self:frame())
+	self.how = resize_area_hit(mx, my, w, h)
 end
 
 function NWWindow:windowDidResize()
-	local x1, y1, w1, h1 = flip_screen_rect(nil, unpack_rect(self.oldframe))
-	local x2, y2, w2, h2 = flip_screen_rect(nil, unpack_rect(self:frame()))
-
-	self.margins = {}
-
-	if x2 ~= x1 then
-		self.margins.left = true
-	end
-	if y2 ~= y1 then
-		self.margins.top = true
-	end
-	if w2 ~= w1 then
-		self.margins.right = true
-	end
-	if h2 ~= h1 then
-		self.margins.bottom = true
-	end
-
-	local how = (self.margins.top and 'top' or '') .. (self.margins.bottom and 'bottom' or '') ..
-					(self.margins.left and 'left' or '') .. (self.margins.right and 'right' or '')
-
-	local x, y, w, h = self.api:_backend_resizing(how, x2, y2, w2, h2)
+	local x, y, w, h = self.api:_backend_resizing(self.how, flip_screen_rect(nil, unpack_rect(self:frame())))
 	if x then
 		x, y, w, h = flip_screen_rect(nil, x, y, w, h)
 		self:setFrame_display(objc.NSMakeRect(x, y, w, h), true)
 	end
-
-	if w2 > 500 then
-		local x, y, w, h = unpack_rect(self:frame())
-		w = 500
-		self:setFrame_display(objc.NSMakeRect(x, y, w, h), true)
-	end
 	self.api:_backend_resized()
-
-	self.oldframe = self:frame()
 end
 
 --cursors
 
 local cursors = {
 	--pointers
-	arrow      = 'arrowCursor',
-	text       = 'IBeamCursor',
-	link       = 'openHandCursor',
-	crosshair  = 'crosshairCursor',
+	arrow = 'arrowCursor',
+	ibeam = 'IBeamCursor',
+	hand  = 'openHandCursor',
+	cross = 'crosshairCursor',
+	--app state
+	busy  = 'busyButClickableCursor', --undocumented, whatever
 }
 
 local hi_cursors = {
 	--pointers
-	invalid    = 'notallowed',
+	no    = 'notallowed',
 	--move and resize
-	resize_nesw       = 'resizenortheastsouthwest',
-	resize_nesw       = 'resizenorthwestsoutheast',
-	resize_horizontal = 'resizeeastwest',
-	resize_vertical   = 'resizenorthsouth',
-	move              = 'move',
-	--app state
-	busyarrow = 'busybutclickable',
+	nesw  = 'resizenortheastsouthwest',
+	nwse  = 'resizenorthwestsoutheast',
+	ew    = 'resizeeastwest',
+	ns    = 'resizenorthsouth',
+	move  = 'move',
 }
 
 local load_hicursor = objc.memoize(function(name)
@@ -600,25 +601,34 @@ local load_hicursor = objc.memoize(function(name)
 	local infopath = string.format('%s/%s/info.plist', basepath, name)
 	local image = objc.NSImage:alloc():initByReferencingFile(curpath)
 	local info = objc.NSDictionary:dictionaryWithContentsOfFile(infopath)
-	local hotx = info:valueForKey('hotx'):doubleValue()
-	local hoty = info:valueForKey('hoty'):doubleValue()
-	return objc.NSCursor:alloc():initWithImage_hotSpot(image, NSMakePoint(hotx, hoty))
+	local hotx = info:objectForKey('hotx'):doubleValue()
+	local hoty = info:objectForKey('hoty'):doubleValue()
+	return objc.NSCursor:alloc():initWithImage_hotSpot(image, objc.NSMakePoint(hotx, hoty))
 end)
 
-function window:cursor(name)
-	if name ~= nil then
-		self.cursor = name
-	else
-		return self.cursor
-	end
-end
-
-function NWWindow:cursorUpdate(event)
-	local name = self.win.cursor
+local function setcursor(name)
 	if cursors[name] then
 		objc.NSCursor[cursors[name]](objc.NSCursor):set()
 	elseif hi_cursors[name] then
 		load_hicursor(hi_cursors[name]):set()
+	end
+end
+
+function window:cursor(name)
+	if name ~= nil then
+		if self._cursor == name then return end
+		self._cursor = name
+		self.nswin:invalidateCursorRectsForView(self.nswin:contentView()) --trigger cursorUpdate
+	else
+		return self._cursor
+	end
+end
+
+function NWWindow:cursorUpdate(event)
+	if self:clientarea_hit(event) then
+		setcursor(self.win._cursor)
+	else
+		objc.callsuper(self, 'cursorUpdate', event)
 	end
 end
 
@@ -828,6 +838,7 @@ function NWWindow:flagsChanged(event)
 		self.api:_backend_keyup'capslock'
 	end
 
+	--detect keydown/keyup state change for modifier keys
 	local flags = tonumber(event:modifierFlags())
 	for name, mask in pairs(flagbits) do
 		local oldstate = keystate[name] or false
@@ -978,26 +989,3 @@ end
 if not ... then require'nw_test' end
 
 return backend
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
---
