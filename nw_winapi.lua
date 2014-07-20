@@ -1,5 +1,7 @@
 --native widgets winapi backend (Cosmin Apreutesei, public domain)
 
+--the reasons why winapi sucks oh so much are in winapi modules.
+
 local ffi = require'ffi'
 local bit = require'bit'
 local glue = require'glue'
@@ -20,18 +22,17 @@ local function unpack_rect(rect)
 	return rect.x, rect.y, rect.w, rect.h
 end
 
-local backend = {}
+local backend = {name = 'winapi'}
 
-function backend:app(delegate)
-	return self.app_class:new(delegate)
-end
-
---app class
+--app object -----------------------------------------------------------------
 
 local app = {}
-backend.app_class = app
 
-function app:new(delegate)
+function backend:app(frontend)
+	return app:_new(frontend)
+end
+
+function app:_new(frontend)
 
 	--enable WM_INPUT for keyboard events
 	local rid = winapi.types.RAWINPUTDEVICE()
@@ -40,126 +41,79 @@ function app:new(delegate)
 	rid.usUsage     = 6 --keyboard
 	winapi.RegisterRawInputDevices(rid, 1, ffi.sizeof(rid))
 
-	return glue.inherit({delegate = delegate}, self)
+	return glue.inherit({frontend = frontend}, self)
 end
 
-function app:ignore_numlock()
-	return self.delegate:ignore_numlock()
-end
-
---run/quit
-
-function printmsg(msg)
-	--print(winapi.findname('WM_', msg.message))
-end
+--message loop ---------------------------------------------------------------
 
 function app:run()
-	winapi.MessageLoop(printmsg)
+	self._started = true --unlock app:active_window()
+	--check for deferred activation events
+	if self._activate then
+		self._activate = nil
+		if self.frontend:window_count() > 0 then
+			self.frontend:_backend_activated()
+		end
+	end
+	if self._activate_window then
+		local win = self._activate_window
+		self._activate_window = nil
+		if not win:dead() then
+			win:_backend_activated()
+		end
+	end
+	winapi.MessageLoop()
 end
 
 function app:stop()
 	winapi.PostQuitMessage()
 end
 
---timers
-
-function app:runafter(seconds, func)
-	self.timer_cb = self.timer_cb or ffi.cast('TIMERPROC', function(hwnd, wm_timer, id, ellapsed_ms)
-		local func = self.timers[id]
-		self.timers[id] = nil
-		winapi.KillTimer(nil, id)
-		func()
-	end)
-	local id = winapi.SetTimer(nil, 0, seconds * 1000, self.timer_cb)
-	self.timers = self.timers or {}
-	self.timers[id] = func
-end
-
---activation
-
-function app:activate()
-	--TODO
-end
-
---displays
-
-local function display(monitor)
-	local ok, info = pcall(winapi.GetMonitorInfo, monitor)
-	if not ok then return end
-	return {
-		x = info.monitor_rect.x,
-		y = info.monitor_rect.y,
-		w = info.monitor_rect.w,
-		h = info.monitor_rect.h,
-		client_x = info.work_rect.x,
-		client_y = info.work_rect.y,
-		client_w = info.work_rect.w,
-		client_h = info.work_rect.h,
-	}
-end
-
-function app:displays()
-	local monitors = winapi.EnumDisplayMonitors()
-	local displays = {}
-	for i = 1, #monitors do
-		table.insert(displays, display(monitors[i])) --invalid displays are skipped
-	end
-	return displays
-end
-
-function app:main_display()
-	return display(winapi.MonitorFromPoint(nil, winapi.MONITOR_DEFAULTTOPRIMARY))
-end
-
---system info
-
-function app:double_click_time() --milliseconds
-	return winapi.GetDoubleClickTime()
-end
-
-function app:double_click_target_area()
-	local w = winapi.GetSystemMetrics(winapi.SM_CXDOUBLECLK)
-	local h = winapi.GetSystemMetrics(winapi.SM_CYDOUBLECLK)
-	return w, h
-end
-
-function app:wheel_scroll_chars()
-	self.wsc_buf = self.wsc_buf or ffi.new'UINT[1]'
-	winapi.SystemParametersInfo(winapi.SPI_GETWHEELSCROLLCHARS, 0, self.wsc_buf)
-	return self.wsc_buf[0]
-end
-
-function app:wheel_scroll_lines()
-	self.wsl_buf = self.wsl_buf or ffi.new'UINT[1]'
-	winapi.SystemParametersInfo(winapi.SPI_GETWHEELSCROLLLINES, 0, self.wsl_buf)
-	return self.wsl_buf[0]
-end
-
---time
+--time -----------------------------------------------------------------------
 
 function app:time()
 	return winapi.QueryPerformanceCounter().QuadPart
 end
 
+local qpf
 function app:timediff(start_time, end_time)
-	self.qpf = self.qpf or tonumber(winapi.QueryPerformanceFrequency().QuadPart)
+	qpf = qpf or tonumber(winapi.QueryPerformanceFrequency().QuadPart)
 	local interval = end_time - start_time
-	return tonumber(interval * 1000) / self.qpf --milliseconds
+	return tonumber(interval * 1000) / qpf --milliseconds
 end
 
-function app:window(delegate, t)
-	return self.window_class:new(self, delegate, t)
+--timers ---------------------------------------------------------------------
+
+local timer_cb
+local timers = {}
+
+function app:runevery(seconds, func)
+	timer_cb = timer_cb or ffi.cast('TIMERPROC', function(hwnd, wm_timer, id, ellapsed_ms)
+		local func = timers[id]
+		if not func then return end
+		if func() == false then
+			timers[id] = nil
+			winapi.KillTimer(nil, id)
+		end
+	end)
+	local id = winapi.SetTimer(nil, 0, seconds * 1000, timer_cb)
+	timers[id] = func
 end
 
---window class
+--windows --------------------------------------------------------------------
 
 local window = {}
-app.window_class = window
+
+function app:window(frontend, t)
+	return window:_new(self, frontend, t)
+end
 
 local Window = winapi.subclass({}, winapi.Window)
 
-function window:new(app, delegate, t)
-	self = glue.inherit({app = app, delegate = delegate}, self)
+local win_map = {} --win->window
+
+function window:_new(app, frontend, t)
+	self = glue.inherit({app = app, frontend = frontend}, self)
 
 	local framed = t.frame == 'normal'
 
@@ -186,15 +140,18 @@ function window:new(app, delegate, t)
 		receive_double_clicks = false, --we do our own double-clicking
 	}
 
+	win_map[self.win] = self.frontend
+
 	self.win.__wantallkeys = true --don't let IsDialogMessage() filter out our precious WM_CHARs
-	self.win.delegate = delegate
-	self.win.win = self
+
+	self.win.frontend = frontend
+	self.win.backend = self
 	self.win.app = app
 
 	self:reset_keystate()
 
 	--init mouse state
-	local m = self.delegate.mouse
+	local m = self.frontend._mouse
 	local pos = self.win.cursor_pos
 	m.x = pos.x
 	m.y = pos.y
@@ -216,30 +173,64 @@ function window:new(app, delegate, t)
 		self._fs = {maximized = self.win.maximized}
 	end
 
+	--in case we won't get the activation event (it can happen), we still want
+	--to be able to activate the app by bringing this window to foreground.
+	if not app._last_active_window then
+		app._last_active_window = self.frontend
+	end
+
 	return self
 end
 
---lifetime
+--closing --------------------------------------------------------------------
 
-function window:close()
-	self.win._forceclose = true
-	self.win:close() --calls on_close() hence _forceclose
+function window:forceclose()
+	self.win._forceclose = true --because win:close() calls on_close().
+	self.win:close()
 end
 
 function Window:on_close()
-	if not self._forceclose and not self.delegate:_backend_closing() then
+	if not self._forceclose and not self.frontend:_backend_closing() then
 		return 0
 	end
 end
 
 function Window:on_destroy()
-	self.delegate:_backend_closed()
+	self.frontend:_backend_closed()
 	self:free_surface()
+	win_map[self] = nil
+	if self.app._last_active_window == self.frontend then
+		self.app._last_active_window = nil
+	end
 end
 
---activation
+--activation -----------------------------------------------------------------
+
+function app:activate()
+	local frontend = self._last_active_window
+	if frontend and not frontend:dead() then
+		frontend.backend.win:setforeground()
+	end
+end
+
+function app:active_window()
+	--don't return the active window until the app starts, to emulate OSX behavior.
+	if not self._started then return end
+	--don't return the active window if the app is not active, to emulate OSX behavior.
+	if not self:active() then return end
+	return win_map[winapi.Windows.active_window]
+end
+
+function app:active()
+	return winapi.Windows.foreground_window ~= nil
+end
 
 function window:activate()
+	--don't activate the window if the app is not active, to emulate OSX behavior.
+	--actually, OSX does change the active window, but there's no indication of that
+	--(i.e. no events triggered, app:active_window() returns nil, window:active()
+	--continues to be false) until the app is activated.
+	if not self.app:active() then return end
 	self.win:activate()
 end
 
@@ -248,28 +239,45 @@ function window:active()
 end
 
 function Window:on_activate()
-	self.win:reset_keystate()
-	self.delegate:_backend_activated()
+	--ignore activation event if the app is not active, to emulate OSX behavior.
+	if not self.app:active() then return end
+	self.backend:reset_keystate()
+	self.app._last_active_window = self.frontend
+	--delay activation events until the app starts to emulate OSX behavior.
+	if self.app._started then
+		self.frontend:_backend_activated()
+	else
+		self.app._activate_window = self.frontend
+	end
 end
 
 function Window:on_deactivate()
-	self.win:reset_keystate()
-	self.delegate:_backend_deactivated()
+	--ignore activation event if the app is not active, to emulate OSX behavior.
+	if not self.app:active() then return end
+	self.backend:reset_keystate()
+	--prevent dactivation events until the app starts to emulate OSX behavior.
+	if self.app._started then
+		self.frontend:_backend_deactivated()
+	elseif self.app._activate_window == self.frontend then
+		self.app._activate_window = nil
+	end
 end
 
 function Window:on_activate_app()
-	self.delegate.app:_backend_activated()
+	--delay activation events until running to emulate OSX behavior.
+	if self.app.frontend:running() then
+		self.app.frontend:_backend_activated()
+	else
+		self.app._activate = true
+	end
 end
 
 function Window:on_deactivate_app()
-	self.delegate.app:_backend_deactivated()
+	self.app._activate = nil
+	self.app.frontend:_backend_deactivated()
 end
 
---state
-
-function window:hide()
-	self.win:hide()
-end
+--state ----------------------------------------------------------------------
 
 function window:show()
 	if self._show_minimized then
@@ -287,6 +295,14 @@ function window:show()
 	end
 end
 
+function window:hide()
+	self.win:hide()
+end
+
+function window:visible()
+	return self.win.visible
+end
+
 function window:minimize()
 	self._show_minimized = nil
 	self.win:minimize()
@@ -299,7 +315,7 @@ function window:_maximize()
 	--frameless windows maximize to the entire screen, covering the taskbar. fix that.
 	if not self.win.frame then
 		local t = self:display()
-		self.win:move(t.client_x, t.client_y, t.client_w, t.client_h)
+		self.win:move(t:client_rect())
 	end
 end
 function window:maximize()
@@ -325,7 +341,6 @@ function window:shownormal()
 end
 
 function window:_enter_fullscreen(to_minimized)
-	self._noevents = true
 	self._show_fullscreen = nil
 
 	self._fs = {
@@ -355,12 +370,9 @@ function window:_enter_fullscreen(to_minimized)
 	end
 
 	self._fullscreen = true
-	self._noevents = nil
 end
 
 function window:_exit_fullscreen(to_maximized)
-	self._noevents = true
-
 	self.win.visible = false
 	self.win.frame = self._fs.frame
 	self.win.border = self._fs.frame
@@ -374,10 +386,6 @@ function window:_exit_fullscreen(to_maximized)
 
 	self._fullscreen = false
 	self._noevents = nil
-end
-
-function window:visible()
-	return self.win.visible
 end
 
 function window:minimized()
@@ -410,7 +418,45 @@ function window:fullscreen(fullscreen)
 	end
 end
 
---positioning
+--positioning ----------------------------------------------------------------
+
+function app:_getmagnets(around_hwnd)
+	local t = {} --{{x, y, w, h}, ...}
+
+	local rect
+	for i,hwnd in ipairs(winapi.EnumChildWindows()) do --front-to-back order assured
+		if hwnd ~= around_hwnd and winapi.IsVisible(hwnd) then
+			rect = winapi.GetWindowRect(hwnd, rect)
+			t[#t+1] = {x = rect.x, y = rect.y, w = rect.w, h = rect.h}
+		end
+	end
+
+	return t
+end
+
+function app:magnets(around_hwnd)
+	if not self._magnets then
+		self._magnets = self:_getmagnets(around_hwnd)
+	end
+	return self._magnets
+end
+
+function window:magnets()
+	return self.app:magnets(self.win.hwnd)
+end
+
+function Window:on_begin_sizemove()
+	self.app._magnets = nil --clear magnets
+	local m = winapi.Windows.cursor_pos
+	m.x = m.x - self.x
+	m.y = m.y - self.y
+	self.nw_m = m
+	self.frontend:_backend_start_resize()
+end
+
+function Window:on_end_sizemove()
+	self.frontend:_backend_end_resize()
+end
 
 function window:frame_rect(x, y, w, h)
 	if x then
@@ -429,7 +475,12 @@ function window:frame_rect(x, y, w, h)
 end
 
 function Window:frame_changing(how, rect)
-	local x, y, w, h = self.delegate:_backend_resizing(how, unpack_rect(rect))
+	if how == 'move' then
+		local m = winapi.Windows.cursor_pos
+		rect.x = m.x - self.nw_m.x
+		rect.y = m.y - self.nw_m.y
+	end
+	local x, y, w, h = self.frontend:_backend_resizing(how, unpack_rect(rect))
 	rect.x = x or rect.x
 	rect.y = y or rect.y
 	rect.w = w or rect.w
@@ -438,6 +489,7 @@ end
 
 function Window:on_moving(rect)
 	self:frame_changing('move', rect)
+	return true
 end
 
 function Window:on_resizing(how, rect)
@@ -448,36 +500,76 @@ function Window:on_moved()
 	if self.layered then
 		self.win_pos.x = self.x
 		self.win_pos.y = self.y
-		self.delegate:invalidate()
+		self.frontend:invalidate()
 	end
 end
 
 function Window:resized()
 	self:free_surface()
-	self.delegate:invalidate()
+	self.frontend:invalidate()
 end
 
 function Window:on_resized(flag)
 	if flag == 'minimized' then
-		self.delegate:_backend_minimized()
+		self.frontend:_backend_minimized()
 	elseif flag == 'maximized' then
 		self:resized()
-		self.delegate:_backend_maximized()
+		self.frontend:_backend_maximized()
 	elseif flag == 'restored' then
 		self:resized()
-		self.delegate:_backend_resized()
+		self.frontend:_backend_resized()
 	end
 end
 
+function window:mouse_pos()
+	return winapi.GetMessagePos()
+end
+
 function Window:on_pos_changed(info)
-	--self.delegate:_event'frame_changed'
+	--self.frontend:_event'frame_changed'
+end
+
+function window:edgesnapping(snapping) end
+
+--displays -------------------------------------------------------------------
+
+function app:_display(monitor)
+	local ok, info = pcall(winapi.GetMonitorInfo, monitor)
+	if not ok then return end
+	return self.frontend:_display{
+		x = info.monitor_rect.x,
+		y = info.monitor_rect.y,
+		w = info.monitor_rect.w,
+		h = info.monitor_rect.h,
+		client_x = info.work_rect.x,
+		client_y = info.work_rect.y,
+		client_w = info.work_rect.w,
+		client_h = info.work_rect.h,
+	}
+end
+
+function app:displays()
+	local monitors = winapi.EnumDisplayMonitors()
+	local displays = {}
+	for i = 1, #monitors do
+		table.insert(displays, self:_display(monitors[i])) --invalid displays are skipped
+	end
+	return displays
+end
+
+function app:main_display()
+	return self:_display(winapi.MonitorFromPoint(nil, winapi.MONITOR_DEFAULTTOPRIMARY))
 end
 
 function window:display()
-	return display(self.win.monitor)
+	return self.app:_display(self.win.monitor)
 end
 
---cursors
+function Window:on_display_change(x, y, bpp)
+	self.app.frontend:_backend_displays_changed()
+end
+
+--cursors --------------------------------------------------------------------
 
 local cursors = {
 	--pointers
@@ -499,28 +591,22 @@ local cursors = {
 
 function window:cursor(name)
 	if name ~= nil then
-		self.cursor = name
+		self._cursor = name
 		self:invalidate()
 	else
-		return self.cursor
+		return self._cursor
 	end
 end
 
 function Window:on_set_cursor(_, ht)
 	if ht ~= winapi.HTCLIENT then return end
-	local cursor = cursors[self.win.cursor]
+	local cursor = cursors[self.backend._cursor]
 	if not cursor then return end
 	winapi.SetCursor(winapi.LoadCursor(cursor))
 	return true --important
 end
 
---displays
-
-function Window:on_display_change(x, y, bpp)
-	self.delegate.app:_backend_displays_changed()
-end
-
---frame
+--frame ----------------------------------------------------------------------
 
 function window:title(title)
 	if title then
@@ -538,7 +624,7 @@ function window:topmost(topmost)
 	end
 end
 
---keyboard
+--keyboard -------------------------------------------------------------------
 
 local keynames = { --vkey code -> vkey name
 
@@ -719,7 +805,7 @@ function Window:setkey(vk, flags, down)
 	if not keycodes[name] then --save the state of this key because we can't get it with GetKeyState()
 		keystate[name] = down
 	end
-	if self.app:ignore_numlock() then --ignore the state of the numlock key (for games)
+	if self.app.frontend:ignore_numlock() then --ignore the state of the numlock key (for games)
 		name = ignore_numlock_keys[name] or name
 	end
 	return name
@@ -735,14 +821,14 @@ function Window:on_key_down(vk, flags)
 	if norepeat[key] then
 		if not repeatstate[key] then
 			repeatstate[key] = true
-			self.delegate:_backend_keydown(key)
-			self.delegate:_backend_keypress(key)
+			self.frontend:_backend_keydown(key)
+			self.frontend:_backend_keypress(key)
 		end
 	elseif not flags.prev_key_state then
-		self.delegate:_backend_keydown(key)
-		self.delegate:_backend_keypress(key)
+		self.frontend:_backend_keydown(key)
+		self.frontend:_backend_keypress(key)
 	else
-		self.delegate:_backend_keypress(key)
+		self.frontend:_backend_keypress(key)
 	end
 end
 
@@ -752,7 +838,7 @@ function Window:on_key_up(vk, flags)
 	if norepeat[key] then
 		repeatstate[key] = false
 	end
-	self.delegate:_backend_keyup(key)
+	self.frontend:_backend_keyup(key)
 end
 
 --we get the ALT key with these messages instead
@@ -760,7 +846,7 @@ Window.on_syskey_down = Window.on_key_down
 Window.on_syskey_up = Window.on_key_up
 
 function Window:on_key_down_char(char)
-	self.delegate:_backend_keychar(char)
+	self.frontend:_backend_keychar(char)
 end
 
 Window.on_syskey_down_char = Window.on_key_down_char
@@ -784,7 +870,7 @@ function window:key(name)
 		return on
 	else
 		if numlock_off_keys[name]
-			and self.app:ignore_numlock()
+			and self.app.frontend:ignore_numlock()
 			and not self:key'^numlock'
 		then
 			return self:key(numlock_off_keys[name])
@@ -810,14 +896,14 @@ function Window:on_raw_input(raw)
 				keystate.shift = true
 				keystate[key] = true
 				repeatstate[key] = true
-				self.delegate:_backend_keydown(key)
-				self.delegate:_backend_keypress(key)
+				self.frontend:_backend_keydown(key)
+				self.frontend:_backend_keypress(key)
 			end
 		else
 			keystate.shift = false
 			keystate[key] = false
 			repeatstate[key] = false
-			self.delegate:_backend_keyup(key)
+			self.frontend:_backend_keyup(key)
 		end
 	end
 end
@@ -864,7 +950,17 @@ function window:key(s)
 end
 ]]
 
---mouse
+--mouse ----------------------------------------------------------------------
+
+function app:double_click_time() --milliseconds
+	return winapi.GetDoubleClickTime()
+end
+
+function app:double_click_target_area()
+	local w = winapi.GetSystemMetrics(winapi.SM_CXDOUBLECLK)
+	local h = winapi.GetSystemMetrics(winapi.SM_CYDOUBLECLK)
+	return w, h
+end
 
 --TODO: get lost mouse events http://blogs.msdn.com/b/oldnewthing/archive/2012/03/14/10282406.aspx
 
@@ -875,7 +971,7 @@ end
 function Window:setmouse(x, y, buttons)
 
 	--set mouse state
-	local m = self.delegate.mouse
+	local m = self.frontend._mouse
 	m.x = x
 	m.y = y
 	m.left = buttons.lbutton
@@ -888,23 +984,23 @@ function Window:setmouse(x, y, buttons)
 	if not m.inside then
 		m.inside = true
 		winapi.TrackMouseEvent{hwnd = self.hwnd, flags = winapi.TME_LEAVE}
-		self.delegate:_backend_mouseenter(x, y, unpack_buttons(buttons))
+		self.frontend:_backend_mouseenter(x, y, unpack_buttons(buttons))
 	end
 end
 
 function Window:on_mouse_move(x, y, buttons)
-	local m = self.delegate.mouse
+	local m = self.frontend._mouse
 	local moved = x ~= m.x or y ~= m.y
 	self:setmouse(x, y, buttons)
 	if moved then
-		self.delegate:_backend_mousemove(x, y)
+		self.frontend:_backend_mousemove(x, y)
 	end
 end
 
 function Window:on_mouse_leave()
-	if not self.delegate.mouse.inside then return end
-	self.delegate.mouse.inside = false
-	self.delegate:_backend_mouseleave()
+	if not self.frontend._mouse.inside then return end
+	self.frontend._mouse.inside = false
+	self.frontend:_backend_mouseleave()
 end
 
 function Window:capture_mouse()
@@ -922,79 +1018,91 @@ end
 function Window:on_lbutton_down(x, y, buttons)
 	self:setmouse(x, y, buttons)
 	self:capture_mouse()
-	self.delegate:_backend_mousedown'left'
+	self.frontend:_backend_mousedown'left'
 end
 
 function Window:on_mbutton_down(x, y, buttons)
 	self:setmouse(x, y, buttons)
 	self:capture_mouse()
-	self.delegate:_backend_mousedown'middle'
+	self.frontend:_backend_mousedown'middle'
 end
 
 function Window:on_rbutton_down(x, y, buttons)
 	self:setmouse(x, y, buttons)
 	self:capture_mouse()
-	self.delegate:_backend_mousedown'right'
+	self.frontend:_backend_mousedown'right'
 end
 
 function Window:on_xbutton_down(x, y, buttons)
 	self:setmouse(x, y, buttons)
 	if buttons.xbutton1 then
 		self:capture_mouse()
-		self.delegate:_backend_mousedown'ex1'
+		self.frontend:_backend_mousedown'xbutton1'
 	end
 	if buttons.xbutton2 then
 		self:capture_mouse()
-		self.delegate:_backend_mousedown'ex2'
+		self.frontend:_backend_mousedown'xbutton2'
 	end
 end
 
 function Window:on_lbutton_up(x, y, buttons)
 	self:setmouse(x, y, buttons)
 	self:uncapture_mouse()
-	self.delegate:_backend_mouseup'left'
+	self.frontend:_backend_mouseup'left'
 end
 
 function Window:on_mbutton_up(x, y, buttons)
 	self:setmouse(x, y, buttons)
 	self:uncapture_mouse()
-	self.delegate:_backend_mouseup'middle'
+	self.frontend:_backend_mouseup'middle'
 end
 
 function Window:on_rbutton_up(x, y, buttons)
 	self:setmouse(x, y, buttons)
 	self:uncapture_mouse()
-	self.delegate:_backend_mouseup'right'
+	self.frontend:_backend_mouseup'right'
 end
 
 function Window:on_xbutton_up(x, y, buttons)
 	self:setmouse(x, y, buttons)
 	if buttons.xbutton1 then
 		self:uncapture_mouse()
-		self.delegate:_backend_mouseup'ex1'
+		self.frontend:_backend_mouseup'ex1'
 	end
 	if buttons.xbutton2 then
 		self:uncapture_mouse()
-		self.delegate:_backend_mouseup'ex2'
+		self.frontend:_backend_mouseup'ex2'
 	end
+end
+
+local function wheel_scroll_lines()
+	self.wsl_buf = self.wsl_buf or ffi.new'UINT[1]'
+	winapi.SystemParametersInfo(winapi.SPI_GETWHEELSCROLLLINES, 0, self.wsl_buf)
+	return self.wsl_buf[0]
 end
 
 function Window:on_mouse_wheel(x, y, buttons, delta)
 	if (delta - 1) % 120 == 0 then --correction for my ms mouse when scrolling back
 		delta = delta - 1
 	end
-	delta = delta / 120 * self.app:wheel_scroll_lines()
+	delta = delta / 120 * wheel_scroll_lines()
 	self:setmouse(x, y, buttons)
-	self.delegate:_backend_mousewheel(delta)
+	self.frontend:_backend_mousewheel(delta)
+end
+
+local function wheel_scroll_chars()
+	self.wsc_buf = self.wsc_buf or ffi.new'UINT[1]'
+	winapi.SystemParametersInfo(winapi.SPI_GETWHEELSCROLLCHARS, 0, self.wsc_buf)
+	return self.wsc_buf[0]
 end
 
 function Window:on_mouse_hwheel(x, y, buttons, delta)
-	delta = delta / 120 * self.app:wheel_scroll_chars()
+	delta = delta / 120 * wheel_scroll_chars()
 	self:setmouse(x, y, buttons)
-	self.delegate:_backend_mousehwheel(delta)
+	self.frontend:_backend_mousehwheel(delta)
 end
 
---rendering
+--rendering ------------------------------------------------------------------
 
 function window:client_rect()
 	return unpack_rect(self.win.client_rect)
@@ -1011,6 +1119,7 @@ end
 
 function Window:on_paint(hdc)
 	self:repaint_surface()
+	if not self.bmp then return end
 	winapi.BitBlt(hdc, 0, 0, self.bmp_size.w, self.bmp_size.h, self.bmp_hdc, 0, 0, winapi.SRCCOPY)
 end
 
@@ -1024,6 +1133,7 @@ function Window:create_surface()
 	if self.bmp then return end
 	self.win_pos = winapi.POINT{x = self.x, y = self.y}
 	local w, h = self.client_w, self.client_h
+	if w <= 0 or h <= 0 then return end
 	self.bmp_pos = winapi.POINT{x = 0, y = 0}
 	self.bmp_size = winapi.SIZE{w = w, h = h}
 
@@ -1063,18 +1173,21 @@ end
 
 function Window:repaint_surface()
 	self:create_surface()
+	if not self.bmp then return end
 	winapi.GdiFlush()
 	self.pixman_cr:set_source_rgba(0, 0, 0, 0)
 	self.pixman_cr:set_operator(cairo.CAIRO_OPERATOR_SOURCE)
 	self.pixman_cr:paint()
 	self.pixman_cr:set_operator(cairo.CAIRO_OPERATOR_OVER)
-	self.delegate:_backend_render(self.pixman_cr)
+	self.frontend:_backend_render(self.pixman_cr)
 end
 
 function Window:update_layered()
+	if not self.bmp then return end
 	winapi.UpdateLayeredWindow(self.hwnd, nil, self.win_pos, self.bmp_size, self.bmp_hdc,
 										self.bmp_pos, 0, self.blendfunc, winapi.ULW_ALPHA)
 end
+
 
 if not ... then require'nw_test' end
 

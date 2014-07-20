@@ -1,17 +1,14 @@
 io.stdout:setvbuf'no'
+io.stderr:setvbuf'no'
+
 local nw = require'nw'
 local glue = require'glue'
 local ffi = require'ffi'
 local bit = require'bit'
 
-if ffi.os == 'OSX' then --loading objc over winapi will get you a crash
-	objc = require'objc'
-	--objc.debug.logtopics.refcount = true
-end
+local app --global app object
 
-local app
-
---testing helpers --------------------------------------------------------------------------------------------------------
+--testing helpers ------------------------------------------------------------
 
 --collecting and running tests
 
@@ -34,7 +31,7 @@ local function run_all_matching(patt)
 		if name:match(patt) then
 			print()
 			print(name)
-			print'========================='
+			print(('-'):rep(70))
 			run_test(name)
 		end
 	end
@@ -58,7 +55,7 @@ end
 
 --event recorder/checker
 
-local function recorder(app)
+local function recorder()
 	local t = {n = 0}
 	local function record(...)
 		print(...)
@@ -111,142 +108,127 @@ local function combinations(flags)
 	end)
 end
 
---system info ------------------------------------------------------------------------------------------------------------
+--time -----------------------------------------------------------------------
 
---double click time is sane
-add('info-click-time', function()
-	local t = app.backend:double_click_time()
-	print('double_click_time', t)
-	assert(t > 0 and t < 5000)
-end)
-
---target area is sane
-add('info-click-area', function()
-	local w, h = app.backend:double_click_target_area()
-	print('double_click_target_area', w, h)
-	assert(w > 0 and w < 100)
-	assert(h > 0 and h < 100)
-end)
-
---displays ---------------------------------------------------------------------------------------------------------------
-
---client rect is fully enclosed in screen rect and has a sane size
---client rect has a sane size
-local function test_display(display)
-
-	local x, y, w, h = display:rect()
-	print('rect       ',  x, y, w, h)
-
-	local cx, cy, cw, ch = display:client_rect()
-	print('client_rect', cx, cy, cw, ch)
-
-	--client rect has a sane size
-	assert(cw > 100)
-	assert(ch > 100)
-
-	--client rect must be fully enclosed in screen rect
-	assert(cx >= x)
-	assert(cy >= y)
-	assert(cw <= w)
-	assert(ch <= h)
-end
-
---there's at least one display and its values are sane
-add('info-displays', function()
-	local i = 0
-	for display in app:displays() do
-		i = i + 1
-		print(string.format('# display %d', i))
-		test_display(display)
-	end
-	assert(i > 0) --there must be at least 1 display
-end)
-
---main display is at (0, 0)
-add('info-main-display', function()
-	local display = app:main_display()
-	test_display(display)
-	local x, y, w, h = display:rect()
-	--main screen is at (0, 0)
-	assert(x == 0)
-	assert(y == 0)
-end)
-
---time -------------------------------------------------------------------------------------------------------------------
-
---time values are sane
-add('info-time', function()
+--time values are sane.
+add('time-time', function()
 	local t = app:time()
 	print('time    ', t)
 	assert(t > 0)
 end)
 
---timediff values are sane (less than 1ms between 2 calls but more than 0)
-add('info-timediff', function()
+--timediff values are sane (less than 1ms between 2 calls but more than 0).
+add('time-timediff', function()
 	local d = app:timediff(app:time())
 	print('timediff', d)
 	assert(d > 0 and d < 1)
 end)
 
---app running ------------------------------------------------------------------------------------------------------------
+--timers ---------------------------------------------------------------------
 
---run() starts the loop even if there are no windows
---runafter() calls its handler
---quit() is ignored if not running
---quit() stops the loop
---quit() returns
---run() returns
---running() works
---run() is ignored while running
-add('run-quit', function()
+--runafter() works, i.e.:
+--negative intervals are clamped.
+--timers don't start before the loop starts.
+--timer interval is respected more/less.
+--timers don't fire more than once.
+add('timer-runafter', function()
 	local rec = recorder()
-	app:runafter(0.01, function()
+	app:runafter(-1, function() --clamped to 0
+		rec(0)
+	end)
+	app:runafter(0.4, function()
+		rec(4)
+		app:quit()
+	end)
+	app:runafter(0.1, function()
+		rec(1)
+		app:runafter(0.2, function()
+			rec(3)
+		end)
+		app:runafter(0.1, function()
+			rec(2)
+		end)
+	end)
+	rec'start' --timers start after run
+	app:run()
+	rec{'start', 0, 1, 2, 3, 4}
+end)
+
+--runevery() works, i.e.:
+--negative intervals are clamped.
+--timers don't start before the loop starts.
+--timers fire continuously, but stop if false is returned.
+add('timer-runevery', function()
+	local rec = recorder()
+	local i = 1
+	app:runevery(0, function()
+		rec(i)
+		local stop = i == 3
+		i = i + 1
+		if stop then
+			app:runafter(0.2, function()
+				rec'quit'
+				app:quit()
+			end)
+			rec'stop'
+			return false
+		end
+	end)
+	rec'start'
+	app:run()
+	rec{'start', 1, 2, 3, 'stop', 'quit'}
+end)
+
+--app running and stopping ---------------------------------------------------
+
+--run() starts the loop even if there are no windows.
+--run() is ignored while running.
+--run() returns.
+add('loop-run-stop', function()
+	local rec = recorder()
+	app:runafter(0, function()
 		app:run() --ignored, already running
+		app:stop()
+		rec'after-stop'
+	end)
+	app:run() --not returning immediately, stopped by timer
+	rec{'after-stop'}
+end)
+
+--running() is true while app is running.
+--running() is true after app:stop() is called.
+add('loop-running', function()
+	local rec = recorder()
+	app:runafter(0, function()
 		assert(app:running())
+		app:stop()
+		assert(app:running())
+		app:stop() --ignored if called a second time
+		assert(app:running())
+		rec'after-stop'
+	end)
+	assert(not app:running())
+	app:run()
+	assert(not app:running())
+	rec{'after-stop'}
+end)
+
+--app quitting ---------------------------------------------------------------
+
+--quit() is ignored if app not running.
+--quit() stops the loop.
+--quit() returns.
+add('quit-quit', function()
+	local rec = recorder()
+	app:runafter(0, function()
 		rec'before-quit'
 		app:quit()
 		rec'after-quit'
 	end)
-	assert(not app:running())
 	app:quit() --ignored, not running
 	app:run()
-	assert(not app:running())
 	rec{'before-quit', 'after-quit'}
 end)
-
---run() returns after the last window is closed
-add('run-autoquit', function()
-	local rec = recorder()
-	local win = app:window(winpos())
-	app:runafter(0.01, function()
-		win:close()
-	end)
-	app:run()
-	print'ok'
-end)
-
---app timers -------------------------------------------------------------------------------------------------------------
-
-add('timer', function()
-	local rec = recorder()
-	app:runafter(0.01, function()
-		rec(1)
-		app:runafter(0.01, function()
-			rec(2)
-		end)
-		app:runafter(0.03, function()
-			rec(3)
-		end)
-	end)
-	app:runafter(0.1, function()
-		rec(4)
-		app:quit()
-	end)
-	app:run()
-	rec{1, 2, 3, 4}
-end)
-
---app quitting -----------------------------------------------------------------------------------------------------------
 
 --quitting() event works, even if there are no windows
 add('quit-quitting', function()
@@ -262,7 +244,7 @@ add('quit-quitting', function()
 		end
 	end
 	app:autoquit(false)
-	app:runafter(0.01, function()
+	app:runafter(0, function()
 		app:quit()
 		app:quit()
 	end)
@@ -270,8 +252,8 @@ add('quit-quitting', function()
 	rec{'not allowing', 'allowing'}
 end)
 
---quitting() comes before closing() on all windows
---closing() called in creation order
+--quitting() comes before closing() on all windows.
+--closing() called in creation order.
 add('quit-quitting-before-closing', function()
 	local rec = recorder()
 	local win1 = app:window(winpos())
@@ -280,12 +262,12 @@ add('quit-quitting-before-closing', function()
 	function win1:closing() rec'closing1' end
 	function win2:closing() rec'closing2' end
 	app:autoquit(false)
-	app:runafter(0.01, function() app:quit() end)
+	app:runafter(0, function() app:quit() end)
 	app:run()
 	rec{'quitting', 'closing1', 'closing2'}
 end)
 
---quit() fails if windows are created while quitting
+--quit() fails if windows are created while quitting.
 add('quit-fails', function()
 	local rec = recorder()
 	local win = app:window(winpos())
@@ -293,7 +275,7 @@ add('quit-fails', function()
 		app:window(winpos())
 	end
 	app:autoquit(false)
-	app:runafter(0.01, function()
+	app:runafter(0, function()
 		app:quit()
 		rec(app:window_count())
 		app:quit()
@@ -303,7 +285,7 @@ add('quit-fails', function()
 	rec{1,0}
 end)
 
---app:autoquit(true) works
+--app:autoquit(true) works.
 add('quit-autoquit-app', function()
 	local rec = recorder()
 	local win1 = app:window(winpos())
@@ -312,7 +294,7 @@ add('quit-autoquit-app', function()
 	function win1:closing() rec'closing1' end
 	function win2:closing() rec'closing2' end
 	app:autoquit(true)
-	app:runafter(0.01, function()
+	app:runafter(0, function()
 		win1:close()
 		win2:close()
 	end)
@@ -320,7 +302,7 @@ add('quit-autoquit-app', function()
 	rec{'closing1', 'quitting', 'closing2'}
 end)
 
---window:autoquit(true) works
+--window:autoquit(true) works.
 add('quit-autoquit-window', function()
 	local rec = recorder()
 	local win1 = app:window(winpos())
@@ -330,14 +312,14 @@ add('quit-autoquit-window', function()
 	function win2:closing() rec'closing2' end
 	app:autoquit(false)
 	win2:autoquit(true)
-	app:runafter(0.01, function()
+	app:runafter(0, function()
 		win2:close()
 	end)
 	app:run()
 	rec{'quitting', 'closing1', 'closing2'}
 end)
 
---closing() and closed() are splitted out
+--closing() and closed() are splitted out.
 add('quit-quitting-sequence', function()
 	local rec = recorder()
 	local win1 = app:window(winpos())
@@ -348,14 +330,14 @@ add('quit-quitting-sequence', function()
 	function win1:closed() rec'closed1' end
 	function win2:closed() rec'closed2' end
 	app:autoquit(false)
-	app:runafter(0.01, function()
+	app:runafter(0, function()
 		app:quit()
 	end)
 	app:run()
 	rec{'quitting', 'closing1', 'closing2', 'closed1', 'closed2'}
 end)
 
---quit() rejected because closing() rejected
+--quit() rejected because closing() rejected.
 add('quit-quitting-closing-query', function()
 	local rec = recorder()
 	local allow
@@ -370,7 +352,7 @@ add('quit-quitting-closing-query', function()
 		end
 	end
 	app:autoquit(false)
-	app:runafter(0.01, function()
+	app:runafter(0, function()
 		app:quit() --not allowed
 		app:quit() --allowed
 	end)
@@ -378,7 +360,7 @@ add('quit-quitting-closing-query', function()
 	rec{'not allowing', 'allowing'}
 end)
 
---quit() rejected while closing()
+--quit() rejected while closing().
 add('quit-quitting-while-closing', function()
 	local rec = recorder()
 	local allow
@@ -388,7 +370,7 @@ add('quit-quitting-while-closing', function()
 		rec'ignored'
 	end
 	app:autoquit(false)
-	app:runafter(0.01, function()
+	app:runafter(0, function()
 		win:close()
 		rec'closed'
 		app:quit()
@@ -397,10 +379,10 @@ add('quit-quitting-while-closing', function()
 	rec{'ignored', 'closed'}
 end)
 
---window closing ---------------------------------------------------------------------------------------------------------
+--window closing -------------------------------------------------------------
 
---closed() event works
---dead() not yet true in the closed() event (we can still use the window)
+--closed() event works, even before the app starts.
+--dead() not yet true in the closed() event (we can still use the window).
 add('close-closed-not-dead', function()
 	local rec = recorder()
 	local win = app:window(winpos())
@@ -415,7 +397,7 @@ add('close-closed-not-dead', function()
 	rec{'closed'}
 end)
 
---closing() event works
+--closing() event works, even before the app starts.
 add('close-closing-query', function()
 	local rec = recorder()
 	local win = app:window(winpos())
@@ -437,7 +419,7 @@ add('close-closing-query', function()
 	rec{'not allowing', 'allowing'}
 end)
 
---close() is ignored from closed()
+--close() is ignored from closed().
 add('close-while-closed', function()
 	local rec = recorder()
 	local win = app:window(winpos())
@@ -452,7 +434,7 @@ add('close-while-closed', function()
 	rec{'closed'}
 end)
 
---close() is ignored from closing()
+--close() is ignored from closing().
 add('close-while-closing', function()
 	local rec = recorder()
 	local win = app:window(winpos())
@@ -467,18 +449,207 @@ add('close-while-closing', function()
 	rec{'closing'}
 end)
 
---window activaton -------------------------------------------------------------------------------------------------------
+--window activaton -----------------------------------------------------------
 
+--win:activated() and win:deactivated() events are sent for win:activate().
+--activation events are not sent until the app starts, and then
+--only a single app:activated() event followed by a single win:activated()
+--event from the lastly activated window.
+add('activation-window-events', function()
+	local rec = recorder()
+	local win1 = app:window(winpos())
+	local win2 = app:window(winpos())
+	local win3 = app:window(winpos())
+	function win1:activated() rec'win1-activated' end
+	function win2:activated() rec'win2-activated' end
+	function win3:activated() rec'win3-activated' end
+	function win1:deactivated() rec'win1-deactivated' end
+	function win2:deactivated() rec'win2-deactivated' end
+	function win3:deactivated() rec'win3-deactivated' end
+	app:runafter(0, function()
+		rec'started'
+		win1:activate()
+		win2:activate()
+		win3:activate()
+		win3:close()
+		win2:close()
+		win1:close()
+	end)
+	rec'before-run'
+	app:run()
+	rec{
+		'before-run',
+		'win3-activated',
+		'started',
+		'win3-deactivated', 'win1-activated',
+		'win1-deactivated', 'win2-activated',
+		'win2-deactivated', 'win3-activated',
+		'win3-deactivated', 'win2-activated',
+		'win2-deactivated', 'win1-activated',
+		'win1-deactivated',
+	}
+end)
 
+--app activates itself when the first window is created.
+--app activation event comes before win activation event.
+add('activation-app-events', function()
+	local rec = recorder()
+	local win = app:window(winpos())
+	rec'before-run'
+	function app:activated() rec'app-activated' end
+	function win:activated() rec'win-activated' end
+	app:runafter(0, function()
+		win:close()
+	end)
+	app:run()
+	rec{
+		'before-run',
+		'app-activated',
+		'win-activated',
+	}
+end)
 
+--app:activate() works, activating the app continuously for 5 seconds.
+--this is an interactive test: you must activate another app to see it.
+add('activation-app-activate', function()
+	function app:activated() print'activated' end
+	function app:deactivated() print'deactivated' end
+	local win = app:window(winpos())
+	local i = 0
+	app:runevery(0.01, function()
+		i = i + 0.01
+		app:activate()
+		if i > 5 then
+			app:stop()
+		end
+	end)
+	app:run()
+end)
 
---window state flags  ----------------------------------------------------------------------------------------------------
+--app:activate() is ignored if there are no windows.
+--this is an interactive test: you must activate another app to see it.
+add('activation-app-activate-no-windows', function()
+	function app:activated() print'activated' end
+	function app:deactivated() print'deactivated' end
+	local i = 0
+	app:runevery(0.01, function()
+		i = i + 0.01
+		app:activate()
+		if i > 5 then
+			app:stop()
+		end
+	end)
+	app:run()
+end)
+
+--app:active_window() works.
+add('activation-app-active_window', function()
+	local win1 = app:window(winpos())
+	local win2 = app:window(winpos())
+	assert(not app:active_window()) --defered till app starts.
+	app:runafter(0, function()
+		assert(app:active_window() == win2)
+		win1:activate()
+		assert(app:active_window() == win1)
+		app:stop()
+	end)
+	app:run()
+	assert(app:active_window() == win1)
+	print'ok'
+end)
+
+--app:active() works.
+--this is an interactive test: you must activate another app to see it.
+add('activation-app-active', function()
+	local win = app:window(winpos())
+	app:runevery(0.5, function()
+		if app:active() then
+			print('app is active', app:active_window())
+		else
+			print('app is not active', app:active_window())
+		end
+	end)
+	app:run()
+	print'ok'
+end)
+
+--window:activate() is ignored if the app is inactive.
+--the active window is changed to win2 when the app becomes inactive,
+--but that can't be seen until the app becomes active (OSX only,
+--there's no user-facing concept of an app in Windows).
+--this is an interactive test: you must activate another app to see it.
+add('activation-window-activate-inactive', function()
+	local win1 = app:window(winpos()); win1.name = 'w1'
+	local win2 = app:window(winpos()); win2.name = 'w2'
+	function win1:activated() print'win1-activated' end
+	function win2:activated() print'win2-activated' end
+	app:runevery(0.2, function()
+		if win1:dead() or win2:dead() then
+			app:quit()
+		else
+			print(
+				'app active?', app:active(),
+				'active window:', app:active_window() and app:active_window().name,
+				'win1 active?', win1:active(),
+				'win2 active?', win2:active()
+			)
+			if not app:active() then
+				win2:activate()
+			end
+		end
+	end)
+	app:run()
+end)
+
+add('activation-window-activate-inactive2', function()
+	local win1 = app:window(winpos()); win1.name = 'w1'
+	local win2 = app:window(winpos()); win2.name = 'w2'
+	function win1:activated() print'win1-activated' end
+	function win2:activated() print'win2-activated' end
+	app:runevery(0.2, function()
+		if win1:dead() or win2:dead() then
+			app:quit()
+		elseif win1:active() then
+			win2:activate()
+		else
+			win1:activate()
+		end
+	end)
+	app:run()
+end)
+
+--window:activate() doesn't do anything for hidden windows.
+--when the window is shown, the app doesn't activate.
+--this is an interactive test: you must activate another app to see it.
+add('activation-window-activate-hidden', function()
+	local rec = recorder()
+	local win1 = app:window(winpos{visible = false})
+	local win2 = app:window(winpos{visible = false})
+	function win1:activated() rec'win1-activated' end
+	function win2:activated() rec'win2-activated' end
+	app:runafter(0, function()
+		print'click on this terminal window now...'
+		win1:activate()
+		win2:activate()
+		win1:activate()
+		app:runafter(2, function()
+			win2:show()
+			app:runafter(2, function()
+				app:quit()
+			end)
+		end)
+	end)
+	app:run()
+	rec{}
+end)
+
+--window state flags  --------------------------------------------------------
 
 local flag_list = {
 	'visible', 'minimized', 'maximized', 'fullscreen',
 }
 
---generate a name for a test given a combination of flags
+--generate a name for a test given a combination of flags.
 local function test_name_for_flags(flags, name_prefix)
 	local t = {}
 	for i,flag in ipairs(flag_list) do
@@ -487,8 +658,8 @@ local function test_name_for_flags(flags, name_prefix)
 	return name_prefix .. '-' .. table.concat(t, '-')
 end
 
---test that initial state flags are all set
-local function test_init_flags(flags)
+--create a window with given flags and test that they were all set.
+local function test_initial_flags(flags)
 	local win = app:window(winpos(glue.update({w = 500, h = 200}, flags)))
 	for i,flag in ipairs(flag_list) do
 		assert(win[flag](win) == flags[flag], flag)
@@ -499,9 +670,13 @@ end
 --generate interactive tests for all combinations of initial state flags
 for flags in combinations(flag_list) do
 	add(test_name_for_flags(flags, 'states-init'), function()
-		local win = test_init_flags(flags)
+		local win = test_initial_flags(flags)
 		function win:keydown(key)
-			if key == 'F10' or key == 'R' then
+			if key == 'F8' or key == 'S' then
+				self:show()
+			elseif key == 'F7' or key == 'H' then
+				self:hide()
+			elseif key == 'F10' or key == 'R' then
 				self:restore()
 			elseif key == 'F11' or key == 'F' then
 				self:fullscreen(not self:fullscreen())
@@ -509,6 +684,15 @@ for flags in combinations(flag_list) do
 				self:maximize()
 			elseif key == 'F9' or key == 'N' then
 				self:minimize()
+			else
+				print[[
+F8    S    show
+F7    H    hide
+F10   R    restore
+F11   F    fullscreen
+F12   M    maximize
+F9    N    minimize
+]]
 			end
 		end
 		app:run()
@@ -516,19 +700,19 @@ for flags in combinations(flag_list) do
 end
 
 --run the same non-interactive test each time on a window with different initial state flags
-function test_combinations(test)
+function test_combinations(test_func)
 	app:autoquit(false)
 	for flags in combinations(flag_list) do
 		print(test_name_for_flags(flags, ''))
-		local win = test_init_flags(flags)
-		test(win, flags)
+		local win = test_initial_flags(flags)
+		test_func(win, flags)
 		win:close()
 	end
 end
 
---all initial (visible, minimized, maximized, fullscreen) combinations
---show() only changes visibility
---restore() to the correct state
+--all initial (visible, minimized, maximized, fullscreen) combinations.
+--show() only changes visibility.
+--restore() restores to the correct state.
 add('states-transitions', function()
 	app:autoquit(false)
 	test_combinations(function(win, c)
@@ -685,13 +869,15 @@ add('defaults', function()
 	assert(win:fullscreenable())
 end)
 
---positioning ------------------------------------------------------------------------------------------------------------
+--positioning ----------------------------------------------------------------
 
 add('size', function()
 	local win = app:window(winpos())
 	function win:mousemove(x, y)
-		print('mousemove', x, y)
+		--print('mousemove', x, y)
 	end
+	function win:start_resize() print'start_resize' end
+	function win:end_resize() print'end_resize' end
 	function win:resizing(how, x, y, w, h)
 		print('resizing', how, x, y, w, h)
 	end
@@ -701,7 +887,59 @@ add('size', function()
 	app:run()
 end)
 
---cursors ----------------------------------------------------------------------------------------------------------------
+--displays -------------------------------------------------------------------
+
+--client rect is fully enclosed in screen rect and has a sane size
+--client rect has a sane size
+local function test_display(display)
+
+	local x, y, w, h = display:rect()
+	print('rect       ',  x, y, w, h)
+
+	local cx, cy, cw, ch = display:client_rect()
+	print('client_rect', cx, cy, cw, ch)
+
+	--client rect has a sane size
+	assert(cw > 100)
+	assert(ch > 100)
+
+	--client rect must be fully enclosed in screen rect
+	assert(cx >= x)
+	assert(cy >= y)
+	assert(cw <= w)
+	assert(ch <= h)
+end
+
+--there's at least one display and its values are sane
+add('display-list', function()
+	local one
+	for i,display in ipairs(app:displays()) do
+		one = true
+		print(string.format('# display %d', i))
+		test_display(display)
+	end
+	assert(one) --there must be at least 1 display
+end)
+
+--main display is at (0, 0)
+add('display-main', function()
+	local display = app:main_display()
+	test_display(display)
+	local x, y, w, h = display:rect()
+	--main screen is at (0, 0)
+	assert(x == 0)
+	assert(y == 0)
+end)
+
+--edge snapping --------------------------------------------------------------
+
+add('snap', function()
+	local win = app:window(winpos())
+	local win2 = app:window(winpos())
+	app:run()
+end)
+
+--cursors --------------------------------------------------------------------
 
 local cursors = {'arrow', 'ibeam', 'hand', 'cross', 'no', 'nwse', 'nesw', 'ew', 'ns', 'move', 'busy'}
 
@@ -714,7 +952,7 @@ add('cursors', function()
 	app:run()
 end)
 
---other flags ------------------------------------------------------------------------------------------------------------
+--frame flags ----------------------------------------------------------------
 
 --closeable
 
@@ -764,7 +1002,7 @@ add('transparent', function()
 	assert(win:frame() == 'transparent')
 end)
 
---parent/child relationship ----------------------------------------------------------------------------------------------
+--parent/child relationship --------------------------------------------------
 
 add('parent', function()
 	local w1 = app:window(winpos{x = 100, y = 100, w = 500, h = 300})
@@ -780,7 +1018,22 @@ add('parent', function()
 	app:run()
 end)
 
---input events -----------------------------------------------------------------------------------------------------------
+--input events ---------------------------------------------------------------
+
+--double click time is sane
+add('info-click-time', function()
+	local t = app.backend:double_click_time()
+	print('double_click_time', t)
+	assert(t > 0 and t < 5000)
+end)
+
+--target area is sane
+add('info-click-area', function()
+	local w, h = app.backend:double_click_target_area()
+	print('double_click_target_area', w, h)
+	assert(w > 0 and w < 100)
+	assert(h > 0 and h < 100)
+end)
 
 add('input', function()
 	local win1 = app:window(winpos())

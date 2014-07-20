@@ -2,8 +2,11 @@
 local glue = require'glue'
 local ffi = require'ffi'
 local box2d = require'box2d'
+require'strict'
 
 local nw = {}
+
+--backends -------------------------------------------------------------------
 
 --default backends for each OS
 nw.backends = {
@@ -11,19 +14,16 @@ nw.backends = {
 	OSX     = 'nw_cocoa',
 }
 
---return the singleton app object.
---load a default backend on the first call if no backend was set by the user.
-function nw:app()
-	if not self._app then
-		if not self.backend then
-			self.backend = require(assert(self.backends[ffi.os], 'NYI'))
-		end
-		self._app = self.app_class:_new(self)
+function nw:init(bkname)
+	if bkname and self.backend and self.backend.name ~= bkname then
+		error('already initialized to '..self.backend.name)
 	end
-	return self._app
+	bkname = bkname or assert(self.backends[ffi.os], 'unsupported OS')
+	self.backend = require(bkname)
+	self.backend.frontend = self
 end
 
---base class
+--oo -------------------------------------------------------------------------
 
 local object = {}
 
@@ -42,9 +42,11 @@ function object:dead()
 	return self._dead or false
 end
 
-function object:check()
+function object:_check()
 	assert(not self._dead, 'dead object')
 end
+
+--events ---------------------------------------------------------------------
 
 --register an observer to be called for a specific event
 function object:observe(event, func)
@@ -79,52 +81,59 @@ function object:_event(event, ...)
 	self:_fire(event, ...)
 end
 
---app class
+--app object -----------------------------------------------------------------
 
 local app = glue.update({}, object)
-nw.app_class = app
+
+--return the singleton app object.
+--load a default backend on the first call if no backend was set by the user.
+function nw:app()
+	if not self._app then
+		if not self.backend then
+			self:init()
+		end
+		self._app = app:_new(self)
+	end
+	return self._app
+end
 
 app.defaults = {
 	autoquit = true, --quit after the last window closes
 	ignore_numlock = false, --ignore the state of the numlock key on keyboard events
 }
 
---app init
-
-function app:_new(nw)
-	self = glue.inherit({nw = nw}, self)
+function app:_new()
+	self = glue.inherit({}, self)
 	self._running = false
 	self._windows = {} --{window1, ...}
 	self._autoquit = self.defaults.autoquit
 	self._ignore_numlock = self.defaults.ignore_numlock
-	self.backend = self.nw.backend:app(self)
+	self.backend = nw.backend:app(self)
 	return self
 end
 
-function app:ignore_numlock(on)
-	if on == nil then
-		return self._ignore_numlock
-	else
-		self._ignore_numlock = on
-	end
-end
-
---app loop
+--message loop ---------------------------------------------------------------
 
 --start the main loop
 function app:run()
 	if self._running then return end --ignore while running
-
 	self._running = true --run() barrier
 	self.backend:run()
 	self._running = false
+	self._stopping = false --stop() barrier
 end
 
 function app:running()
 	return self._running
 end
 
---app quitting
+function app:stop()
+	if self._stopping then return end --ignore repeated attempts
+	self._stopping = true
+	self.backend:stop()
+end
+
+--quitting -------------------------------------------------------------------
 
 function app:autoquit(autoquit)
 	if autoquit == nil then
@@ -179,67 +188,7 @@ function app:_backend_quitting()
 	self:quit()
 end
 
-function app:stop()
-	self.backend:stop()
-end
-
---timers
-
-function app:runafter(seconds, func)
-	self.backend:runafter(seconds, func)
-end
-
---app activation
-
-function app:activate()
-	self.backend:activate()
-end
-
-function app:_backend_activated()
-	self:_event'activated'
-end
-
-function app:_backend_deactivated()
-	self:_event'deactivated'
-end
-
---displays
-
-local display = {}
-app.display_class = display
-
-function display:_new(t)
-	return glue.inherit(t, self)
-end
-
-function display:rect()
-	return self.x, self.y, self.w, self.h
-end
-
-function display:client_rect()
-	return self.client_x, self.client_y, self.client_w, self.client_h
-end
-
-function app:displays()
-	local displays = self.backend:displays()
-	local i = 0
-	return function()
-		i = i + 1
-		local display = displays[i]
-		if not display then return end
-		return self.display_class:_new(display)
-	end
-end
-
-function app:main_display()
-	return self.display_class:_new(self.backend:main_display())
-end
-
-function app:_backend_displays_changed()
-	self:_event'displays_changed'
-end
-
---time
+--time -----------------------------------------------------------------------
 
 function app:time()
 	return self.backend:time()
@@ -249,7 +198,21 @@ function app:timediff(start_time, end_time)
 	return self.backend:timediff(start_time, end_time or self:time())
 end
 
---windows
+--timers ---------------------------------------------------------------------
+
+function app:runevery(seconds, func)
+	seconds = math.max(0, seconds)
+	self.backend:runevery(seconds, func)
+end
+
+function app:runafter(seconds, func)
+	self:runevery(seconds, function()
+		func()
+		return false
+	end)
+end
+
+--window list ----------------------------------------------------------------
 
 --get existing windows in creation order
 function app:windows(order)
@@ -265,15 +228,6 @@ end
 function app:window_count()
 	return #self._windows
 end
-
-function app:active_window()
-	if self._active_window then
-		assert(self._active_window:active())
-	end
-	return self._active_window
-end
-
---window protocol
 
 function app:_window_created(win)
 	table.insert(self._windows, win)
@@ -291,25 +245,9 @@ function app:_window_closed(win)
 	table.remove(self._windows, indexof(win, self._windows))
 end
 
-function app:_window_activated(win)
-	self._active_window = win
-end
-
-function app:_window_deactivated(win)
-	self._active_window = nil
-end
-
---window class
-
-function app:window(t)
-	self:check()
-	return self.window_class:_new(self, t)
-end
+--windows --------------------------------------------------------------------
 
 local window = glue.update({}, object)
-app.window_class = window
-
---window creation
 
 window.defaults = {
 	--state
@@ -328,59 +266,45 @@ window.defaults = {
 	resizeable = true,
 	fullscreenable = true,
 	autoquit = false, --quit the app on closing
+	edgesnapping = true,
 }
 
-function window:_new(app, t)
-	t = glue.update({}, self.defaults, t)
+function app:window(t)
+	return window:_new(self, t)
+end
+
+function window:_new(app, opt)
+	opt = glue.update({}, self.defaults, opt)
 	self = glue.inherit({app = app}, self)
 
-	self.mouse = {}
+	self._mouse = {}
 	self._down = {}
 
-	self.backend = self.app.backend:window(self, {
-		--state
-		x = t.x,
-		y = t.y,
-		w = t.w,
-		h = t.h,
-		minimized = t.minimized,
-		maximized = t.maximized,
-		fullscreen = t.fullscreen,
-		--frame
-		title = t.title,
-		frame = t.frame,
-		parent = t.parent,
-		--behavior
-		topmost = t.topmost,
-		minimizable = t.minimizable,
-		maximizable = t.maximizable,
-		closeable = t.closeable,
-		resizeable = t.resizeable,
-		fullscreenable = t.fullscreenable,
-	})
+	self.backend = self.app.backend:window(self, opt)
 
-	--r/o properties
-	self._parent = t.parent
-	self._frame = t.frame
-	self._minimizable = t.minimizable
-	self._maximizable = t.maximizable
-	self._closeable = t.closeable
-	self._resizeable = t.resizeable
-	self._fullscreenable = t.fullscreenable
-	self._autoquit = t.autoquit
+	--stored properties
+	self._parent = opt.parent
+	self._frame = opt.frame
+	self._minimizable = opt.minimizable
+	self._maximizable = opt.maximizable
+	self._closeable = opt.closeable
+	self._resizeable = opt.resizeable
+	self._fullscreenable = opt.fullscreenable
+	self._autoquit = opt.autoquit
+	self._edgesnapping = opt.edgesnapping
 
 	app:_window_created(self)
 	self:_event'created'
 
 	--windows are created hidden
-	if t.visible then
+	if opt.visible then
 		self:show()
 	end
 
 	return self
 end
 
---closing
+--closing --------------------------------------------------------------------
 
 function window:_canclose()
 	if self._closing then return false end --reject while closing (from quit() and user quit)
@@ -393,11 +317,11 @@ function window:_canclose()
 end
 
 function window:_forceclose()
-	self.backend:close()
+	self.backend:forceclose()
 end
 
 function window:close()
-	self:check()
+	self:_check()
 	if self:_backend_closing() then
 		self:_forceclose()
 	end
@@ -428,107 +352,139 @@ function window:_backend_closed()
 	end
 end
 
---activation
+--activation -----------------------------------------------------------------
+
+function app:activate()
+	self.backend:activate()
+end
+
+function app:active_window()
+	return self.backend:active_window()
+end
+
+function app:active()
+	return self.backend:active()
+end
+
+function app:_backend_activated()
+	self:_event'activated'
+end
+
+function app:_backend_deactivated()
+	self:_event'deactivated'
+end
 
 function window:activate()
-	self:check()
+	self:_check()
 	if not self:visible() then return end
 	self.backend:activate()
 end
 
 function window:active()
-	self:check()
+	self:_check()
 	return self.backend:active()
 end
 
 function window:_backend_activated()
-	self.app:_window_activated(self)
 	self:_event'activated'
 end
 
 function window:_backend_deactivated()
 	self:_event'deactivated'
-	self.app:_window_deactivated(self)
 end
 
---visibility
+--state ----------------------------------------------------------------------
 
 function window:visible()
-	self:check()
+	self:_check()
 	return self.backend:visible()
 end
 
 function window:show()
-	self:check()
+	self:_check()
 	self.backend:show()
 end
 
 function window:hide()
-	self:check()
+	self:_check()
 	self.backend:hide()
 end
 
---state
-
 function window:minimized()
-	self:check()
+	self:_check()
 	return self.backend:minimized()
 end
 
 function window:maximized()
-	self:check()
+	self:_check()
 	return self.backend:maximized()
 end
 
 function window:minimize()
-	self:check()
+	self:_check()
 	self.backend:minimize()
 end
 
 function window:maximize()
-	self:check()
+	self:_check()
 	self.backend:maximize()
 end
 
 function window:restore()
-	self:check()
+	self:_check()
 	self.backend:restore()
 end
 
 function window:shownormal()
-	self:check()
+	self:_check()
 	self.backend:shownormal()
 end
 
 function window:fullscreen(fullscreen)
-	self:check()
+	self:_check()
 	return self.backend:fullscreen(fullscreen)
 end
 
-function window:_backend_maximized()
-	self:_event'maximized'
-end
-
-function window:_backend_minimized()
-	self:_event'minimized'
-end
-
---positioning
+--positioning ----------------------------------------------------------------
 
 function window:frame_rect(x, y, w, h) --x, y, w, h
-	self:check()
+	self:_check()
 	return self.backend:frame_rect(x, y, w, h)
 end
 
 function window:client_rect() --x, y, w, h
-	self:check()
+	self:_check()
 	return self.backend:client_rect()
+end
+
+local function override_rect(x, y, w, h, x1, y1, w1, h1)
+	return x1 or x, y1 or y, w1 or w, h1 or h
+end
+
+function window:_backend_start_resize()
+	self:_event'start_resize'
+end
+
+function window:_backend_end_resize()
+	self:_event'end_resize'
 end
 
 function window:_backend_resizing(how, x, y, w, h)
 	local x1, y1, w1, h1
+
+	if self:edgesnapping() then
+		if how == 'move' then
+			x1, y1 = box2d.snap_pos(20, x, y, w, h, self.backend:magnets(), true)
+		else
+			x1, y1, w1, h1 = box2d.snap_edges(20, x, y, w, h, self.backend:magnets(), true)
+		end
+		x1, y1, w1, h1 = override_rect(x, y, w, h, x1, y1, w1, h1)
+	else
+		x1, y1, w1, h1 = x, y, w, h
+	end
+
 	if self.resizing then
-		x1, y1, w1, h1 = self:_handle('resizing', how, x, y, w, h)
+		x1, y1, w1, h1 = override_rect(x1, y1, w1, h1, self:_handle('resizing', how, x1, y1, w1, h1))
 	end
 	self:_fire('resizing', how, x, y, w, h, x1, y1, w1, h1)
 	return x1, y1, w1, h1
@@ -538,39 +494,71 @@ function window:_backend_resized()
 	self:_event'resized'
 end
 
-function window:display()
-	self:check()
-	return self.display_class:_new(self.backend:display())
+function window:edgesnapping(snapping)
+	self:_check()
+	if snapping == nil then
+		return self._edgesnapping
+	else
+		self._edgesnapping = snapping
+		self.backend:edgesnapping(snapping)
+	end
 end
 
---cursors
+--displays -------------------------------------------------------------------
+
+local display = {}
+
+function app:_display(t)
+	return glue.inherit(t, display)
+end
+
+function display:rect()
+	return self.x, self.y, self.w, self.h
+end
+
+function display:client_rect()
+	return self.client_x, self.client_y, self.client_w, self.client_h
+end
+
+function app:displays()
+	return self.backend:displays()
+end
+
+function app:main_display()
+	return self.backend:main_display()
+end
+
+function app:_backend_displays_changed()
+	self:_event'displays_changed'
+end
+
+function window:display()
+	self:_check()
+	return self.backend:display()
+end
+
+--cursors --------------------------------------------------------------------
 
 function window:cursor(name)
 	return self.backend:cursor(name)
 end
 
---frame, behavior
+--frame ----------------------------------------------------------------------
 
 function window:title(newtitle)
-	self:check()
+	self:_check()
 	return self.backend:title(newtitle)
 end
 
-function window:topmost(topmost)
-	self:check()
-	return self.backend:topmost(topmost)
-end
-
-function window:parent() self:check(); return self._parent end
-function window:frame() self:check(); return self._frame end
-function window:minimizable() self:check(); return self._minimizable end
-function window:maximizable() self:check(); return self._maximizable end
-function window:closeable() self:check(); return self._closeable end
-function window:resizeable() self:check(); return self._resizeable end
-function window:fullscreenable() self:check(); return self._fullscreenable end
+function window:frame() self:_check(); return self._frame end
+function window:minimizable() self:_check(); return self._minimizable end
+function window:maximizable() self:_check(); return self._maximizable end
+function window:closeable() self:_check(); return self._closeable end
+function window:resizeable() self:_check(); return self._resizeable end
+function window:fullscreenable() self:_check(); return self._fullscreenable end
 
 function window:autoquit(autoquit)
-	self:check()
+	self:_check()
 	if autoquit == nil then
 		return self._autoquit
 	else
@@ -578,7 +566,29 @@ function window:autoquit(autoquit)
 	end
 end
 
---keyboard
+--z-order --------------------------------------------------------------------
+
+function window:topmost(topmost)
+	self:_check()
+	return self.backend:topmost(topmost)
+end
+
+--parent ---------------------------------------------------------------------
+
+function window:parent()
+	self:_check()
+	return self._parent
+end
+
+--keyboard -------------------------------------------------------------------
+
+function app:ignore_numlock(ignore)
+	if ignore == nil then
+		return self._ignore_numlock
+	else
+		self._ignore_numlock = ignore
+	end
+end
 
 --merge virtual key names into ambiguous key names.
 local common_keynames = {
@@ -621,11 +631,15 @@ function window:_backend_keychar(char)
 end
 
 function window:key(name)
-	self:check()
+	self:_check()
 	return self.backend:key(name)
 end
 
---mouse
+--mouse ----------------------------------------------------------------------
+
+function window:mouse()
+	return self._mouse
+end
 
 function window:_backend_mousedown(button)
 	local t = self._down[button]
@@ -634,9 +648,10 @@ function window:_backend_mousedown(button)
 		self._down[button] = t
 	end
 
+	local m = self:mouse()
 	if t.count > 0
 		and self.app:timediff(t.time) < t.interval
-		and box2d.hit(self.mouse.x, self.mouse.y, t.x, t.y, t.w, t.h)
+		and box2d.hit(m.x, m.y, t.x, t.y, t.w, t.h)
 	then
 		t.count = t.count + 1
 		t.time = self.app:time()
@@ -645,8 +660,8 @@ function window:_backend_mousedown(button)
 		t.time = self.app:time()
 		t.interval = self.app.backend:double_click_time()
 		t.w, t.h = self.app.backend:double_click_target_area()
-		t.x = self.mouse.x - t.w / 2
-		t.y = self.mouse.y - t.h / 2
+		t.x = m.x - t.w / 2
+		t.y = m.y - t.h / 2
 	end
 
 	self:_event('mousedown', button)
@@ -685,10 +700,10 @@ function window:_backend_mousehwheel(delta)
 	self:_event('mousehwheel', delta)
 end
 
---rendering
+--rendering ------------------------------------------------------------------
 
 function window:invalidate()
-	self:check()
+	self:_check()
 	self.backend:invalidate()
 end
 
@@ -696,7 +711,7 @@ function window:_backend_render(cr)
 	self:_event('render', cr)
 end
 
---buttons
+--buttons --------------------------------------------------------------------
 
 function window:button(...)
 	return self.backend:button(...)

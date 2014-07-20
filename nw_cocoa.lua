@@ -1,10 +1,12 @@
 --native widgets cococa backend (Cosmin Apreutesei, public domain)
 
---cocoa notes, or why cocoa sucks oh so, so much:
-
---zoom()'ing a hidden window does not show it (but does change its maximized flag).
---orderOut() doesn't hide a window if it's the key window (instead it disables mouse on it making it appear frozen).
+--COCOA NOTES
+-------------
+--windows are created hidden by default.
+--zoom()'ing a hidden window does not show it, but does change its maximized flag.
+--orderOut() doesn't hide a window if it's the key window, instead it disables mouse on it making it appear frozen.
 --makeKeyWindow() and makeKeyAndOrderFront() do the same thing (both bring the window to front).
+--makeKeyAndOrderFront() is ignored if the window is hidden.
 --isVisible() returns false both when the window is orderOut() and when it's minimized().
 --windows created after calling activateIgnoringOtherApps(false) go behind the active app.
 --windows created after calling activateIgnoringOtherApps(true) go in front of the active app.
@@ -25,103 +27,33 @@
 --no event while moving a window - frame() is not updated while moving the window either.
 --can't know which corner/side a window is dragged by to be resized. good luck implementing edge snapping correctly.
 --can't reference resizing cursors directly with constants, must dig and get them yourself.
+--makeKeyAndOrderFront() is deferred to after the message loop is started, after which a single windowDidBecomeKey
+--is triggered on the last window made key (unlike windows which activates/deactivates windows as it happens).
+--makeKeyAndOrderFront() is also deferred, if the app is not active, for when it becomes active.
+--applicationDidResignActive() is not sent on exit.
 
 local ffi = require'ffi'
 local bit = require'bit'
 local glue = require'glue'
 local objc = require'objc'
 local box2d = require'box2d'
+local cbframe = require'cbframe'
 
+objc.debug.cbframe = true --use cbframe for problem callbacks
 objc.load'Foundation'
 objc.load'AppKit'
 objc.load'System' --for mach_absolute_time
 objc.load'Carbon.HIToolbox' --for key codes
+objc.load'CoreGraphics' --for CGWindow*
+objc.load'CoreFoundation' --for CFArray
 
-local function unpack_rect(r)
+local function unpack_nsrect(r)
 	return r.origin.x, r.origin.y, r.size.width, r.size.height
 end
 
-local backend = {}
-
-function backend:app(api)
-	return self.app_class:new(api)
+local function override_rect(x, y, w, h, x1, y1, w1, h1)
+	return x1 or x, y1 or y, w1 or w, h1 or h
 end
-
---app class
-
-local app = {}
-backend.app_class = app
-
---app init
-
-local NSApp = objc.class('NSApp', 'NSApplication <NSApplicationDelegate>')
-
-function NSApp:applicationShouldTerminate()
-	self.api:_backend_quitting() --calls quit() which calls stop()
-	return false
-end
-
-function NSApp:applicationDidChangeScreenParameters()
-	self.api:_backend_displays_changed()
-end
-
-function app:new(api)
-
-	self = glue.inherit({api = api}, self)
-
-	self.pool = objc.NSAutoreleasePool:new()
-
-	self.app = NSApp:sharedApplication()
-	self.app.api = api
-	self.app.app = self
-
-	self.app:setDelegate(self.app)
-	--set it to be a normal app with dock and menu bar
-	self.app:setActivationPolicy(objc.NSApplicationActivationPolicyRegular)
-	self.app:setPresentationOptions(self.app:presentationOptions() + objc.NSApplicationPresentationFullScreen)
-
-	objc.NSEvent:setMouseCoalescingEnabled(false)
-
-	return self
-end
-
---run/quit
-
-function app:run()
-	self.app:run()
-end
-
-function app:stop()
-	self.app:stop(nil)
-	--post a dummy event to ensure the stopping
-	local event = objc.NSEvent:
-		otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2(
-			objc.NSApplicationDefined, objc.NSMakePoint(0,0), 0, 0, 0, nil, 1, 1, 1)
-	self.app:postEvent_atStart(event, true)
-end
-
---timers
-
-objc.addmethod('NSApp', 'timerEvent', function(self, timer)
-	local func = self.app.timers[objc.nptr(timer)]
-	self.app.timers[objc.nptr(timer)] = nil
-	func()
-end, 'v@:@')
-
-function app:runafter(seconds, func)
-	local timer = objc.NSTimer:scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
-		seconds, self.app, 'timerEvent', nil, false)
-	self.timers = self.timers or {}
-	self.timers[objc.nptr(timer)] = func --the timer is retained by the scheduler so we don't have to ref it
-end
-
---app activation
-
-function app:activate()
-	self.app:activateIgnoringOtherApps(true)
-end
-
---displays
 
 --convert rect from bottom-up relative-to-main-screen space to top-down relative-to-main-screen space
 local function flip_screen_rect(main_h, x, y, w, h)
@@ -129,74 +61,119 @@ local function flip_screen_rect(main_h, x, y, w, h)
 	return x, main_h - h - y, w, h
 end
 
-local function display(main_h, screen)
-	local t = {}
-	t.x, t.y, t.w, t.h = flip_screen_rect(main_h, unpack_rect(screen:frame()))
-	t.client_x, t.client_y, t.client_w, t.client_h = flip_screen_rect(main_h, unpack_rect(screen:visibleFrame()))
-	return t
+local backend = {name = 'cocoa'}
+
+--app object -----------------------------------------------------------------
+
+local app = {}
+
+function backend:app(frontend)
+	return app:_new(frontend)
 end
 
-function app:displays()
-	local screens = objc.NSScreen:screens()
+local App = objc.class('App', 'NSApplication <NSApplicationDelegate>')
 
-	--get main_h from the screens snapshot array
-	local frame = screens:objectAtIndex(0):frame() --main screen always comes first
-	assert(frame.origin.x == 0 and frame.origin.y == 0) --main screen alright
-	local main_h = frame.size.height
+function app:_new(frontend)
 
-	--build the list of display objects to return
-	local displays = {}
-	for i = 0, tonumber(screens:count()-1) do
-		table.insert(displays, display(main_h, screens:objectAtIndex(i)))
-	end
-	return displays
+	self = glue.inherit({frontend = frontend}, self)
+
+	--create the default autorelease pool for small objects.
+	self.pool = objc.NSAutoreleasePool:new()
+
+	self.nsapp = App:sharedApplication()
+	self.nsapp.frontend = frontend
+	self.nsapp.backend = self
+
+	self.nsapp:setDelegate(self.nsapp)
+
+	--set it to be a normal app with dock and menu bar
+	self.nsapp:setActivationPolicy(objc.NSApplicationActivationPolicyRegular)
+	self.nsapp:setPresentationOptions(
+		self.nsapp:presentationOptions() +
+		objc.NSApplicationPresentationFullScreen)
+
+	--disable mouse coalescing so that mouse move events are not skipped.
+	objc.NSEvent:setMouseCoalescingEnabled(false)
+
+	--activate the app before windows are created.
+	self:activate()
+
+	return self
 end
 
-function app:main_display()
-	return display(nil, screen)
+--message loop ---------------------------------------------------------------
+
+function app:run()
+	self.nsapp:run()
 end
 
---double-clicking info
-
-function app:double_click_time() --milliseconds
-	return objc.NSEvent:doubleClickInterval() * 1000
+function app:stop()
+	self.nsapp:stop(nil)
+	--post a dummy event to ensure the stopping
+	local event = objc.NSEvent:
+		otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2(
+			objc.NSApplicationDefined, objc.NSMakePoint(0,0), 0, 0, 0, nil, 1, 1, 1)
+	self.nsapp:postEvent_atStart(event, true)
 end
 
-function app:double_click_target_area()
-	return 4, 4 --like in windows
+--quitting -------------------------------------------------------------------
+
+function App:applicationShouldTerminate()
+	self.frontend:_backend_quitting() --calls quit() which calls stop().
+	--we never terminate the app, we just stop the loop instead.
+	return false
 end
 
---time
+--time -----------------------------------------------------------------------
 
 function app:time()
 	return objc.mach_absolute_time()
 end
 
+local timebase
 function app:timediff(start_time, end_time)
-	if not self.timebase then
-		self.timebase = ffi.new'mach_timebase_info_data_t'
-		objc.mach_timebase_info(self.timebase)
+	if not timebase then
+		timebase = ffi.new'mach_timebase_info_data_t'
+		objc.mach_timebase_info(timebase)
 	end
-	return tonumber(end_time - start_time) * self.timebase.numer / self.timebase.denom / 10^6
+	return tonumber(end_time - start_time) * timebase.numer / timebase.denom / 10^6
 end
 
-function app:window(api, t)
-	return self.window_class:new(self, api, t)
+--timers ---------------------------------------------------------------------
+
+local timers = {}
+
+objc.addmethod('App', 'nw_timerEvent', function(self, timer)
+	local func = timers[objc.nptr(timer)]
+	if not func then return end
+	if func() == false then
+		timers[objc.nptr(timer)] = nil
+		timer:invalidate()
+	end
+end, 'v@:@')
+
+function app:runevery(seconds, func)
+	local timer = objc.NSTimer:scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
+		seconds, self.nsapp, 'nw_timerEvent', nil, true)
+	--the timer is retained by the scheduler so we don't have to anchor it.
+	timers[objc.nptr(timer)] = func
 end
 
---window class
+--windows --------------------------------------------------------------------
 
 local window = {}
-app.window_class = window
 
---window creation
+function app:window(frontend, t)
+	return window:_new(self, frontend, t)
+end
 
-local NWWindow = objc.class('NWWindow', 'NSWindow <NSWindowDelegate>')
+local nswin_map = {} --nswin->window
 
-local NWView = objc.class('NSView')
+local Window = objc.class('Window', 'NSWindow <NSWindowDelegate>')
+local View = objc.class('View', 'NSView')
 
-function window:new(app, api, t)
-	self = glue.inherit({app = app, api = api}, self)
+function window:_new(app, frontend, t)
+	self = glue.inherit({app = app, frontend = frontend}, self)
 
 	local style = t.frame == 'normal' and bit.bor(
 							objc.NSTitledWindowMask,
@@ -209,25 +186,42 @@ function window:new(app, api, t)
 	local frame_rect = objc.NSMakeRect(flip_screen_rect(nil, t.x, t.y, t.w, t.h))
 	local content_rect = objc.NSWindow:contentRectForFrameRect_styleMask(frame_rect, style)
 
-	self.nswin = NWWindow:alloc():initWithContentRect_styleMask_backing_defer(
+	self.nswin = Window:alloc():initWithContentRect_styleMask_backing_defer(
 							content_rect, style, objc.NSBackingStoreBuffered, false)
-	ffi.gc(self.nswin, nil) --disown
+	ffi.gc(self.nswin, nil) --disown, the user owns it now
 
-	local view = NWView:alloc():initWithFrame(objc.NSMakeRect(0, 0, 100, 100))
+	self.nswin.frontend = frontend
+	self.nswin.backend = self
+	self.nswin.app = app
+
+	nswin_map[objc.nptr(self.nswin)] = self.frontend
+
+	local view = View:alloc():initWithFrame(objc.NSMakeRect(0, 0, 100, 100))
 	self.nswin:setContentView(view)
 	ffi.gc(view, nil) --disown, nswin owns it now
-
-	self.nswin:setMovable(false)
-
-	self.nswin:reset_keystate()
-
-	if t.fullscreenable then
-		self.nswin:setCollectionBehavior(objc.NSWindowCollectionBehaviorFullScreenPrimary)
-	end
 
 	if t.parent then
 		t.parent.backend.nswin:addChildWindow_ordered(self.nswin, objc.NSWindowAbove)
 	end
+	if t.edgesnapping then
+		self.nswin:setMovable(false)
+	end
+	if t.fullscreenable then
+		self.nswin:setCollectionBehavior(objc.NSWindowCollectionBehaviorFullScreenPrimary)
+	end
+	if not t.maximizable then
+		if not t.minimizable then
+			--hide the minimize and maximize buttons when they're both disabled
+			--to emulate Windows behavior.
+			self.nswin:standardWindowButton(objc.NSWindowZoomButton):setHidden(true)
+			self.nswin:standardWindowButton(objc.NSWindowMiniaturizeButton):setHidden(true)
+		else
+			self.nswin:standardWindowButton(objc.NSWindowZoomButton):setEnabled(false)
+		end
+	end
+	self.nswin:setTitle(t.title)
+
+	self.nswin:reset_keystate()
 
 	local opts = bit.bor(
 		objc.NSTrackingActiveInKeyWindow,
@@ -235,36 +229,21 @@ function window:new(app, api, t)
 		objc.NSTrackingMouseEnteredAndExited,
 		objc.NSTrackingMouseMoved,
 		objc.NSTrackingCursorUpdate)
-
-	--self.nswin:setAcceptsMouseMovedEvents(true)
-
-	local r = self.nswin:contentView():bounds()
+	local rect = self.nswin:contentView():bounds()
 	local area = objc.NSTrackingArea:alloc():initWithRect_options_owner_userInfo(
-		r, opts, self.nswin:contentView(), nil)
+		rect, opts, self.nswin:contentView(), nil)
 	self.nswin:contentView():addTrackingArea(area)
 
-	if not t.maximizable then
-
-		--emulate windows behavior of hiding the minimize and maximize buttons when they're both disabled
-		if not t.minimizable then
-			self.nswin:standardWindowButton(objc.NSWindowZoomButton):setHidden(true)
-			self.nswin:standardWindowButton(objc.NSWindowMiniaturizeButton):setHidden(true)
-		else
-			self.nswin:standardWindowButton(objc.NSWindowZoomButton):setEnabled(false)
-		end
-	end
-
-	self.nswin:setTitle(t.title)
+	self.nswin:setBackgroundColor(objc.NSColor:redColor()) --TODO: remove
 
 	if t.maximized then
 		if not self:maximized() then
-			self.nswin:zoom(nil) --doesn't show the window if it's not already visible
+			--this doesn't show the window, only sets the zoomed state.
+			self.nswin:zoom(nil)
 		end
 	end
 
 	--enable events
-	self.nswin.api = api
-	self.nswin.win = self
 	self.nswin:setDelegate(self.nswin)
 
 	self._show_minimized = t.minimized --minimize on the next show()
@@ -274,94 +253,91 @@ function window:new(app, api, t)
 	return self
 end
 
-function NWWindow:windowShouldClose()
-	return self.api:_backend_closing() or false
-end
+--closing --------------------------------------------------------------------
 
-function NWWindow:windowWillClose()
-	--defer closing on deactivation so that 'deactivated' event is sent before the 'closed' event
-	if self.win:active() then
-		self._close_on_deactivate = true
-	else
-		self.api:_backend_closed()
-		self.nswin = nil
-	end
-end
-
-function NWWindow:windowDidBecomeKey()
-	self.dragging = false
-	self:reset_keystate()
-	self.api:_backend_activated()
-end
-
-function NWWindow:windowDidResignKey()
-	self.dragging = false
-	self:reset_keystate()
-	self.api:_backend_deactivated()
-
-	--check for defered close
-	if self._close_on_deactivate then
-		self.api:_backend_closed()
-		self.nswin = nil
-	end
-end
-
---fullscreen mode
-
-function NWWindow:windowWillEnterFullScreen()
-	print'enter fullscreen'
-	--self:toggleFullScreen(nil)
-	self:setStyleMask(self:styleMask() + objc.NSFullScreenWindowMask)
-	--self:contentView():enterFullScreenMode_withOptions(objc.NSScreen:mainScreen(), nil)
-end
-
-function NWWindow:windowWillExitFullScreen()
-	print'exit fullscreen'
-end
-
-function NWWindow:willUseFullScreenPresentationOptions(options)
-	print('here1', options)
-	return options
-end
-
---TODO: hack
-objc.override(NWWindow, 'willUseFullScreenContentSize', function(size)
-	print('here2', size)
-end, 'd@:@dd')
-
-function NWWindow:customWindowsToEnterFullScreenForWindow()
-	return {self}
-end
-
-function NWWindow:customWindowsToExitFullScreenForWindow()
-	return {self}
-end
-
---closing
-
-function window:close()
+function window:forceclose()
 	self.nswin:close() --doesn't call windowShouldClose
 end
 
---activation
+function Window:windowShouldClose()
+	return self.frontend:_backend_closing() or false
+end
+
+function Window:nw_close()
+	self.frontend:_backend_closed()
+	nswin_map[objc.nptr(self)] = nil
+	self.backend.nswin = nil
+end
+
+function Window:windowWillClose()
+	--defer closing on deactivation so that 'deactivated' event is sent before the 'closed' event
+	if self.backend:active() then
+		self._close_on_deactivate = true
+	else
+		self:nw_close()
+	end
+end
+
+--activation -----------------------------------------------------------------
+
+function app:activate()
+	self.nsapp:activateIgnoringOtherApps(true)
+end
+
+function app:active_window()
+	return nswin_map[objc.nptr(self.nsapp:keyWindow())]
+end
+
+function app:active()
+	return self.nsapp:isActive()
+end
+
+function App:applicationWillBecomeActive()
+	self.frontend:_backend_activated()
+end
+
+function App:applicationDidResignActive()
+	self.frontend:_backend_deactivated()
+end
+
+function Window:windowDidBecomeKey()
+	self:reset_keystate()
+	self.frontend:_backend_activated()
+end
+
+function Window:windowDidResignKey()
+	self.dragging = false
+	self:reset_keystate()
+	self.frontend:_backend_deactivated()
+
+	--check for deferred close
+	if self._close_on_deactivate then
+		self:nw_close()
+	end
+end
 
 function window:activate()
-	if not self._visible then
-		self.app:activate() --activate the app but leave the window hidden like in windows
-	else
-		self.nswin:makeKeyAndOrderFront(nil)
-	end
+	self.nswin:makeKeyAndOrderFront(nil)
 end
 
 function window:active()
 	return self.nswin:isKeyWindow()
 end
 
---visibility
+function Window:canBecomeKeyWindow()
+	--this is because windows with NSBorderlessWindowMask can't become key by default.
+	return true
+end
+
+function Window:canBecomeMainWindow()
+	--this is because windows with NSBorderlessWindowMask can't become main by default.
+	return true
+end
+
+--state ----------------------------------------------------------------------
 
 function window:show()
 	self._visible = true
-	self.app:activate()
 	if self._show_minimized then
 		self._show_minimized = nil
 		if self._show_fullscreen then
@@ -386,8 +362,6 @@ end
 function window:visible()
 	return self._visible
 end
-
---state
 
 function window:minimize()
 	self._visible = true
@@ -426,10 +400,6 @@ function window:maximized()
 	return self.nswin:isZoomed()
 end
 
-function NWWindow:canBecomeKeyWindow() --windows with NSBorderlessWindowMask can't become key by default
-	return true
-end
-
 function window:_enter_fullscreen(show_minimized)
 	self._show_fullscreen = nil
 	self.nswin:toggleFullScreen(nil)
@@ -457,16 +427,83 @@ function window:fullscreen(fullscreen)
 	end
 end
 
---positioning
-
-function NWWindow:flip_y(x, y) --flip a contentView-relative y coordinate
-	return x, self:contentView():frame().size.height - y
+function Window:windowWillEnterFullScreen()
+	print'enter fullscreen'
+	self:setStyleMask(self:styleMask() + objc.NSFullScreenWindowMask)
+	--self:contentView():enterFullScreenMode_withOptions(objc.NSScreen:mainScreen(), nil)
 end
 
-function NWWindow:clientarea_hit(event)
+function Window:windowWillExitFullScreen()
+	print'exit fullscreen'
+end
+
+function Window:willUseFullScreenPresentationOptions(options)
+	print('here1', options)
+	return options
+end
+
+--TODO: hack
+objc.override(Window, 'willUseFullScreenContentSize', function(size)
+	print('here2', size)
+end, 'd@:@dd')
+
+function Window:customWindowsToEnterFullScreenForWindow()
+	return {self}
+end
+
+function Window:customWindowsToExitFullScreenForWindow()
+	return {self}
+end
+
+--positioning ----------------------------------------------------------------
+
+function app:_getmagnets(around_nswin)
+	local t = {} --{{x=, y=, w=, h=}, ...}
+
+	local opt = bit.bor(
+		objc.kCGWindowListOptionOnScreenOnly,
+		objc.kCGWindowListExcludeDesktopElements)
+
+	local nswin_number = tonumber(around_nswin:windowNumber())
+	local list = objc.CGWindowListCopyWindowInfo(opt, nswin_number) --front-to-back order assured
+
+	--a glimpse into the mind of a Cocoa programmer...
+	local bounds = ffi.new'CGRect[1]'
+	for i = 0, tonumber(objc.CFArrayGetCount(list)-1) do
+		local entry = ffi.cast('id', objc.CFArrayGetValueAtIndex(list, i)) --entry is NSDictionary
+		local sharingState = entry:objectForKey(ffi.cast('id', objc.kCGWindowSharingState)):intValue()
+		if sharingState ~= objc.kCGWindowSharingNone then --filter out windows we can't read from
+			local layer = entry:objectForKey(ffi.cast('id', objc.kCGWindowLayer)):intValue()
+			local number = entry:objectForKey(ffi.cast('id', objc.kCGWindowNumber)):intValue()
+			if layer <= 0 and number ~= nswin_number then --ignore system menu, dock, etc.
+				local boundsEntry = entry:objectForKey(ffi.cast('id', objc.kCGWindowBounds))
+				objc.CGRectMakeWithDictionaryRepresentation(ffi.cast('CFDictionaryRef', boundsEntry), bounds)
+				local x, y, w, h = unpack_nsrect(bounds[0]) --already flipped
+				t[#t+1] = {x = x, y = y, w = w, h = h}
+			end
+		end
+	end
+
+	objc.CFRelease(ffi.cast('id', list))
+
+	return t
+end
+
+function app:magnets(around_nswin)
+	if not self._magnets then
+		self._magnets = self:_getmagnets(around_nswin)
+	end
+	return self._magnets
+end
+
+function window:magnets()
+	return self.app:magnets(self.nswin)
+end
+
+function Window:clientarea_hit(event)
 	local mp = event:locationInWindow()
 	local rc = self:contentView():bounds()
-	return box2d.hit(mp.x, mp.y, unpack_rect(rc))
+	return box2d.hit(mp.x, mp.y, unpack_nsrect(rc))
 end
 
 local buttons = {
@@ -478,7 +515,7 @@ local buttons = {
 	objc.NSWindowDocumentVersionsButton,
 	objc.NSWindowFullScreenButton,
 }
-function NWWindow:titlebar_buttons_hit(event)
+function Window:titlebar_buttons_hit(event)
 	for i,btn in ipairs(buttons) do
 		local button = self:standardWindowButton(btn)
 		if button then
@@ -511,68 +548,155 @@ local function resize_area_hit(mx, my, w, h)
 	end
 end
 
-function NWWindow:resize_area_hit(event)
+function Window:resize_area_hit(event)
 	local mp = event:locationInWindow()
-	local _, _, w, h = unpack_rect(self:frame())
+	local _, _, w, h = unpack_nsrect(self:frame())
 	return resize_area_hit(mp.x, mp.y, w, h)
 end
 
-function NWWindow:sendEvent(event)
-	--take over window dragging by the titlebar so that we can post moving events
-	local etype = event:type()
-	if self.dragging then
-		if etype == objc.NSLeftMouseDragged then
-			local mp = event:mouseLocation()
-			mp.x = mp.x - self.dragoffset.x
-			mp.y = mp.y - self.dragoffset.y
-			local frame = self:frame()
-			local x, y, w, h = self.api:_backend_resizing('move', mp.x, mp.y, frame.size.width, frame.size.height)
-			if x then
-				self:setFrame_display(objc.NSMakeRect(x, y, w, h), false)
-			else
-				self:setFrameOrigin(mp)
+function Window:edgesnapping(snapping)
+	self.nswin:setMovable(not snapping)
+end
+
+function Window:sendEvent(event)
+	if self.frontend:edgesnapping() then
+		--take over window dragging by the titlebar so that we can post moving events
+		local etype = event:type()
+		if self.dragging then
+			if etype == objc.NSLeftMouseDragged then
+				self:setmouse(event)
+				local mx = self.frontend._mouse.x - self.dragoffset_x
+				local my = self.frontend._mouse.y - self.dragoffset_y
+				local x, y, w, h = flip_screen_rect(nil, unpack_nsrect(self:frame()))
+				x = x + mx
+				y = y + my
+				local x1, y1, w1, h1 = self.frontend:_backend_resizing('move', x, y, w, h)
+				if x1 or y1 or w1 or h1 then
+					self:setFrame_display(objc.NSMakeRect(flip_screen_rect(nil, override_rect(x, y, w, h, x1, y1, w1, h1))), false)
+				else
+					self:setFrameOrigin(mp)
+				end
+				return
+			elseif etype == objc.NSLeftMouseUp then
+				self.dragging = false
+				self.mousepos = nil
+				self.app._magnets = nil --clear magnets
+				return
 			end
+		elseif etype == objc.NSLeftMouseDown
+			and not self:clientarea_hit(event)
+			and not self:titlebar_buttons_hit(event)
+			and not self:resize_area_hit(event)
+		then
+			self:setmouse(event)
+			self:makeKeyAndOrderFront(nil)
+			self.app.nsapp:activateIgnoringOtherApps(true)
+			self.dragging = true
+			self.dragoffset_x = self.frontend._mouse.x
+			self.dragoffset_y = self.frontend._mouse.y
 			return
-		elseif etype == objc.NSLeftMouseUp then
-			self.dragging = false
-			self.mousepos = nil
-			return
+		elseif etype == objc.NSLeftMouseDown then
+			self:makeKeyAndOrderFront(nil)
+			self.mousepos = event:locationInWindow() --for resizing
 		end
-	elseif etype == objc.NSLeftMouseDown
-		and not self:clientarea_hit(event)
-		and not self:titlebar_buttons_hit(event)
-		and not self:resize_area_hit(event)
-	then
-		self.dragging = true
-		local mp = event:mouseLocation()
-		local wp = self:frame().origin
-		mp.x = mp.x - wp.x
-		mp.y = mp.y - wp.y
-		self.dragoffset = mp
-		self.dragging = true
-		return
-	elseif etype == objc.NSLeftMouseDown then
-		self.mousepos = event:locationInWindow() --for resizing
 	end
 	objc.callsuper(self, 'sendEvent', event)
 end
 
-function NWWindow:windowWillStartLiveResize()
-	local mx, my = self.mousepos.x, self.mousepos.y
-	local _, _, w, h = unpack_rect(self:frame())
-	self.how = resize_area_hit(mx, my, w, h)
-end
-
-function NWWindow:windowDidResize()
-	local x, y, w, h = self.api:_backend_resizing(self.how, flip_screen_rect(nil, unpack_rect(self:frame())))
-	if x then
-		x, y, w, h = flip_screen_rect(nil, x, y, w, h)
-		self:setFrame_display(objc.NSMakeRect(x, y, w, h), true)
+function Window:windowWillStartLiveResize()
+	if not self.mousepos then
+		self.mousepos = self:mouseLocationOutsideOfEventStream()
 	end
-	self.api:_backend_resized()
+	local mx, my = self.mousepos.x, self.mousepos.y
+	local _, _, w, h = unpack_nsrect(self:frame())
+	self.how = resize_area_hit(mx, my, w, h)
+	self.app._magnets = nil --clear magnets
+	self.frontend:_backend_start_resize()
 end
 
---cursors
+function Window:windowDidEndLiveResize()
+	self.frontend:_backend_end_resize()
+end
+
+function Window:resizing(w_, h_)
+	if not self.how then return w_, h_ end
+	local x, y, w, h = flip_screen_rect(nil, unpack_nsrect(self:frame()))
+	if self.how:find'top' then y, h = y + h - h_, h_ end
+	if self.how:find'bottom' then h = h_ end
+	if self.how:find'left' then x, w = x + w - w_, w_ end
+	if self.how:find'right' then w = w_ end
+	local x1, y1, w1, h1 = self.frontend:_backend_resizing(self.how, x, y, w, h)
+	if x1 or y1 or w1 or h1 then
+		x, y, w, h = flip_screen_rect(nil, override_rect(x, y, w, h, x1, y1, w1, h1))
+	end
+	return w, h
+end
+
+function Window.windowWillResize_toSize(cpu)
+	if ffi.arch == 'x64' then
+		--RDI = self, XMM0 = NSSize.x, XMM1 = NSSize.y
+		local self = ffi.cast('id', cpu.RDI.p)
+		local w = cpu.XMM[0].lo.f
+		local h = cpu.XMM[1].lo.f
+		w, h = self:resizing(w, h)
+		--return double-only structs <= 8 bytes in XMM0:XMM1
+		cpu.XMM[0].lo.f = w
+		cpu.XMM[1].lo.f = h
+	else
+		--ESP[1] = self, ESP[2] = selector, ESP[3] = sender, ESP[4] = NSSize.x, ESP[5] = NSSize.y
+		local self = ffi.cast('id', cpu.ESP.dp[1].p)
+		w = cpu.ESP.dp[4].f
+		h = cpu.ESP.dp[5].f
+		w, h = self:resizing(w, h)
+		--return values <= 8 bytes in EAX:EDX
+		cpu.EAX.f = w
+		cpu.EDX.f = h
+	end
+end
+
+function Window:windowDidResize()
+	self.frontend:_backend_resized()
+end
+
+--displays -------------------------------------------------------------------
+
+function app:_display(main_h, screen)
+	local t = {}
+	t.x, t.y, t.w, t.h = flip_screen_rect(main_h, unpack_nsrect(screen:frame()))
+	t.client_x, t.client_y, t.client_w, t.client_h = flip_screen_rect(main_h, unpack_nsrect(screen:visibleFrame()))
+	return self.frontend:_display(t)
+end
+
+function app:displays()
+	local screens = objc.NSScreen:screens()
+
+	--get main_h from the screens snapshot array
+	local frame = screens:objectAtIndex(0):frame() --main screen always comes first
+	assert(frame.origin.x == 0 and frame.origin.y == 0) --main screen alright
+	local main_h = frame.size.height
+
+	--build the list of display objects to return
+	local displays = {}
+	for i = 0, tonumber(screens:count()-1) do
+		table.insert(displays, self:_display(main_h, screens:objectAtIndex(i)))
+	end
+	return displays
+end
+
+function app:main_display()
+	local screen = objc.NSScreen:mainScreen()
+	return self:_display(nil, screen)
+end
+
+function window:display()
+	return self.app:_display(nil, self.nswin:screen())
+end
+
+function App:applicationDidChangeScreenParameters()
+	self.frontend:_backend_displays_changed()
+end
+
+--cursors --------------------------------------------------------------------
 
 local cursors = {
 	--pointers
@@ -624,9 +748,9 @@ function window:cursor(name)
 	end
 end
 
-function NWWindow:cursorUpdate(event)
+function Window:cursorUpdate(event)
 	if self:clientarea_hit(event) then
-		setcursor(self.win._cursor)
+		setcursor(self.backend._cursor)
 	else
 		objc.callsuper(self, 'cursorUpdate', event)
 	end
@@ -634,19 +758,23 @@ end
 
 --frame
 
-function window:display()
-	return display(nil, self.nswin:screen())
-end
-
 function window:title(title)
 	if title then
-		self.nswin:setTitle(NSStr(title))
+		self.nswin:setTitle(title)
 	else
-		return self.nswin:title()
+		return objc.tolua(self.nswin:title())
 	end
 end
 
---keyboard
+function window:topmost(topmost)
+	if topmost ~= nil then
+		self.backend.topmost = topmost
+	else
+		return self.backend.topmost
+	end
+end
+
+--keyboard -------------------------------------------------------------------
 
 local keynames = {
 
@@ -783,7 +911,7 @@ end
 local keystate
 local capsstate
 
-function NWWindow:reset_keystate()
+function Window:reset_keystate()
 	--note: platform-dependent flagbits are not given with NSEvent:modifierFlags() nor with GetKeys(),
 	--so we can't get the initial state of specific modifier keys.
 	keystate = {}
@@ -795,22 +923,22 @@ local function keyname(event)
 	return keynames[keycode]
 end
 
-function NWWindow:keyDown(event)
+function Window:keyDown(event)
 	local key = keyname(event)
 	if not key then return end
 	if not event:isARepeat() then
-		self.api:_backend_keydown(key)
+		self.frontend:_backend_keydown(key)
 	end
-	self.api:_backend_keypress(key)
+	self.frontend:_backend_keypress(key)
 end
 
-function NWWindow:keyUp(event)
+function Window:keyUp(event)
 	local key = keyname(event)
 	if not key then return end
 	if key == 'help' then --simulate the missing keydown for the help/insert key
-		self.api:_backend_keydown(key)
+		self.frontend:_backend_keydown(key)
 	end
-	self.api:_backend_keyup(key)
+	self.frontend:_backend_keyup(key)
 end
 
 local flagbits = {
@@ -826,16 +954,16 @@ local flagbits = {
 	rctrl    = 2^13,
 }
 
-function NWWindow:flagsChanged(event)
+function Window:flagsChanged(event)
 	--simulate key pressing for capslock
 	local newcaps = capslock_state()
 	local oldcaps = capsstate
 	if newcaps ~= oldcaps then
 		capsstate = newcaps
 		keystate.capslock = true
-		self.api:_backend_keydown'capslock'
+		self.frontend:_backend_keydown'capslock'
 		keystate.capslock = false
-		self.api:_backend_keyup'capslock'
+		self.frontend:_backend_keyup'capslock'
 	end
 
 	--detect keydown/keyup state change for modifier keys
@@ -846,10 +974,10 @@ function NWWindow:flagsChanged(event)
 		if oldstate ~= newstate then
 			keystate[name] = newstate
 			if newstate then
-				self.api:_backend_keydown(name)
-				self.api:_backend_keypress(name)
+				self.frontend:_backend_keydown(name)
+				self.frontend:_backend_keypress(name)
 			else
-				self.api:_backend_keyup(name)
+				self.frontend:_backend_keyup(name)
 			end
 		end
 	end
@@ -896,95 +1024,117 @@ function window:key(name)
 	end
 end
 
---mouse
+--mouse ----------------------------------------------------------------------
 
-function NWWindow:setmouse(event)
-	local m = self.api.mouse
+function app:double_click_time() --milliseconds
+	return objc.NSEvent:doubleClickInterval() * 1000
+end
+
+function app:double_click_target_area()
+	return 4, 4 --like in windows
+end
+
+function Window:setmouse(event)
+	local m = self.frontend._mouse
 	local pos = event:locationInWindow()
-	m.x, m.y = self:flip_y(pos.x, pos.y)
+	m.x = pos.x
+	m.y = self:contentView():frame().size.height - pos.y --flip y around contentView's height
 	local btns = tonumber(event:pressedMouseButtons())
 	m.left = bit.band(btns, 1) ~= 0
 	m.right = bit.band(btns, 2) ~= 0
 	m.middle = bit.band(btns, 4) ~= 0
-	m.ex1 = bit.band(btns, 8) ~= 0
-	m.ex2 = bit.band(btns, 16) ~= 0
+	m.xbutton1 = bit.band(btns, 8) ~= 0
+	m.xbutton2 = bit.band(btns, 16) ~= 0
 	return m
 end
 
-function NWWindow:mouseDown(event)
+function Window:mouseDown(event)
 	self:setmouse(event)
-	self.api:_backend_mousedown'left'
+	self.frontend:_backend_mousedown'left'
 end
 
-function NWWindow:mouseUp(event)
+function Window:mouseUp(event)
 	self:setmouse(event)
-	self.api:_backend_mouseup'left'
+	self.frontend:_backend_mouseup'left'
 end
 
-function NWWindow:rightMouseDown(event)
+function Window:rightMouseDown(event)
 	self:setmouse(event)
-	self.api:_backend_mousedown'right'
+	self.frontend:_backend_mousedown'right'
 end
 
-function NWWindow:rightMouseUp(event)
+function Window:rightMouseUp(event)
 	self:setmouse(event)
-	self.api:_backend_mouseup'right'
+	self.frontend:_backend_mouseup'right'
 end
 
-local other_buttons = {'', 'middle', 'ex1', 'ex2'}
+local other_buttons = {'', 'middle', 'xbutton1', 'xbutton2'}
 
-function NWWindow:otherMouseDown(event)
+function Window:otherMouseDown(event)
 	local btn = other_buttons[tonumber(event:buttonNumber())]
 	if not btn then return end
 	self:setmouse(event)
-	self.api:_backend_mousedown(btn)
+	self.frontend:_backend_mousedown(btn)
 end
 
-function NWWindow:otherMouseUp(event)
+function Window:otherMouseUp(event)
 	local btn = other_buttons[tonumber(event:buttonNumber())]
 	if not btn then return end
 	self:setmouse(event)
-	self.api:_backend_mouseup(btn)
+	self.frontend:_backend_mouseup(btn)
 end
 
-function NWWindow:mouseMoved(event)
+function Window:mouseMoved(event)
 	local m = self:setmouse(event)
-	self.api:_backend_mousemove(m.x, m.y)
+	self.frontend:_backend_mousemove(m.x, m.y)
 end
 
-function NWWindow:mouseDragged(event)
+function Window:mouseDragged(event)
 	self:mouseMoved(event)
 end
 
-function NWWindow:rightMouseDragged(event)
+function Window:rightMouseDragged(event)
 	self:mouseMoved(event)
 end
 
-function NWWindow:otherMouseDragged(event)
+function Window:otherMouseDragged(event)
 	self:mouseMoved(event)
 end
 
-function NWWindow:mouseEntered(event)
+function Window:mouseEntered(event)
 	self:setmouse(event)
-	self.api:_backend_mouseenter()
+	self.frontend:_backend_mouseenter()
 end
 
-function NWWindow:mouseExited(event)
+function Window:mouseExited(event)
 	self:setmouse(event)
-	self.api:_backend_mouseleave()
+	self.frontend:_backend_mouseleave()
 end
 
-function NWWindow:scrollWheel(event)
+function Window:scrollWheel(event)
 	self:setmouse(event)
 	local dx = event:deltaX()
 	if dx ~= 0 then
-		self.api:_backend_mousehwheel(dx)
+		self.frontend:_backend_mousehwheel(dx)
 	end
 	local dy = event:deltaY()
 	if dy ~= 0 then
-		self.api:_backend_mousewheel(dy)
+		self.frontend:_backend_mousewheel(dy)
 	end
 end
+
+function window:mouse_pos()
+	--return objc.NSEvent:
+end
+
+--rendering ------------------------------------------------------------------
+
+--TODO
+
+
+--buttons --------------------------------------------------------------------
+
+
 
 if not ... then require'nw_test' end
 
