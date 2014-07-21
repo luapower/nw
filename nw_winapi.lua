@@ -51,24 +51,10 @@ end
 --message loop ---------------------------------------------------------------
 
 function app:run()
-	self._started = true --unlock app:active_window()
-	--check for deferred app activation event
-	if self._activate then
-		self._activate = nil
-		self._active = true
-		if self.frontend:window_count() > 0 then
-			self.frontend:_backend_activated()
-		end
-	end
-	--check for deferred window activation event
-	if self._activate_window then
-		local win = self._activate_window
-		self._activate_window = nil
-		if not win:dead() then
-			win:_backend_activated()
-		end
-	end
-	winapi.MessageLoop()
+	self:_activate_started()
+	winapi.MessageLoop(function(msg)
+		--print(winapi.findname('WM_', msg.message))
+	end)
 end
 
 function app:stop()
@@ -203,10 +189,73 @@ end
 
 --activation -----------------------------------------------------------------
 
+function app:_activated()
+	if not self._started then
+		--defer app activation if the app is not started, to emulate OSX behavior.
+		self._activate = true
+	elseif not self._active then --ignore duplicate events.
+		self._active = true
+		self.frontend:_backend_activated()
+	end
+end
+
+function app:_deactivated()
+	if not self._started then
+		--remove deferred activation if the app was deactivated before running.
+		self._activate = nil
+	elseif self._active then --ignore duplicate events.
+		self._active = false
+		self.frontend:_backend_deactivated()
+	end
+end
+
+function app:_activate_started()
+	self._started = true
+	--check for deferred app activation event
+	if self._activate then
+		self._activate = nil
+		if self.frontend:window_count() > 0 then
+			self:_activated()
+		end
+	end
+	--check for deferred window activation event
+	if self._activate_window then
+		local win = self._activate_window
+		self._activate_window = nil
+		if not win.frontend:dead() then
+			win:_activated()
+		end
+	end
+end
+
+function window:_activated()
+	self.app:_activated()
+	self.app._last_active_window = self --for the next app:activate()
+	self:reset_keystate()
+	if not self.app._started then
+		--defer activation if the app is not started, to emulate OSX behavior.
+		self.app._activate_window = self
+	elseif not self._active then --ignore duplicate events.
+		self._active = true
+		self.frontend:_backend_activated()
+	end
+end
+
+function window:_deactivated()
+	self:reset_keystate()
+	if not self.app._started then
+		--clear deferred activation if the app is not started, to emulate OSX behavior.
+		self.app._activate_window = nil
+	elseif self._active then --ignore duplicate events.
+		self._active = false
+		self.frontend:_backend_deactivated()
+	end
+end
+
 function app:activate()
-	local frontend = self._last_active_window
-	if frontend and not frontend:dead() then
-		frontend.backend.win:setforeground()
+	local win = self._last_active_window
+	if win and not win.frontend:dead() then
+		win.win:setforeground()
 	end
 end
 
@@ -220,14 +269,11 @@ function app:active()
 end
 
 function window:activate()
-	--SetActiveWindow() wrongly triggers a WM_ACTIVATEAPP, because the app doesn't actually activate.
-	--so if the app is not active, we trigger on_activate() directly to avoid letting the OS
-	--trigger on_activate_app().
-	if not self.app._active then
-		self.win:on_activate()
-	else
-		self.win:activate()
-	end
+	--if the app is inactive, this doesn't activate the window,
+	--so we want to set _last_active_window for a later call to app:activate(),
+	--which will flash this window's button.
+	self.app._last_active_window = self
+	self.win:activate()
 end
 
 function window:active()
@@ -235,52 +281,17 @@ function window:active()
 	return self.app._active and self.win.active or false
 end
 
-function Window:WM_NCACTIVATE(on)
-	if on == 1 then
-		--TODO:
-		print'WM_NCACTIVATE'
-	end
-end
-
-function Window:on_activate()
-	self.app._last_active_window = self.frontend
-	self.backend:reset_keystate()
-	if not self.app._started then
-		--defer activation if the app is not started, to emulate OSX behavior.
-		self.app._activate_window = self.frontend
-	elseif self.app._active then
-		--trigger activation only if the app is active, to emulate OSX behavior.
-		self.frontend:_backend_activated()
-	end
+--this event is received
+function Window:on_nc_activate()
+	self.backend:_activated()
 end
 
 function Window:on_deactivate()
-	self.backend:reset_keystate()
-	if not self.app._started then
-		--skip window deactivation if the app is not started, to emulate OSX behavior.
-		self.app._activate_window = nil
-	else
-		self.frontend:_backend_deactivated()
-	end
-end
-
-function Window:on_activate_app()
-	if self.app._active then return end --duplicate
-	--defer app activation if the app is not started, to emulate OSX behavior.
-	if not self.app._started then
-		self.app._activate = true
-	else
-		self.app._active = true
-		self.app.frontend:_backend_activated()
-	end
+	self.backend:_deactivated()
 end
 
 function Window:on_deactivate_app()
-	if not self.app._active then return end --duplicate
-	--remove deferred activation if the app was deactivated before running.
-	self.app._activate = nil
-	self.app._active = false
-	self.app.frontend:_backend_deactivated()
+	self.app:_deactivated()
 end
 
 --state ----------------------------------------------------------------------

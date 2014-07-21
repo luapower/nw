@@ -266,7 +266,7 @@ window.defaults = {
 	resizeable = true,
 	fullscreenable = true,
 	autoquit = false, --quit the app on closing
-	edgesnapping = true,
+	edgesnapping = false,
 }
 
 function app:window(t)

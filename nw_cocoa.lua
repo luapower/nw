@@ -10,6 +10,8 @@
 --isVisible() returns false both when the window is orderOut() and when it's minimized().
 --windows created after calling activateIgnoringOtherApps(false) go behind the active app.
 --windows created after calling activateIgnoringOtherApps(true) go in front of the active app.
+--windows activated while the app is inactive will go in front when activateIgnoringOtherApps(true) is called,
+--but other windows will not, unlike clicking the dock icon. this is hysterical.
 --only the windows made key after the call to activateIgnoringOtherApps(true) are put in front of the active app!
 --quitting the app from the app's Dock menu (or calling terminate(nil)) calls appShouldTerminate, then calls close()
 --  on all windows, thus without calling windowShouldClose, but only windowWillClose.
@@ -572,7 +574,8 @@ function Window:sendEvent(event)
 				y = y + my
 				local x1, y1, w1, h1 = self.frontend:_backend_resizing('move', x, y, w, h)
 				if x1 or y1 or w1 or h1 then
-					self:setFrame_display(objc.NSMakeRect(flip_screen_rect(nil, override_rect(x, y, w, h, x1, y1, w1, h1))), false)
+					self:setFrame_display(objc.NSMakeRect(flip_screen_rect(nil,
+						override_rect(x, y, w, h, x1, y1, w1, h1))), false)
 				else
 					self:setFrameOrigin(mp)
 				end
