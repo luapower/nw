@@ -451,15 +451,22 @@ end)
 
 --window activaton -----------------------------------------------------------
 
---win:activated() and win:deactivated() events are sent for win:activate().
---activation events are not sent until the app starts, and then
---only a single app:activated() event followed by a single win:activated()
---event from the lastly activated window.
-add('activation-window-events', function()
+--1. the OS activates the app when the first window is created.
+--2. the app activation event comes before the win activation event.
+--3. the OS deactivates the app when the last window is closed (Windows).
+--4. the app deactivation event comes after the win deactivation event.
+--5. activation events deferred for when the app starts, and then,
+--a single app:activated() event is fired, followed by a single
+--win:activated() event from the last window that was activated.
+--6. app:active() is true all the way, until the last window is closed (Windows).
+--7. app:active_window() works (gives the expected window).
+add('activation-events', function()
 	local rec = recorder()
 	local win1 = app:window(winpos())
 	local win2 = app:window(winpos())
 	local win3 = app:window(winpos())
+	function app:activated() rec'app-activated' end
+	function app:deactivated() rec'app-deactivated' end
 	function win1:activated() rec'win1-activated' end
 	function win2:activated() rec'win2-activated' end
 	function win3:activated() rec'win3-activated' end
@@ -468,17 +475,30 @@ add('activation-window-events', function()
 	function win3:deactivated() rec'win3-deactivated' end
 	app:runafter(0, function()
 		rec'started'
-		win1:activate()
-		win2:activate()
-		win3:activate()
-		win3:close()
-		win2:close()
+		assert(app:active())
+		win1:activate(); assert(app:active_window() == win1)
+		win2:activate(); assert(app:active_window() == win2)
+		win3:activate(); assert(app:active_window() == win3)
+		win3:close();    assert(app:active_window() == win2)
+		win2:close();    assert(app:active_window() == win1)
+		assert(app:active())
 		win1:close()
+		assert(not app:active_window())
+		if ffi.os == 'Windows' then
+			--on Windows, the app is deactivated after the last windows is closed.
+			assert(not app:active())
+		else
+			--on OSX, the app stays active (there's still the main menu and the dock icon).
+			rec'app-deactivated'
+			assert(app:active())
+		end
+		rec'ended'
 	end)
 	rec'before-run'
 	app:run()
 	rec{
 		'before-run',
+		'app-activated',
 		'win3-activated',
 		'started',
 		'win3-deactivated', 'win1-activated',
@@ -487,54 +507,45 @@ add('activation-window-events', function()
 		'win3-deactivated', 'win2-activated',
 		'win2-deactivated', 'win1-activated',
 		'win1-deactivated',
-	}
-end)
-
---app activates itself when the first window is created.
---app activation event comes before win activation event.
-add('activation-app-events', function()
-	local rec = recorder()
-	local win = app:window(winpos())
-	rec'before-run'
-	function app:activated() rec'app-activated' end
-	function win:activated() rec'win-activated' end
-	app:runafter(0, function()
-		win:close()
-	end)
-	app:run()
-	rec{
-		'before-run',
-		'app-activated',
-		'win-activated',
+		'app-deactivated', --not on OSX
+		'ended',
 	}
 end)
 
 --app:activate() works, activating the app continuously for 5 seconds.
 --this is an interactive test: you must activate another app to see it.
+--note: on OSX, the app is not activated immediately.
 add('activation-app-activate', function()
-	function app:activated() print'activated' end
-	function app:deactivated() print'deactivated' end
+	function app:activated() print'app-activated' end
+	function app:deactivated() print'app-deactivated' end
 	local win = app:window(winpos())
+	function win:activated() print'win-activated' end
+	function win:deactivated() print'win-deactivated' end
 	local i = 0
-	app:runevery(0.01, function()
-		i = i + 0.01
+	app:runevery(0.1, function()
+		i = i + 0.1
 		app:activate()
+		print('app:active() -> ', app:active(), 'app:active_window() -> ', app:active_window())
 		if i > 5 then
-			app:stop()
+			app:quit()
 		end
 	end)
 	app:run()
 end)
 
---app:activate() is ignored if there are no windows.
+--if there are no visible windows, in Windows, app:activate() is ignored (there's no
+--concept of an app outside the concept of windows), while in OSX the app's
+--main menu is activated.
 --this is an interactive test: you must activate another app to see it.
 add('activation-app-activate-no-windows', function()
 	function app:activated() print'activated' end
 	function app:deactivated() print'deactivated' end
 	local i = 0
-	app:runevery(0.01, function()
-		i = i + 0.01
+	local win = app:window(winpos{visible = false})
+	app:runevery(0.1, function()
+		i = i + 0.1
 		app:activate()
+		print('app:active() -> ', app:active(), 'app:active_window() -> ', app:active_window())
 		if i > 5 then
 			app:stop()
 		end
@@ -542,47 +553,36 @@ add('activation-app-activate-no-windows', function()
 	app:run()
 end)
 
---app:active_window() works.
-add('activation-app-active_window', function()
-	local win1 = app:window(winpos())
-	local win2 = app:window(winpos())
-	assert(not app:active_window()) --defered till app starts.
-	app:runafter(0, function()
-		assert(app:active_window() == win2)
-		win1:activate()
-		assert(app:active_window() == win1)
-		app:stop()
-	end)
-	app:run()
-	assert(app:active_window() == win1)
-	print'ok'
-end)
-
---app:active() works.
+--app:active() works (returns true only if the app is active).
+--app:active_window() works (always returns nil if the app is not active).
 --this is an interactive test: you must activate another app to see it.
 add('activation-app-active', function()
 	local win = app:window(winpos())
-	app:runevery(0.5, function()
+	local i = 0
+	app:runevery(0.1, function()
+		i = i + 0.1
 		if app:active() then
 			print('app is active', app:active_window())
 		else
 			print('app is not active', app:active_window())
+		end
+		if i > 5 then
+			app:stop()
 		end
 	end)
 	app:run()
 	print'ok'
 end)
 
---window:activate() is ignored if the app is inactive.
---the active window is changed to win2 when the app becomes inactive,
---but that can't be seen until the app becomes active (OSX only,
---there's no user-facing concept of an app in Windows).
+--when the app is inactive, window:activate() is deferred to when the app becomes active.
 --this is an interactive test: you must activate another app to see it.
-add('activation-window-activate-inactive', function()
+add('activation-window-activate-defer', function()
 	local win1 = app:window(winpos()); win1.name = 'w1'
 	local win2 = app:window(winpos()); win2.name = 'w2'
 	function win1:activated() print'win1-activated' end
 	function win2:activated() print'win2-activated' end
+	function app:activated() print'app-activated' end
+	function app:deactivated() print'app-deactivated' end
 	app:runevery(0.2, function()
 		if win1:dead() or win2:dead() then
 			app:quit()
@@ -594,14 +594,17 @@ add('activation-window-activate-inactive', function()
 				'win2 active?', win2:active()
 			)
 			if not app:active() then
-				win2:activate()
+				app:runafter(2, function()
+					win2:activate()
+					--app:activate()
+				end)
 			end
 		end
 	end)
 	app:run()
 end)
 
-add('activation-window-activate-inactive2', function()
+add('activation-window-activate-blink', function()
 	local win1 = app:window(winpos()); win1.name = 'w1'
 	local win2 = app:window(winpos()); win2.name = 'w2'
 	function win1:activated() print'win1-activated' end
