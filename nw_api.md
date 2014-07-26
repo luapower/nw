@@ -5,13 +5,17 @@ tagline:   native widgets API
 
 ## `local nw = require'nw'`
 
+> In the following table "?" means boolean.
+
 ----------------- -------------------------------- ----------------------------------- --------------------------
 __topic__			__actions__								__queries__									__events__
 
 backends				nw:init([backendname]) 				nw.backends-> {OS = backendname} \
-																	nw.backend.name -> backendname
+																	nw.backend.name -> name \
+																	nw:os() -> os_version \
+																	nw:os(compat_version) -> ?
 
-oo						obj:override(method, func)
+OOP					obj:override(method, func)
 
 events				obj:observe(event, func) 															obj:event(name, args...) \
 																													obj:\<eventname\>(args...)
@@ -38,12 +42,13 @@ windows				app:window(params) -> win \		\												\
 						win:close() 							win:dead() -> ? 							win:closing() -> ? \
 																													win:closed()
 
-activation			app:activate()	\						app:active() -> ? \						app:activated() \
-						\											\												app:deactivated() \
-						win:activate()							win:active() -> ? \						win:activated() \
+app activation		app:activate()	\						app:active() -> ? \						app:activated() \
+																													app:deactivated()
+
+window activation	win:activate()							win:active() -> ? \						win:activated() \
 																	app:active_window() -> win				win:deactivated()
 
-state					win:show() \							win:visible() -> ? \
+window state		win:show() \							win:visible() -> ? \
 						win:hide() \							\
 						win:minimize() \						win:minimized() -> ? \					win:state_changed(how)
 						win:maximize() \						win:maximized() -> ? \
@@ -55,6 +60,7 @@ position				win:frame_rect(x, y, w, h)			win:frame_rect() -> x, y, w, h \		win:r
 																	win:client_rect() -> x, y, w, h		win:resized()
 
 displays															app:displays() -> {disp1, ...} \		app:displays_changed()
+																	app:display_count() -> n \
 																	app:main_display() -> disp \
 																	win:display() -> disp \
 																	disp:rect() -> x, y, w, h \
@@ -84,12 +90,15 @@ keyboard				app:ignore_numlock(?)				app:ignore_numlock() -> ? \			win:keydown(k
 mouse																win:mouse() -> m \						win:mousedown(button) \
 																	m.x, m.y, \									win:click(button, count) -> reset? \
 																	m.left, m.right, m.middle, \			win:mouseup(button) \
-																	m.xbutton1, m.xbutton2					win:mouseenter() \
-																													win:mouseleave() \
+																	m.ex1, m.ex2 \								win:mouseenter() \
+																	win:mouse(var) -> m[var]				win:mouseleave() \
 																													win:mousemove(x, y) \
 																													win:mousewheel(delta) \
 																													win:mousehwheel(delta)
 
 rendering			win:invalidate()																		win:render(cr)
+
+menus					win:menu(menu_t)						win:menu() -> menu_t
+						win:menu(path, menu_t)				win:menu(path) -> menu_t
 ----------------- -------------------------------- ----------------------------------- --------------------------
 

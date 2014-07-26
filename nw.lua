@@ -23,6 +23,62 @@ function nw:init(bkname)
 	self.backend.frontend = self
 end
 
+--os version -----------------------------------------------------------------
+
+--check if ver2 >= ver1, where ver1 and ver2 have the form 'name maj.min....'.
+local function check_version(ver1, ver2)
+	ver1 = ver1:lower()
+	ver2 = ver2:lower()
+	local os1, v1 = ver1:match'^([^%s]+)(.*)'
+	local os2, v2 = ver2:match'^([^%s]+)(.*)'
+	if not os1 then return false end     --empty string or starts with spaces
+	if os1 ~= os2 then return false end  --different OS
+	v1 = v1:match'^%s*(.*)'
+	v2 = v2:match'^%s*(.*)'
+	if v1 == v2 then
+		return true          --shortcut: equal version strings.
+	end
+	while v1 ~= '' do       --while there's the next part of ver1 to check...
+		if v2 == '' then     --there's no next part of ver2 to check against.
+			return false
+		end
+		local p1, p2         --part prefix (eg. SP3)
+		local n1, n2         --part number
+		p1, n1, v1 = v1:match'^([^%.%d]*)(%d*)%.?(.*)' --eg. 'SP3.0' -> 'SP', '3', '0'
+		p2, n2, v2 = v2:match'^([^%.%d]*)(%d*)%.?(.*)'
+		assert(p1 ~= '' or n1 ~= '', 'invalid syntax') --ver1 part is a dot.
+		assert(p2 ~= '' or n2 ~= '', 'invalid syntax') --ver2 part is a dot.
+		if p1 ~= '' and p1 ~= p2 then
+			return false      --prefixes don't match.
+		end
+		if n1 ~= '' then     --above checks imply n2 ~= '' also.
+			local n1 = tonumber(n1)
+			local n2 = tonumber(n2)
+			if n1 ~= n2 then  --version parts are different, decide now.
+				return n2 > n1
+			end
+		end
+	end
+	return true             --no more parts of v1 to check.
+end
+
+local osver
+local osver_checks = {}    --cached version checks
+
+function nw:os(ver)
+	osver = osver or self.backend:os()
+	if ver then
+		local check = osver_checks[ver]
+		if check == nil then
+			check = check_version(ver, osver)
+			osver_checks[ver] = check
+		end
+		return check
+	else
+		return osver
+	end
+end
+
 --oo -------------------------------------------------------------------------
 
 local object = {}
@@ -275,10 +331,21 @@ end
 
 function window:_new(app, opt)
 	opt = glue.update({}, self.defaults, opt)
+	assert(opt.w, 'width missing')
+	assert(opt.h, 'height missing')
+
 	self = glue.inherit({app = app}, self)
 
 	self._mouse = {}
 	self._down = {}
+
+	--if missing x and/or y, center the window horizontally and/or vertically.
+	if not opt.x or not opt.y then
+		local bx, by, bw, bh = self.app:main_display():client_rect()
+		local x, y = box2d.align(opt.w, opt.h, 'center', 'center', bx, by, bw, bh)
+		opt.x = opt.x or x
+		opt.y = opt.y or y
+	end
 
 	self.backend = self.app.backend:window(self, opt)
 
@@ -293,7 +360,7 @@ function window:_new(app, opt)
 	self._autoquit = opt.autoquit
 	self._edgesnapping = opt.edgesnapping
 
-	app:_window_created(self)
+	self.app:_window_created(self)
 	self:_event'created'
 
 	--windows are created hidden
@@ -508,8 +575,8 @@ end
 
 local display = {}
 
-function app:_display(t)
-	return glue.inherit(t, display)
+function app:_display(backend)
+	return glue.inherit(backend, display)
 end
 
 function display:rect()
@@ -522,6 +589,10 @@ end
 
 function app:displays()
 	return self.backend:displays()
+end
+
+function app:display_count()
+	return self.backend:display_count()
 end
 
 function app:main_display()
@@ -630,28 +701,45 @@ function window:_backend_keychar(char)
 	self:_event('keychar', char)
 end
 
-function window:key(name)
+function window:key(keys)
 	self:_check()
-	return self.backend:key(name)
+	keys = keys:lower()
+	if keys:find'[^%+]%+' then --'alt+f3' -> 'alt f3'; 'ctrl++' -> 'ctrl +'
+		keys = keys:gsub('([^%+%s])%+', '%1 ')
+	end
+	if keys:find(' ', 1, true) then --it's a sequence, eg. 'alt f3'
+		local found
+		for key in keys:gmatch'[^%s]+' do
+			if not self.backend:key(key) then
+				return false
+			end
+			found = true
+		end
+		return assert(found, 'invalid key sequence')
+	end
+	return self.backend:key(keys)
 end
 
 --mouse ----------------------------------------------------------------------
 
-function window:mouse()
-	return self._mouse
+function window:mouse(var)
+	if var then
+		return self._mouse[var]
+	else
+		return self._mouse
+	end
 end
 
-function window:_backend_mousedown(button)
+function window:_backend_mousedown(button, mx, my)
 	local t = self._down[button]
 	if not t then
 		t = {count = 0}
 		self._down[button] = t
 	end
 
-	local m = self:mouse()
 	if t.count > 0
 		and self.app:timediff(t.time) < t.interval
-		and box2d.hit(m.x, m.y, t.x, t.y, t.w, t.h)
+		and box2d.hit(mx, my, t.x, t.y, t.w, t.h)
 	then
 		t.count = t.count + 1
 		t.time = self.app:time()
@@ -660,8 +748,8 @@ function window:_backend_mousedown(button)
 		t.time = self.app:time()
 		t.interval = self.app.backend:double_click_time()
 		t.w, t.h = self.app.backend:double_click_target_area()
-		t.x = m.x - t.w / 2
-		t.y = m.y - t.h / 2
+		t.x = mx - t.w / 2
+		t.y = my - t.h / 2
 	end
 
 	self:_event('mousedown', button)
@@ -676,28 +764,28 @@ function window:_backend_mousedown(button)
 	end
 end
 
-function window:_backend_mouseup(button)
-	self:_event('mouseup', button)
+function window:_backend_mouseup(button, x, y)
+	self:_event('mouseup', button, x, y)
 end
 
 function window:_backend_mouseenter()
-	self:_event('mouseenter')
+	self:_event'mouseenter'
 end
 
 function window:_backend_mouseleave()
-	self:_event('mouseleave')
+	self:_event'mouseleave'
 end
 
 function window:_backend_mousemove(x, y)
 	self:_event('mousemove', x, y)
 end
 
-function window:_backend_mousewheel(delta)
-	self:_event('mousewheel', delta)
+function window:_backend_mousewheel(delta, x, y)
+	self:_event('mousewheel', delta, x, y)
 end
 
-function window:_backend_mousehwheel(delta)
-	self:_event('mousehwheel', delta)
+function window:_backend_mousehwheel(delta, x, y)
+	self:_event('mousehwheel', delta, x, y)
 end
 
 --rendering ------------------------------------------------------------------
@@ -709,6 +797,113 @@ end
 
 function window:_backend_render(cr)
 	self:_event('render', cr)
+end
+
+--menus ----------------------------------------------------------------------
+
+local menu = {}
+
+function wrap_menu(backend)
+	if backend.frontend then
+		return backend.frontend --already wrapped
+	end
+	local self = glue.inherit({backend = backend}, menu)
+	backend.frontend = self
+	return self
+end
+
+function app:menu(menu)
+	return wrap_menu(self.backend:menu())
+end
+
+function window:menu()
+	return wrap_menu(self.backend:menu())
+end
+
+function window:popup(menu, x, y)
+	return self.backend:popup(menu, x or 0, y or 0)
+end
+
+function menu:popup(win, x, y)
+	win:popup(self, x, y)
+end
+
+local function parseargs(index, text, action, options)
+	local args = {}
+	if type(index) == 'table' then
+		args = index
+		index = args.index
+	elseif type(index) ~= 'number' then
+		index, args.text, args.action, options = nil, index, text, action --index is optional
+	else
+		args.text, args.action = text, action
+	end
+	glue.merge(args, options)
+	args.text = args.text or ''
+	if type(args.action) ~= 'function' then
+		args.action, args.submenu = nil, args.action
+	end
+	if not args.shortcut then
+		local text, shortcut = args.text:match'^(.-)%s%s+([^%s]+)$'
+		if shortcut then
+			args.text = text
+			args.shortcut = shortcut
+		end
+	end
+	return index, args
+end
+
+function menu:add(...)
+	return self.backend:add(parseargs(...))
+end
+
+function menu:set(...)
+	self.backend:set(parseargs(...))
+end
+
+function menu:remove(index)
+	self.backend:remove(index)
+end
+
+function menu:get(index, var)
+	if var then
+		local item = self.backend:get(index)
+		return item and item[var]
+	else
+		return self.backend:get(index)
+	end
+end
+
+function menu:item_count()
+	return self.backend:item_count()
+end
+
+function menu:items(var)
+	local t = {}
+	for i = 1, self:item_count() do
+		t[i] = self:get(i, var)
+	end
+	return t
+end
+
+function menu:checked(index, checked)
+	if checked == nil then
+		return self.backend:get_checked(index)
+	else
+		self.backend:set_checked(index, checked)
+	end
+end
+
+function menu:enabled(index, enabled)
+	if enabled == nil then
+		return self.backend:get_enabled(index)
+	else
+		self.backend:set_enabled(index, enabled)
+	end
+end
+
+function menu:count()
+	return self.backend:count()
 end
 
 --buttons --------------------------------------------------------------------

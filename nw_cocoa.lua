@@ -1,4 +1,4 @@
---native widgets cococa backend (Cosmin Apreutesei, public domain)
+--native widgets cococa backend (Cosmin Apreutesei, public domain).
 
 --COCOA NOTES
 -------------
@@ -63,13 +63,20 @@ local function flip_screen_rect(main_h, x, y, w, h)
 	return x, main_h - h - y, w, h
 end
 
-local backend = {name = 'cocoa'}
+local nw = {name = 'cocoa'}
+
+--os version -----------------------------------------------------------------
+
+function nw:os()
+	local s = objc.tolua(objc.NSProcessInfo:processInfo():operatingSystemVersionString()) --OSX 10.2+
+	return 'OSX '..(s:match'%d+%.%d+%.%d+')
+end
 
 --app object -----------------------------------------------------------------
 
 local app = {}
 
-function backend:app(frontend)
+function nw:app(frontend)
 	return app:_new(frontend)
 end
 
@@ -82,6 +89,10 @@ function app:_new(frontend)
 	--create the default autorelease pool for small objects.
 	self.pool = objc.NSAutoreleasePool:new()
 
+	--TODO: we have to reference mainScreen() before using any of the the display functions,
+	--or we will get errors on [NSRecursiveLock unlock].
+	objc.NSScreen:mainScreen()
+
 	self.nsapp = App:sharedApplication()
 	self.nsapp.frontend = frontend
 	self.nsapp.backend = self
@@ -90,9 +101,6 @@ function app:_new(frontend)
 
 	--set it to be a normal app with dock and menu bar
 	self.nsapp:setActivationPolicy(objc.NSApplicationActivationPolicyRegular)
-	self.nsapp:setPresentationOptions(
-		self.nsapp:presentationOptions() +
-		objc.NSApplicationPresentationFullScreen)
 
 	--disable mouse coalescing so that mouse move events are not skipped.
 	objc.NSEvent:setMouseCoalescingEnabled(false)
@@ -143,22 +151,18 @@ end
 
 --timers ---------------------------------------------------------------------
 
-local timers = {}
-
 objc.addmethod('App', 'nw_timerEvent', function(self, timer)
-	local func = timers[objc.nptr(timer)]
-	if not func then return end
-	if func() == false then
-		timers[objc.nptr(timer)] = nil
+	if not timer.nw_func then return end
+	if timer.nw_func() == false then
 		timer:invalidate()
+		timer.nw_func = nil
 	end
 end, 'v@:@')
 
 function app:runevery(seconds, func)
 	local timer = objc.NSTimer:scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
 		seconds, self.nsapp, 'nw_timerEvent', nil, true)
-	--the timer is retained by the scheduler so we don't have to anchor it.
-	timers[objc.nptr(timer)] = func
+	timer.nw_func = func
 end
 
 --windows --------------------------------------------------------------------
@@ -208,8 +212,9 @@ function window:_new(app, frontend, t)
 	if t.edgesnapping then
 		self.nswin:setMovable(false)
 	end
-	if t.fullscreenable then
-		self.nswin:setCollectionBehavior(objc.NSWindowCollectionBehaviorFullScreenPrimary)
+	if t.fullscreenable and nw.frontend:os'OSX 10.7' then
+		self.nswin:setCollectionBehavior(bit.bor(tonumber(self.nswin:collectionBehavior()),
+			objc.NSWindowCollectionBehaviorFullScreenPrimary)) --OSX 10.7+
 	end
 	if not t.maximizable then
 		if not t.minimizable then
@@ -240,7 +245,6 @@ function window:_new(app, frontend, t)
 
 	if t.maximized then
 		if not self:maximized() then
-			--this doesn't show the window, only sets the zoomed state.
 			self.nswin:zoom(nil)
 		end
 	end
@@ -378,7 +382,9 @@ function window:maximize()
 end
 
 function window:restore()
-	if self:maximized() then
+	if self:fullscreen() then
+		self:fullscreen(false)
+	elseif self:maximized() then
 		self.nswin:zoom(nil)
 	elseif self:minimized() then
 		self.nswin:deminiaturize()
@@ -404,14 +410,12 @@ end
 
 function window:_enter_fullscreen(show_minimized)
 	self._show_fullscreen = nil
+	--self.nswin:makeKeyAndOrderFront(nil)
 	self.nswin:toggleFullScreen(nil)
-	--self.nswin:setStyleMask(self.nswin:styleMask() + objc.NSFullScreenWindowMask)
-	--self.nswin:contentView():enterFullScreenMode_withOptions(objc.NSScreen:mainScreen(), nil)
 end
 
 function window:_exit_fullscreen(show_maximized)
 	self.nswin:toggleFullScreen(nil)
-	--
 end
 
 function window:fullscreen(fullscreen)
@@ -430,31 +434,18 @@ function window:fullscreen(fullscreen)
 end
 
 function Window:windowWillEnterFullScreen()
-	print'enter fullscreen'
-	self:setStyleMask(self:styleMask() + objc.NSFullScreenWindowMask)
-	--self:contentView():enterFullScreenMode_withOptions(objc.NSScreen:mainScreen(), nil)
+	self.nw_stylemask = self:styleMask()
+	self.nw_frame = self:frame()
+	self:setStyleMask(bit.bor(
+		objc.NSFullScreenWindowMask,
+		objc.NSBorderlessWindowMask
+	))
+	self:setFrame_display(self:screen():frame(), true)
 end
 
 function Window:windowWillExitFullScreen()
-	print'exit fullscreen'
-end
-
-function Window:willUseFullScreenPresentationOptions(options)
-	print('here1', options)
-	return options
-end
-
---TODO: hack
-objc.override(Window, 'willUseFullScreenContentSize', function(size)
-	print('here2', size)
-end, 'd@:@dd')
-
-function Window:customWindowsToEnterFullScreenForWindow()
-	return {self}
-end
-
-function Window:customWindowsToExitFullScreenForWindow()
-	return {self}
+	self:setStyleMask(self.nw_stylemask)
+	self:setFrame_display(self.nw_frame, true)
 end
 
 --positioning ----------------------------------------------------------------
@@ -502,7 +493,7 @@ function window:magnets()
 	return self.app:magnets(self.nswin)
 end
 
-function Window:clientarea_hit(event)
+function Window:nw_clientarea_hit(event)
 	local mp = event:locationInWindow()
 	local rc = self:contentView():bounds()
 	return box2d.hit(mp.x, mp.y, unpack_nsrect(rc))
@@ -517,7 +508,7 @@ local buttons = {
 	objc.NSWindowDocumentVersionsButton,
 	objc.NSWindowFullScreenButton,
 }
-function Window:titlebar_buttons_hit(event)
+function Window:nw_titlebar_buttons_hit(event)
 	for i,btn in ipairs(buttons) do
 		local button = self:standardWindowButton(btn)
 		if button then
@@ -550,7 +541,7 @@ local function resize_area_hit(mx, my, w, h)
 	end
 end
 
-function Window:resize_area_hit(event)
+function Window:nw_resize_area_hit(event)
 	local mp = event:locationInWindow()
 	local _, _, w, h = unpack_nsrect(self:frame())
 	return resize_area_hit(mp.x, mp.y, w, h)
@@ -587,9 +578,9 @@ function Window:sendEvent(event)
 				return
 			end
 		elseif etype == objc.NSLeftMouseDown
-			and not self:clientarea_hit(event)
-			and not self:titlebar_buttons_hit(event)
-			and not self:resize_area_hit(event)
+			and not self:nw_clientarea_hit(event)
+			and not self:nw_titlebar_buttons_hit(event)
+			and not self:nw_resize_area_hit(event)
 		then
 			self:setmouse(event)
 			self:makeKeyAndOrderFront(nil)
@@ -621,7 +612,7 @@ function Window:windowDidEndLiveResize()
 	self.frontend:_backend_end_resize()
 end
 
-function Window:resizing(w_, h_)
+function Window:nw_resizing(w_, h_)
 	if not self.how then return w_, h_ end
 	local x, y, w, h = flip_screen_rect(nil, unpack_nsrect(self:frame()))
 	if self.how:find'top' then y, h = y + h - h_, h_ end
@@ -641,7 +632,7 @@ function Window.windowWillResize_toSize(cpu)
 		local self = ffi.cast('id', cpu.RDI.p)
 		local w = cpu.XMM[0].lo.f
 		local h = cpu.XMM[1].lo.f
-		w, h = self:resizing(w, h)
+		w, h = self:nw_resizing(w, h)
 		--return double-only structs <= 8 bytes in XMM0:XMM1
 		cpu.XMM[0].lo.f = w
 		cpu.XMM[1].lo.f = h
@@ -650,7 +641,7 @@ function Window.windowWillResize_toSize(cpu)
 		local self = ffi.cast('id', cpu.ESP.dp[1].p)
 		w = cpu.ESP.dp[4].f
 		h = cpu.ESP.dp[5].f
-		w, h = self:resizing(w, h)
+		w, h = self:nw_resizing(w, h)
 		--return values <= 8 bytes in EAX:EDX
 		cpu.EAX.f = w
 		cpu.EDX.f = h
@@ -689,6 +680,10 @@ end
 function app:main_display()
 	local screen = objc.NSScreen:mainScreen()
 	return self:_display(nil, screen)
+end
+
+function app:display_count()
+	return objc.NSScreen:screens():count()
 end
 
 function window:display()
@@ -752,7 +747,7 @@ function window:cursor(name)
 end
 
 function Window:cursorUpdate(event)
-	if self:clientarea_hit(event) then
+	if self:nw_clientarea_hit(event) then
 		setcursor(self.backend._cursor)
 	else
 		objc.callsuper(self, 'cursorUpdate', event)
@@ -1046,45 +1041,45 @@ function Window:setmouse(event)
 	m.left = bit.band(btns, 1) ~= 0
 	m.right = bit.band(btns, 2) ~= 0
 	m.middle = bit.band(btns, 4) ~= 0
-	m.xbutton1 = bit.band(btns, 8) ~= 0
-	m.xbutton2 = bit.band(btns, 16) ~= 0
+	m.ex1 = bit.band(btns, 8) ~= 0
+	m.ex2 = bit.band(btns, 16) ~= 0
 	return m
 end
 
 function Window:mouseDown(event)
-	self:setmouse(event)
-	self.frontend:_backend_mousedown'left'
+	local m = self:setmouse(event)
+	self.frontend:_backend_mousedown('left', m.x, m.y)
 end
 
 function Window:mouseUp(event)
-	self:setmouse(event)
-	self.frontend:_backend_mouseup'left'
+	local m = self:setmouse(event)
+	self.frontend:_backend_mouseup('left', m.x, m.y)
 end
 
 function Window:rightMouseDown(event)
-	self:setmouse(event)
-	self.frontend:_backend_mousedown'right'
+	local m = self:setmouse(event)
+	self.frontend:_backend_mousedown('right', m.x, m.y)
 end
 
 function Window:rightMouseUp(event)
-	self:setmouse(event)
-	self.frontend:_backend_mouseup'right'
+	local m = self:setmouse(event)
+	self.frontend:_backend_mouseup('right', m.x, m.y)
 end
 
-local other_buttons = {'', 'middle', 'xbutton1', 'xbutton2'}
+local other_buttons = {'', 'middle', 'ex1', 'ex2'}
 
 function Window:otherMouseDown(event)
 	local btn = other_buttons[tonumber(event:buttonNumber())]
 	if not btn then return end
-	self:setmouse(event)
-	self.frontend:_backend_mousedown(btn)
+	local m = self:setmouse(event)
+	self.frontend:_backend_mousedown(btn, m.x, m.y)
 end
 
 function Window:otherMouseUp(event)
 	local btn = other_buttons[tonumber(event:buttonNumber())]
 	if not btn then return end
-	self:setmouse(event)
-	self.frontend:_backend_mouseup(btn)
+	local m = self:setmouse(event)
+	self.frontend:_backend_mouseup(btn, m.x, m.y)
 end
 
 function Window:mouseMoved(event)
@@ -1115,14 +1110,14 @@ function Window:mouseExited(event)
 end
 
 function Window:scrollWheel(event)
-	self:setmouse(event)
+	local m = self:setmouse(event)
 	local dx = event:deltaX()
 	if dx ~= 0 then
-		self.frontend:_backend_mousehwheel(dx)
+		self.frontend:_backend_mousehwheel(dx, x, y)
 	end
 	local dy = event:deltaY()
 	if dy ~= 0 then
-		self.frontend:_backend_mousewheel(dy)
+		self.frontend:_backend_mousewheel(dy, x, y)
 	end
 end
 
@@ -1134,6 +1129,139 @@ end
 
 --TODO
 
+--menus ----------------------------------------------------------------------
+
+local menu = {}
+
+function app:menu()
+	return menu:_new(self)
+end
+
+function menu:_new(app)
+	local nsmenu = objc.NSMenu:new()
+	local self = glue.inherit({app = app, nsmenu = nsmenu}, menu)
+	nsmenu.nw_backend = self
+	return self
+end
+
+local function menuitem(args, menutype)
+	--zero or more '-' means separator (not for menu bars)
+	local separator = menutype ~= 'menubar' and
+		args.text:find'^%-*$' and true or nil
+	return {
+		text = args.text,
+		on_click = args.action,
+		submenu = args.submenu and args.submenu.backend.winmenu,
+		checked = args.checked,
+		separator = separator,
+	}
+end
+
+local function dump_menuitem(mi)
+	return {
+		text = mi.separator and '' or mi.text,
+		action = mi.submenu and mi.submenu.nw_backend.frontend or mi.on_click,
+		checked = mi.checked,
+	}
+end
+
+objc.addmethod('App', 'nw_menuItemClicked', function(self, item)
+	item.nw_action()
+end, 'v@:@')
+
+local function menuitem(args)
+	local item = NWMenuItem:new()
+	item:setTitle(args.text)
+	item:setState(args.checked and objc.NSOnState or objc.NSOffState)
+	if type(args.action) == 'function' then
+		item:setTarget(self.app.nsapp)
+		item:setAction'nw_menuItemClicked'
+		item.nw_action = args.action
+	end
+	ffi.gc(item, nil)
+	return item
+end
+
+local function dump_menuitem(item)
+	return {
+		--
+	}
+end
+
+function menu:add(index, args)
+	local item = menuitem(args)
+	if index then
+		self.nsmenu:insertItem_atIndex(item, index-1)
+	else
+		self.nsmenu:addItem(item)
+	end
+end
+
+function menu:set(index, args)
+	self.nsmenu:
+
+end
+
+function menu:get(index)
+	return dump_menuitem(self.nsmenu:itemAtIndex(index-1))
+end
+
+function menu:item_count()
+	return self.nsmenu:numberOfItems()
+end
+
+function menu:remove(index)
+	self.nsmenu:removeItemAtIndex(index-1)
+end
+
+function menu:get_checked(index)
+	return self.nsmenu:itemAtIndex(index-1):state() == objc.NSOnState
+end
+
+function menu:set_checked(index, checked)
+	self.nsmenu:itemAtIndex(index-1):setState(checked and objc.NSOnState or objc.NSOffState)
+end
+
+function menu:get_enabled(index)
+	return self.nsmenu:itemAtIndex(index-1):isEnabled()
+end
+
+function menu:set_enabled(index, enabled)
+	self.nsmenu:itemAtIndex(index-1):setEnabled(enabled)
+end
+
+function window:menu()
+	if not self._menu then
+		local menubar = winapi.MenuBar()
+		self.win.menu = menubar
+		self._menu = menu:_new(menubar)
+	end
+	return self._menu
+end
+
+function window:popup(menu, x, y)
+	menu.backend.winmenu:popup(self.win, x, y)
+end
+
+--	local qmi = objc.NSMenuItem:alloc():initWithTitle_action_keyEquivalent('Quit', 'terminate:', 'q')
+--	appmenu:addItem(qmi); ffi.gc(qmi, nil)
+
+function window:menu()
+	if not self.app._menu then
+		local menubar = objc.NSMenu:new()
+		local appmi = objc.NSMenuItem:new()
+		menubar:addItem(appmi); ffi.gc(appmi, nil)
+		nsapp:setMainMenu(menubar); ffi.gc(menubar, nil)
+		local appmenu = objc.NSMenu:new()
+		appmi:setSubmenu(appmenu); ffi.gc(appmenu, nil)
+		self.app._menu = appmenu
+	end
+	return self.app._menu
+end
+
+function window:menu()
+	--
+end
 
 --buttons --------------------------------------------------------------------
 
@@ -1141,4 +1269,4 @@ end
 
 if not ... then require'nw_test' end
 
-return backend
+return nw

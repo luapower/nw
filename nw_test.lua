@@ -108,6 +108,33 @@ local function combinations(flags)
 	end)
 end
 
+--os version -----------------------------------------------------------------
+
+add('os', function()
+	print(nw:os())
+	assert(nw:os(nw:os():upper())) --perfect case-insensitive match
+	assert(not nw:os'')
+	assert(not nw:os'XXX')
+	if ffi.os == 'OSX' then
+		assert(nw:os'osx')
+		assert(nw:os'OSX 1')
+		assert(nw:os'OSX 10')
+		assert(nw:os'OSX 10.2')
+		assert(not nw:os'OSX ChubbyCheese')
+		assert(not nw:os'OSX 55')
+		assert(not nw:os'OS')
+	elseif ffi.os == 'Windows' then
+		assert(nw:os'windows')
+		assert(nw:os'WINDOWS 1')
+		assert(nw:os'WINDOWS 5')
+		assert(nw:os'WINDOWS 5.0')
+		assert(nw:os'WINDOWS 5.0.sp1')
+		assert(not nw:os'WINDOWS 55.0.sp1')
+		assert(not nw:os'Window')
+	end
+	print'ok'
+end)
+
 --time -----------------------------------------------------------------------
 
 --time values are sane.
@@ -636,6 +663,16 @@ end)
 
 --window state flags  --------------------------------------------------------
 
+add('fullscreen', function()
+	local win = app:window{w = 500, h = 300, fullscreen = false}
+	function win:keydown(key)
+		if key == 'space' then
+			win:fullscreen(not win:fullscreen())
+		end
+	end
+	app:run()
+end)
+
 local flag_list = {
 	'visible', 'minimized', 'maximized', 'fullscreen',
 }
@@ -649,102 +686,161 @@ local function test_name_for_flags(flags, name_prefix)
 	return name_prefix .. '-' .. table.concat(t, '-')
 end
 
---create a window with given flags and test that they were all set.
-local function test_initial_flags(flags)
-	local win = app:window(winpos(glue.update({w = 500, h = 200}, flags)))
-	for i,flag in ipairs(flag_list) do
-		assert(win[flag](win) == flags[flag], flag)
-	end
-	return win
-end
+--create a window with a certain combination of flags,
+--and with key bindings for interactive state transitioning.
+local function window_with_flags(flags)
 
---generate interactive tests for all combinations of initial state flags
-for flags in combinations(flag_list) do
-	add(test_name_for_flags(flags, 'states-init'), function()
-		local win = test_initial_flags(flags)
-		function win:keydown(key)
-			if key == 'F8' or key == 'S' then
-				self:show()
-			elseif key == 'F7' or key == 'H' then
-				self:hide()
-			elseif key == 'F10' or key == 'R' then
-				self:restore()
-			elseif key == 'F11' or key == 'F' then
-				self:fullscreen(not self:fullscreen())
-			elseif key == 'F12' or key == 'M' then
-				self:maximize()
-			elseif key == 'F9' or key == 'N' then
-				self:minimize()
-			else
-				print[[
+	local win = app:window(winpos(glue.update({w = 500, h = 200}, flags)))
+
+	function win:keydown(key)
+		if key == 'F8' or key == 'S' then
+			self:show()
+		elseif key == 'F7' or key == 'H' then
+			self:hide()
+		elseif key == 'F10' or key == 'R' then
+			self:restore()
+		elseif key == 'F11' or key == 'F' then
+			self:fullscreen(not self:fullscreen())
+		elseif key == 'F12' or key == 'M' then
+			self:maximize()
+		elseif key == 'F9' or key == 'N' then
+			self:minimize()
+		else
+			print[[
 F8    S    show
 F7    H    hide
 F10   R    restore
-F11   F    fullscreen
+F11   F    fullscreen on/off
 F12   M    maximize
 F9    N    minimize
 ]]
-			end
 		end
-		app:run()
-	end)
+	end
+
+	return win
 end
 
---run the same non-interactive test each time on a window with different initial state flags
-function test_combinations(test_func)
-	app:autoquit(false)
-	for flags in combinations(flag_list) do
-		print(test_name_for_flags(flags, ''))
-		local win = test_initial_flags(flags)
-		test_func(win, flags)
-		win:close()
+--test that the initial flags were all set correctly.
+--also, create key bindings for interactive use.
+local function test_initial_flags(win, flags)
+	for i,flag in ipairs(flag_list) do
+		assert(win[flag](win) == flags[flag], flag)
 	end
 end
 
---all initial (visible, minimized, maximized, fullscreen) combinations.
---show() only changes visibility.
---restore() restores to the correct state.
-add('states-transitions', function()
-	app:autoquit(false)
-	test_combinations(function(win, c)
+--test transitions to normal state.
+local function test_flags_to_normal(win, flags, after_test)
+
+	local nfs = 0
+	local fs = nw:os'osx' and 1.5 or nfs --fullscreen animation duration (seconds)
+	local go1, go2, go3, go4, go5
+
+	function go1()
 		--visible -> minimized | normal | maximized | fullscreen
-		if not c.visible then
+		if not flags.visible then
 			win:show()
-			assert(win:visible())
-			assert(win:minimized() == c.minimized)
-			assert(win:maximized() == c.maximized)
-			assert(win:fullscreen() == c.fullscreen)
+			app:runafter(flags.fullscreen and not flags.minimized and fs or nfs, go2)
+		else
+			go2()
 		end
+	end
+	function go2()
+		assert(win:visible())
+		assert(win:minimized() == flags.minimized)
+		--print(win:maximized(), flags.maximized)
+		assert(win:maximized() == flags.maximized)
+		assert(win:fullscreen() == flags.fullscreen)
 
 		-- minimized -> normal | maximized | fullscreen
-		if c.minimized then
+		if flags.minimized then
 			win:restore()
-			assert(not win:minimized())
-			assert(win:maximized() == c.maximized)
-			assert(win:fullscreen() == c.fullscreen)
+			app:runafter(flags.fullscreen and fs or nfs, go3)
+		else
+			go3()
 		end
+	end
+	function go3()
+		assert(not win:minimized())
+		assert(win:maximized() == flags.maximized)
+		assert(win:fullscreen() == flags.fullscreen)
 
 		-- fullscreen -> normal | maximized
-		if c.fullscreen then
+		if flags.fullscreen then
 			win:restore()
-			assert(not win:fullscreen())
-			assert(win:maximized() == c.maximized)
+			app:runafter(fs, go4)
+		else
+			go4()
 		end
+	end
+	function go4()
+		assert(not win:fullscreen())
+		assert(win:maximized() == flags.maximized)
 
 		-- maximized -> normal
-		if c.maximized then
+		if flags.maximized then
 			win:restore()
-			assert(not win:maximized())
+			app:runafter(nfs, go5)
+		else
+			go5()
 		end
+	end
+	function go5()
+		assert(not win:maximized())
 
 		--normal
 		assert(win:visible())
 		assert(not win:minimized())
 		assert(not win:maximized())
 		assert(not win:fullscreen())
+
+		if after_test then
+			after_test()
+		else
+			win:close()
+		end
+	end
+
+	go1()
+end
+
+--generate interactive tests for testing all combinations of initial flags
+--and the transitions to normal state.
+for flags in combinations(flag_list) do
+	add(test_name_for_flags(flags, 'states-init'), function()
+		local win = window_with_flags(flags)
+		test_initial_flags(win, flags)
+		test_flags_to_normal(win, flags)
+		app:run()
 	end)
+end
+
+add('states-init-all', function()
+	app:autoquit(false)
+	local t = {}
+	for flags in combinations(flag_list) do
+		t[#t+1] = flags
+	end
+	local i = 0
+	local function next_test()
+		i = i + 1
+		local flags = t[i]
+		if not flags then
+			app:quit()
+			return
+		end
+		print(test_name_for_flags(flags, ''))
+		local win = window_with_flags(flags)
+		test_initial_flags(win, flags)
+		test_flags_to_normal(win, flags, function()
+			win:close()
+			next_test()
+		end)
+	end
+	app:runafter(0, next_test)
+	app:run()
 end)
 
+--test transitions between various states.
 add('states', function()
 	local win = app:window{x = 100, y = 100, w = 300, h = 100}
 
@@ -752,14 +848,11 @@ add('states', function()
 		assert(win:visible() == (s:match'v' ~= nil))
 		assert(win:minimized() == (s:match'm' ~= nil))
 		assert(win:maximized() == (s:match'M' ~= nil))
+		assert(win:fullscreen() == (s:match'F' ~= nil))
 	end
 
-	print('>', win:visible(), win:minimized(), win:maximized())
 	win:maximize()
 	win:minimize()
-	print('>', win:visible(), win:minimized(), win:maximized())
-
-	os.exit(1)
 
 	--restore to maximized from minimized
 	win:shownormal()
@@ -903,13 +996,14 @@ end
 
 --there's at least one display and its values are sane
 add('display-list', function()
-	local one
+	local n = 0
 	for i,display in ipairs(app:displays()) do
-		one = true
+		n = n + 1
 		print(string.format('# display %d', i))
 		test_display(display)
 	end
-	assert(one) --there must be at least 1 display
+	assert(n > 0) --there must be at least 1 display
+	--assert(n == app:display_count())
 end)
 
 --main display is at (0, 0)
@@ -1035,8 +1129,8 @@ add('input', function()
 	function win2:mouseenter() print'mouseenter win2' end
 	function win1:mouseleave() print'mouseleave win1' end
 	function win2:mouseleave() print'mouseleave win2' end
-	function win1:mousemove() print('mousemove win1', self.mouse.x, self.mouse.y) end
-	function win2:mousemove() print('mousemove win2', self.mouse.x, self.mouse.y) end
+	function win1:mousemove() print('mousemove win1', self:mouse'x', self:mouse'y') end
+	function win2:mousemove() print('mousemove win2', self:mouse'x', self:mouse'y') end
 	function win1:mousedown(button) print('mousedown win1', button) end
 	function win2:mousedown(button) print('mousedown win2', button) end
 	function win1:mouseup(button) print('mouseup win1', button) end
@@ -1053,9 +1147,10 @@ add('input', function()
 	function win2:mousewheel(delta) print('wheel win2', delta) end
 
 	--keyboard
-	function app.window_class:printkey(title, key, vkey)
+	function win1:printkey(title, key, vkey)
 		print(string.format('%-20s %-20s %-20s %-20s %-20s', title, key, vkey, self:key(key), self:key(vkey)))
 	end
+	win2.printkey = win1.printkey
 	function win1:keydown(key, ...)
 		if key == 'N' then
 			app:ignore_numlock(not app:ignore_numlock())
@@ -1082,126 +1177,64 @@ add('input', function()
 	app:run()
 end)
 
---[[
+--menus ----------------------------------------------------------------------
 
-local win1 = app:window{x = 100, y = 100, w = 800, h = 400, title = 'win1', visible = false,
-								frame = 'transparent'}
-local win2 = app:window{x = 200, y = 400, w = 600, h = 200, title = 'win2', visible = false,
-								frame = 'none', resizeable = false, minimizable = false, maximizable = false,
-								closeable = true}
-
-assert(win1:display() == win2:display())
-assert(win1:display() == app:main_display())
-
-for win in app:windows() do
-	win:title('[' .. win:title() .. ']')
-	print('title', win:title())
+local function setmenu_osx(nsapp)
+	local objc = require'objc'
+	local mb = objc.NSMenu:new(); ffi.gc(mb, nil)
+	local ami = objc.NSMenuItem:new(); ffi.gc(ami, nil)
+	mb:addItem(ami)
+	nsapp:setMainMenu(mb)
+	local am = objc.NSMenu:new(); ffi.gc(am, nil)
+	local qmi = objc.NSMenuItem:alloc():initWithTitle_action_keyEquivalent('Quit', 'terminate:', 'q'); ffi.gc(qmi, nil)
+	am:addItem(qmi)
+	ami:setSubmenu(am)
 end
 
-function app:closed(win) print('closed', win:title()) end
-
-function win1:closing() print'closing win1' end
-function win2:closing() print'closing win2' end
-function win1:closed() print'closed win1' end
-function win2:closed() print'closed win2' end
-function win1:activated() print'activated win1' end
-function win2:activated() print'activated win2' end
-function win1:deactivated() print'deactivated win1' end
-function win2:deactivated() print'deactivated win2' end
-function win1:frame_changing(how, x, y, w, h)
-	print'frame_changing win1'
-	if how == 'move' then
-		x = math.min(math.max(x, 50), 250)
-		y = math.min(math.max(y, 50), 250)
+add('menu', function()
+	local win = app:window{w = 500, h = 300}
+	local winmenu = win:menu()
+	local menu1 = app:menu()
+	menu1:add('Option1', function() print'Option1' end)
+	menu1:add('Option2', function() print'Option2' end)
+	menu1:set(2, 'Option2-changed', function() print'Option2-changed' end, {checked = true})
+	menu1:add(2, 'Dead Option')
+	menu1:remove(2)
+	menu1:add(2, '') --separator
+	menu1:checked(1, true)
+	assert(menu1:checked(3))
+	menu1:checked(3, false)
+	assert(not menu1:checked(3))
+	assert(menu1:enabled(3))
+	menu1:enabled(3, false)
+	assert(not menu1:enabled(3))
+	winmenu:add('Menu1', menu1)
+	winmenu:add'---' --separator: not for menu bar items
+	local menu2 = app:menu()
+	winmenu:add('Menu2', menu2)
+	local menu3 = app:menu()
+	menu2:add('Menu3', menu3)
+	local menu4 = app:menu()
+	menu3:add('Menu4', menu4)
+	menu4:add('Option41', function() print'Option41' end)
+	menu4:add('Option42', function() print'Option42' end)
+	local pmenu = app:menu()
+	pmenu:add'Option1'
+	pmenu:add'Option2'
+	function win:mouseup(button, x, y)
+		if button == 'right' then
+			win:popup(pmenu, x, y)
+		end
 	end
-	return x, y, w, h
-end
-function win1:frame_changed()
-	print'frame_changed win1'
-	self:invalidate()
-end
-function win2:frame_changed()
-	print'frame_changed win2'
-	self:invalidate()
-end
+	assert(winmenu:item_count() == 3)
+	assert(winmenu:get(1).action == menu1)
+	assert(winmenu:get(3, 'action') == menu2)
+	assert(#winmenu:items() == 3)
+	assert(winmenu:items()[3].action == menu2)
+	app:run()
+end)
 
-function win1:render(cr)
-	local w, h = select(3, self:frame_rect())
-	cr:rectangle(0, 0, w, h)
-	cr:set_source_rgba(1, 1, 1, 0.5)
-	cr:set_line_width(10)
-	cr:stroke()
-	cr:rectangle(50, 50, 100, 100)
-	cr:set_source_rgba(1, 0, 0, 0.5)
-	cr:fill()
-end
-
-win2.render = win1.render
-
-local commands = {
-	Q = function(self) if win1:maximized() then win1:restore() else win1:maximize() end end,
-	W = function(self) win1:maximize() end,
-	E = function(self) if win1:visible() then win1:hide() else win1:show() end end,
-	R = function(self) self:frame('allow_resize', not self:frame'allow_resize') end,
-
-	F11 = function(self)
-		self:fullscreen(not self:fullscreen())
-	end,
-
-	left = function(self) local x, y, w, h = self:frame_rect(); x = x - 100; self:frame_rect(x, y, w, h) end,
-	right = function(self) local x, y, w, h = self:frame_rect(); x = x + 100; self:frame_rect(x, y, w, h) end,
-	up = function(self) local x, y, w, h = self:frame_rect(); y = y - 100; self:frame_rect(x, y, w, h) end,
-	down = function(self) local x, y, w, h = self:frame_rect(); y = y + 100; self:frame_rect(x, y, w, h) end,
-
-	space = function(self)
-		local state = self:state()
-		if self:state() == 'maximized' then
-			self:show'normal'
-		elseif self:state() == 'normal' then
-			self:show'minimized'
-		elseif self:state() == 'minimized' then
-			self:show'maximized'
-		end
-		print('state', state, '->', self:state())
-	end,
-	esc = function(self)
-		if win2:active() then
-			win1:activate()
-		elseif win1:active() then
-			win2:activate()
-		end
-	end,
-	H = function(self)
-		if self:visible() then
-			self:hide()
-		else
-			self:show()
-		end
-	end,
-	M = function(self)
-		app:window{x = 200, y = 200, w = 200, h = 200, title = 'temp', visible = true, state = 'minimized'}
-	end,
-	shift = function(self)
-		print('shift-key', self:key'lshift' and 'left' or 'right')
-	end,
-	alt = function(self)
-		print('alt-key', self:key'lalt' and 'left' or 'right')
-	end,
-	ctrl = function(self)
-		print('ctrl-key', self:key'lctrl' and 'left' or 'right')
-	end,
-}
-
-win1:show()
-win2:show()
-
-assert(win1:dead())
-assert(win2:dead())
-
-win1:close() --ignored
-win2:close() --ignored
-
-]]
+--run tests ------------------------------------------------------------------
 
 local name = ...
 if not name then

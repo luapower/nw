@@ -81,7 +81,7 @@ __mouse events__
 `win:hover()`											event: mouse entered the client area of the window
 `win:leave()`											event: mouse left the client area of the window
 `win:mousemove(x, y)`								event: mouse move
-`win:mousedown(button)`								event: a mouse button was pressed: 'left', 'right', 'middle', 'xbutton1', 'xbutton2'
+`win:mousedown(button)`								event: a mouse button was pressed: 'left', 'right', 'middle', 'ex1', 'ex2'
 `win:mouseup(button)`								event: a mouse button was depressed
 `win:click(button, count)`							event: a mouse button was pressed (see notes for double-click)
 `win:wheel(delta)`									event: mouse wheel was moved

@@ -1,7 +1,4 @@
---native widgets winapi backend (Cosmin Apreutesei, public domain)
-
---the reasons why winapi sucks oh so much are in winapi modules.
-
+--native widgets winapi backend (Cosmin Apreutesei, public domain).
 local ffi = require'ffi'
 local bit = require'bit'
 local glue = require'glue'
@@ -9,6 +6,7 @@ local box2d = require'box2d'
 local winapi = require'winapi'
 require'winapi.time'
 require'winapi.spi'
+require'winapi.sysinfo'
 require'winapi.systemmetrics'
 require'winapi.monitor'
 require'winapi.windowclass'
@@ -22,13 +20,22 @@ local function unpack_rect(rect)
 	return rect.x, rect.y, rect.w, rect.h
 end
 
-local backend = {name = 'winapi'}
+local nw = {name = 'winapi'}
+
+--os version -----------------------------------------------------------------
+
+function nw:os(ver)
+	local vinfo = winapi.GetVersionEx()
+	return string.format('Windows %d.%d.SP%d.%d',
+		vinfo.dwMajorVersion, vinfo.dwMinorVersion,
+		vinfo.wServicePackMajor, vinfo.wServicePackMinor)
+end
 
 --app object -----------------------------------------------------------------
 
 local app = {}
 
-function backend:app(frontend)
+function nw:app(frontend)
 	return app:_new(frontend)
 end
 
@@ -139,6 +146,8 @@ function window:_new(app, frontend, t)
 	self.win.frontend = frontend
 	self.win.backend = self
 	self.win.app = app
+
+	self.frontend.backend = self
 
 	self:reset_keystate()
 
@@ -281,7 +290,8 @@ function window:active()
 	return self.app._active and self.win.active or false
 end
 
---this event is received
+--this event is received when the titlebar is activated.
+--on_activate() is received even when the app is inactive and the window doesn't actually activate.
 function Window:on_nc_activate()
 	self.backend:_activated()
 end
@@ -413,7 +423,7 @@ function window:minimized()
 end
 
 function window:maximized()
-	if self.win.visible and self.win.minimized then
+	if self.win.minimized then
 		return self.win.restore_to_maximized
 	elseif self._fullscreen then
 		return self._fs.maximized
@@ -528,13 +538,13 @@ end
 
 function Window:on_resized(flag)
 	if flag == 'minimized' then
-		self.frontend:_backend_minimized()
+		self.frontend:_backend_resized'minimize'
 	elseif flag == 'maximized' then
 		self:resized()
-		self.frontend:_backend_maximized()
+		self.frontend:_backend_resized'maximize'
 	elseif flag == 'restored' then
 		self:resized()
-		self.frontend:_backend_resized()
+		self.frontend:_backend_resized'restore'
 	end
 end
 
@@ -575,7 +585,11 @@ function app:displays()
 end
 
 function app:main_display()
-	return self:_display(winapi.MonitorFromPoint(nil, winapi.MONITOR_DEFAULTTOPRIMARY))
+	return self:_display(winapi.MonitorFromPoint(nil, 'MONITOR_DEFAULTTOPRIMARY'))
+end
+
+function app:display_count()
+	return winapi.GetSystemMetrics'SM_CMONITORS'
 end
 
 function window:display()
@@ -1001,7 +1015,7 @@ function Window:setmouse(x, y, buttons)
 	if not m.inside then
 		m.inside = true
 		winapi.TrackMouseEvent{hwnd = self.hwnd, flags = winapi.TME_LEAVE}
-		self.frontend:_backend_mouseenter(x, y, unpack_buttons(buttons))
+		self.frontend:_backend_mouseenter()
 	end
 end
 
@@ -1035,67 +1049,67 @@ end
 function Window:on_lbutton_down(x, y, buttons)
 	self:setmouse(x, y, buttons)
 	self:capture_mouse()
-	self.frontend:_backend_mousedown'left'
+	self.frontend:_backend_mousedown('left', x, y)
 end
 
 function Window:on_mbutton_down(x, y, buttons)
 	self:setmouse(x, y, buttons)
 	self:capture_mouse()
-	self.frontend:_backend_mousedown'middle'
+	self.frontend:_backend_mousedown('middle', x, y)
 end
 
 function Window:on_rbutton_down(x, y, buttons)
 	self:setmouse(x, y, buttons)
 	self:capture_mouse()
-	self.frontend:_backend_mousedown'right'
+	self.frontend:_backend_mousedown('right', x, y)
 end
 
 function Window:on_xbutton_down(x, y, buttons)
 	self:setmouse(x, y, buttons)
 	if buttons.xbutton1 then
 		self:capture_mouse()
-		self.frontend:_backend_mousedown'xbutton1'
+		self.frontend:_backend_mousedown('ex1', x, y)
 	end
 	if buttons.xbutton2 then
 		self:capture_mouse()
-		self.frontend:_backend_mousedown'xbutton2'
+		self.frontend:_backend_mousedown('ex2', x, y)
 	end
 end
 
 function Window:on_lbutton_up(x, y, buttons)
 	self:setmouse(x, y, buttons)
 	self:uncapture_mouse()
-	self.frontend:_backend_mouseup'left'
+	self.frontend:_backend_mouseup('left', x, y)
 end
 
 function Window:on_mbutton_up(x, y, buttons)
 	self:setmouse(x, y, buttons)
 	self:uncapture_mouse()
-	self.frontend:_backend_mouseup'middle'
+	self.frontend:_backend_mouseup('middle', x, y)
 end
 
 function Window:on_rbutton_up(x, y, buttons)
 	self:setmouse(x, y, buttons)
 	self:uncapture_mouse()
-	self.frontend:_backend_mouseup'right'
+	self.frontend:_backend_mouseup('right', x, y)
 end
 
 function Window:on_xbutton_up(x, y, buttons)
 	self:setmouse(x, y, buttons)
 	if buttons.xbutton1 then
 		self:uncapture_mouse()
-		self.frontend:_backend_mouseup'ex1'
+		self.frontend:_backend_mouseup('ex1', x, y)
 	end
 	if buttons.xbutton2 then
 		self:uncapture_mouse()
-		self.frontend:_backend_mouseup'ex2'
+		self.frontend:_backend_mouseup('ex2', x, y)
 	end
 end
 
+local wsl_buf = ffi.new'UINT[1]'
 local function wheel_scroll_lines()
-	self.wsl_buf = self.wsl_buf or ffi.new'UINT[1]'
-	winapi.SystemParametersInfo(winapi.SPI_GETWHEELSCROLLLINES, 0, self.wsl_buf)
-	return self.wsl_buf[0]
+	winapi.SystemParametersInfo(winapi.SPI_GETWHEELSCROLLLINES, 0, wsl_buf)
+	return wsl_buf[0]
 end
 
 function Window:on_mouse_wheel(x, y, buttons, delta)
@@ -1104,7 +1118,7 @@ function Window:on_mouse_wheel(x, y, buttons, delta)
 	end
 	delta = delta / 120 * wheel_scroll_lines()
 	self:setmouse(x, y, buttons)
-	self.frontend:_backend_mousewheel(delta)
+	self.frontend:_backend_mousewheel(delta, x, y)
 end
 
 local function wheel_scroll_chars()
@@ -1116,7 +1130,7 @@ end
 function Window:on_mouse_hwheel(x, y, buttons, delta)
 	delta = delta / 120 * wheel_scroll_chars()
 	self:setmouse(x, y, buttons)
-	self.frontend:_backend_mousehwheel(delta)
+	self.frontend:_backend_mousehwheel(delta, x, y)
 end
 
 --rendering ------------------------------------------------------------------
@@ -1205,8 +1219,94 @@ function Window:update_layered()
 										self.bmp_pos, 0, self.blendfunc, winapi.ULW_ALPHA)
 end
 
+--menus ----------------------------------------------------------------------
+
+local menu = {}
+
+function app:menu()
+	return menu:_new(winapi.Menu())
+end
+
+function menu:_new(winmenu)
+	local self = glue.inherit({winmenu = winmenu}, menu)
+	winmenu.nw_backend = self
+	return self
+end
+
+local function menuitem(args, menutype)
+	--zero or more '-' means separator (not for menu bars)
+	local separator = menutype ~= 'menubar' and
+		args.text:find'^%-*$' and true or nil
+	return {
+		text = args.text,
+		on_click = args.action,
+		submenu = args.submenu and args.submenu.backend.winmenu,
+		checked = args.checked,
+		separator = separator,
+	}
+end
+
+local function dump_menuitem(mi)
+	return {
+		text = mi.separator and '' or mi.text,
+		action = mi.submenu and mi.submenu.nw_backend.frontend or mi.on_click,
+		checked = mi.checked,
+	}
+end
+
+function menu:add(index, args)
+	self.winmenu.items:add(index, menuitem(args, self.winmenu.type))
+end
+
+function menu:set(index, args)
+	self.winmenu.items:set(index, menuitem(args, self.winmenu.type))
+end
+
+function menu:get(index)
+	return dump_menuitem(self.winmenu.items:get(index))
+end
+
+function menu:item_count()
+	return self.winmenu.items.count
+end
+
+function menu:remove(index)
+	self.winmenu.items:remove(index)
+end
+
+function menu:get_checked(index)
+	return self.winmenu.items:checked(index)
+end
+
+function menu:set_checked(index, checked)
+	self.winmenu.items:setchecked(index, checked)
+end
+
+function menu:get_enabled(index)
+	return self.winmenu.items:enabled(index)
+end
+
+function menu:set_enabled(index, enabled)
+	self.winmenu.items:setenabled(index, enabled)
+end
+
+function window:menu()
+	if not self._menu then
+		local menubar = winapi.MenuBar()
+		self.win.menu = menubar
+		self._menu = menu:_new(menubar)
+	end
+	return self._menu
+end
+
+function window:popup(menu, x, y)
+	menu.backend.winmenu:popup(self.win, x, y)
+end
+
+--buttons --------------------------------------------------------------------
+
+
 
 if not ... then require'nw_test' end
 
-return backend
-
+return nw
