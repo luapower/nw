@@ -1227,35 +1227,43 @@ function app:menu()
 	return menu:_new(winapi.Menu())
 end
 
+function window:menu()
+	if not self._menu then
+		local menubar = winapi.MenuBar()
+		self.win.menu = menubar
+		self._menu = menu:_new(menubar)
+	end
+	return self._menu
+end
+
 function menu:_new(winmenu)
 	local self = glue.inherit({winmenu = winmenu}, menu)
 	winmenu.nw_backend = self
 	return self
 end
 
-local function menuitem(args, menutype)
-	--zero or more '-' means separator (not for menu bars)
-	local separator = menutype ~= 'menubar' and
-		args.text:find'^%-*$' and true or nil
+local function menuitem(args)
 	return {
 		text = args.text,
+		separator = args.separator,
 		on_click = args.action,
 		submenu = args.submenu and args.submenu.backend.winmenu,
 		checked = args.checked,
-		separator = separator,
+		enabled = args.enabled,
 	}
 end
 
 local function dump_menuitem(mi)
 	return {
-		text = mi.separator and '' or mi.text,
+		text = mi.text,
 		action = mi.submenu and mi.submenu.nw_backend.frontend or mi.on_click,
 		checked = mi.checked,
+		enabled = mi.enabled,
 	}
 end
 
 function menu:add(index, args)
-	self.winmenu.items:add(index, menuitem(args, self.winmenu.type))
+	return self.winmenu.items:add(index, menuitem(args))
 end
 
 function menu:set(index, args)
@@ -1288,15 +1296,6 @@ end
 
 function menu:set_enabled(index, enabled)
 	self.winmenu.items:setenabled(index, enabled)
-end
-
-function window:menu()
-	if not self._menu then
-		local menubar = winapi.MenuBar()
-		self.win.menu = menubar
-		self._menu = menu:_new(menubar)
-	end
-	return self._menu
 end
 
 function window:popup(menu, x, y)

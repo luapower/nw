@@ -98,7 +98,15 @@ mouse																win:mouse() -> m \						win:mousedown(button) \
 
 rendering			win:invalidate()																		win:render(cr)
 
-menus					win:menu(menu_t)						win:menu() -> menu_t
-						win:menu(path, menu_t)				win:menu(path) -> menu_t
+menus					app:menu() -> menu					win:menu() -> menu \
+						menu:add([i,]text,action) -> i\	\												action()
+						menu:add([i,]text,menu) -> i \	\
+						menu:add(args) -> i \				\
+						menu:set(index, text, action) \	menu:get(index) -> {text=,...} \
+						menu:set(index, text, menu) \		\
+						menu:set(menuitem) \					menu:get(index) -> menuitem \
+						\											menu:item_count() -> n \
+						menu:checked(index, ?) \			menu:checked(index) -> ? \
+						menu:enabled(index, ?)				menu:enabled(index) -> ?
 ----------------- -------------------------------- ----------------------------------- --------------------------
 

@@ -82,6 +82,17 @@ end
 
 local App = objc.class('App', 'NSApplication <NSApplicationDelegate>')
 
+--[[
+objc.swizzle('NSBundle', 'loadNibNamed:owner:topLevelObjects:', 'nw_loadNibNamed:owner:topLevelObjects:',
+function(self, nib, owner, tl)
+	print('loadNibNamed', nib, owner)
+	if objc.tolua(nib) == 'MainMenu' and owner == App:sharedApplication() then
+		--return true --pretend to load the nib.
+	end
+	return self:nw_loadNibNamed_owner_topLevelObjects(nib, owner, tl)
+end)
+]]
+
 function app:_new(frontend)
 
 	self = glue.inherit({frontend = frontend}, self)
@@ -97,6 +108,8 @@ function app:_new(frontend)
 	self.nsapp.frontend = frontend
 	self.nsapp.backend = self
 
+	--objc.NSBundle:mainBundle():loadNibNamed_owner_topLevelObjects('MainMenu', self.nsapp, nil)
+
 	self.nsapp:setDelegate(self.nsapp)
 
 	--set it to be a normal app with dock and menu bar
@@ -105,8 +118,21 @@ function app:_new(frontend)
 	--disable mouse coalescing so that mouse move events are not skipped.
 	objc.NSEvent:setMouseCoalescingEnabled(false)
 
+	--objc.NSMenu:setMenuBarVisible(false)
+	--objc.NSMenu:setMenuBarVisible(true)
+	--crazy hack: in the absence of a nib file, the main menu is not shown unless
+	--the app is first deactivated and then reactivated.
+	for i,app in objc.iter(objc.NSRunningApplication:runningApplicationsWithBundleIdentifier'com.apple.dock') do
+		app:activateWithOptions(objc.NSApplicationActivateIgnoringOtherApps)
+		break
+	end
+
 	--activate the app before windows are created.
-	self:activate()
+	--self:activate()
+	self:runevery(0.1, function()
+		self:activate()
+		return false
+	end)
 
 	return self
 end
@@ -114,7 +140,9 @@ end
 --message loop ---------------------------------------------------------------
 
 function app:run()
-	self.nsapp:run()
+	--objc.NSApplicationLoad()
+	objc.NSApplicationMain(0, nil)
+	--self.nsapp:run()
 end
 
 function app:stop()
@@ -1032,11 +1060,15 @@ function app:double_click_target_area()
 	return 4, 4 --like in windows
 end
 
+function window:_flip_y(y)
+	return self.nswin:contentView():frame().size.height - y --flip y around contentView's height
+end
+
 function Window:setmouse(event)
 	local m = self.frontend._mouse
 	local pos = event:locationInWindow()
 	m.x = pos.x
-	m.y = self:contentView():frame().size.height - pos.y --flip y around contentView's height
+	m.y = self.backend:_flip_y(pos.y)
 	local btns = tonumber(event:pressedMouseButtons())
 	m.left = bit.band(btns, 1) ~= 0
 	m.right = bit.band(btns, 2) ~= 0
@@ -1132,74 +1164,83 @@ end
 --menus ----------------------------------------------------------------------
 
 local menu = {}
+nw._menu_class = menu
 
 function app:menu()
-	return menu:_new(self)
+	local nsmenu = objc.NSMenu:new()
+	nsmenu:setAutoenablesItems(false)
+	return menu:_new(self, nsmenu)
 end
 
-function menu:_new(app)
-	local nsmenu = objc.NSMenu:new()
+function window:menu()
+	if not self.app._menu then
+		local nsmenu = objc.NSMenu:new()
+		nsmenu:setAutoenablesItems(false)
+		nsmenu:_setMenuName'NSMainMenu'
+		nsmenu:setTitle'MainMenu'
+		self.app.nsapp:setMainMenu(nsmenu)
+		--self.app.nsapp:setAppleMenu(nsmenu)
+		ffi.gc(nsmenu, nil)
+		self.app._menu = menu:_new(self.app, nsmenu)
+	end
+	return self.app._menu
+end
+
+function menu:_new(app, nsmenu)
 	local self = glue.inherit({app = app, nsmenu = nsmenu}, menu)
 	nsmenu.nw_backend = self
 	return self
-end
-
-local function menuitem(args, menutype)
-	--zero or more '-' means separator (not for menu bars)
-	local separator = menutype ~= 'menubar' and
-		args.text:find'^%-*$' and true or nil
-	return {
-		text = args.text,
-		on_click = args.action,
-		submenu = args.submenu and args.submenu.backend.winmenu,
-		checked = args.checked,
-		separator = separator,
-	}
-end
-
-local function dump_menuitem(mi)
-	return {
-		text = mi.separator and '' or mi.text,
-		action = mi.submenu and mi.submenu.nw_backend.frontend or mi.on_click,
-		checked = mi.checked,
-	}
 end
 
 objc.addmethod('App', 'nw_menuItemClicked', function(self, item)
 	item.nw_action()
 end, 'v@:@')
 
-local function menuitem(args)
-	local item = NWMenuItem:new()
+function menu:_setitem(item, args)
+	if not item then
+		if args.separator then
+			item = objc.NSMenuItem:separatorItem()
+		else
+			item = objc.NSMenuItem:new()
+		end
+	end
 	item:setTitle(args.text)
 	item:setState(args.checked and objc.NSOnState or objc.NSOffState)
-	if type(args.action) == 'function' then
+	item:setEnabled(args.enabled)
+	if args.submenu then
+		item:setSubmenu(args.submenu.backend.nsmenu)
+	elseif args.action then
 		item:setTarget(self.app.nsapp)
 		item:setAction'nw_menuItemClicked'
 		item.nw_action = args.action
 	end
-	ffi.gc(item, nil)
 	return item
 end
 
 local function dump_menuitem(item)
 	return {
-		--
+		text = objc.tolua(item:title()),
+		action = item:submenu() and item:submenu().nw_backend.frontend or item.nw_action,
+		checked = item:state() == objc.NSOnState,
+		enabled = item:isEnabled(),
 	}
 end
 
 function menu:add(index, args)
-	local item = menuitem(args)
+	local item = self:_setitem(nil, args)
 	if index then
 		self.nsmenu:insertItem_atIndex(item, index-1)
 	else
 		self.nsmenu:addItem(item)
+		index = self.nsmenu:numberOfItems()
 	end
+	ffi.gc(item, nil) --disown, nsmenu owns it now
+	return index
 end
 
 function menu:set(index, args)
-	self.nsmenu:
-
+	local item = self.nsmenu:itemAtIndex(index-1)
+	self:_setitem(item, args)
 end
 
 function menu:get(index)
@@ -1207,7 +1248,7 @@ function menu:get(index)
 end
 
 function menu:item_count()
-	return self.nsmenu:numberOfItems()
+	return tonumber(self.nsmenu:numberOfItems())
 end
 
 function menu:remove(index)
@@ -1230,42 +1271,12 @@ function menu:set_enabled(index, enabled)
 	self.nsmenu:itemAtIndex(index-1):setEnabled(enabled)
 end
 
-function window:menu()
-	if not self._menu then
-		local menubar = winapi.MenuBar()
-		self.win.menu = menubar
-		self._menu = menu:_new(menubar)
-	end
-	return self._menu
-end
-
 function window:popup(menu, x, y)
-	menu.backend.winmenu:popup(self.win, x, y)
-end
-
---	local qmi = objc.NSMenuItem:alloc():initWithTitle_action_keyEquivalent('Quit', 'terminate:', 'q')
---	appmenu:addItem(qmi); ffi.gc(qmi, nil)
-
-function window:menu()
-	if not self.app._menu then
-		local menubar = objc.NSMenu:new()
-		local appmi = objc.NSMenuItem:new()
-		menubar:addItem(appmi); ffi.gc(appmi, nil)
-		nsapp:setMainMenu(menubar); ffi.gc(menubar, nil)
-		local appmenu = objc.NSMenu:new()
-		appmi:setSubmenu(appmenu); ffi.gc(appmenu, nil)
-		self.app._menu = appmenu
-	end
-	return self.app._menu
-end
-
-function window:menu()
-	--
+	local p = objc.NSMakePoint(x, self:_flip_y(y))
+	menu.backend.nsmenu:popUpMenuPositioningItem_atLocation_inView(nil, p, self.nswin:contentView())
 end
 
 --buttons --------------------------------------------------------------------
-
-
 
 if not ... then require'nw_test' end
 

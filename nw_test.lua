@@ -1192,45 +1192,52 @@ local function setmenu_osx(nsapp)
 end
 
 add('menu', function()
-	local win = app:window{w = 500, h = 300}
-	local winmenu = win:menu()
-	local menu1 = app:menu()
-	menu1:add('Option1', function() print'Option1' end)
-	menu1:add('Option2', function() print'Option2' end)
-	menu1:set(2, 'Option2-changed', function() print'Option2-changed' end, {checked = true})
-	menu1:add(2, 'Dead Option')
-	menu1:remove(2)
-	menu1:add(2, '') --separator
-	menu1:checked(1, true)
-	assert(menu1:checked(3))
-	menu1:checked(3, false)
-	assert(not menu1:checked(3))
-	assert(menu1:enabled(3))
-	menu1:enabled(3, false)
-	assert(not menu1:enabled(3))
-	winmenu:add('Menu1', menu1)
-	winmenu:add'---' --separator: not for menu bar items
-	local menu2 = app:menu()
-	winmenu:add('Menu2', menu2)
-	local menu3 = app:menu()
-	menu2:add('Menu3', menu3)
-	local menu4 = app:menu()
-	menu3:add('Menu4', menu4)
-	menu4:add('Option41', function() print'Option41' end)
-	menu4:add('Option42', function() print'Option42' end)
-	local pmenu = app:menu()
-	pmenu:add'Option1'
-	pmenu:add'Option2'
-	function win:mouseup(button, x, y)
-		if button == 'right' then
-			win:popup(pmenu, x, y)
+
+	local function menus()
+		local win = app:window{w = 500, h = 300}
+		local winmenu = win:menu()
+		local menu1 = app:menu()
+		menu1:add('Option1\tCtrl+G', function() print'Option1' end)
+		menu1:add('Option2', function() print'Option2' end)
+		menu1:set(2, 'Option2-changed', function() print'Option2-changed' end, {checked = true})
+		menu1:add(2, 'Dead Option')
+		menu1:remove(2)
+		menu1:add(2, '') --separator
+		menu1:checked(1, true)
+		assert(menu1:checked(3))
+		menu1:checked(3, false)
+		assert(not menu1:checked(3))
+		assert(menu1:enabled(3))
+		menu1:enabled(3, false)
+		assert(not menu1:enabled(3))
+		winmenu:add('Menu1', menu1)
+		winmenu:add'---' --separator: not for menu bar items
+		local menu2 = app:menu()
+		winmenu:add('Menu2', menu2)
+		local menu3 = app:menu()
+		menu2:add('Menu3', menu3)
+		local menu4 = app:menu()
+		menu3:add('Menu4', menu4)
+		menu4:add('Option41', function() print'Option41' end)
+		menu4:add('Option42', function() print'Option42' end)
+		local pmenu = app:menu()
+		pmenu:add'Option1'
+		pmenu:add'Option2'
+		function win:mouseup(button, x, y)
+			if button == 'right' then
+				win:popup(pmenu, x, y)
+			end
 		end
+		assert(winmenu:item_count() == 3)
+		assert(winmenu:get(1).action == menu1)
+		assert(winmenu:get(3, 'action') == menu2)
+		assert(#winmenu:items() == 3)
+		assert(winmenu:items()[3].action == menu2)
+		winmenu:add('xxxxxxxxxxxx', app:menu()) --separator: not for menu bar items
 	end
-	assert(winmenu:item_count() == 3)
-	assert(winmenu:get(1).action == menu1)
-	assert(winmenu:get(3, 'action') == menu2)
-	assert(#winmenu:items() == 3)
-	assert(winmenu:items()[3].action == menu2)
+
+	menus()
+
 	app:run()
 end)
 

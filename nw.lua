@@ -803,21 +803,21 @@ end
 
 local menu = {}
 
-function wrap_menu(backend)
+function wrap_menu(backend, menutype)
 	if backend.frontend then
 		return backend.frontend --already wrapped
 	end
-	local self = glue.inherit({backend = backend}, menu)
+	local self = glue.inherit({backend = backend, menutype = menutype}, menu)
 	backend.frontend = self
 	return self
 end
 
 function app:menu(menu)
-	return wrap_menu(self.backend:menu())
+	return wrap_menu(self.backend:menu(), 'menu')
 end
 
 function window:menu()
-	return wrap_menu(self.backend:menu())
+	return wrap_menu(self.backend:menu(), 'menubar')
 end
 
 function window:popup(menu, x, y)
@@ -828,8 +828,12 @@ function menu:popup(win, x, y)
 	win:popup(self, x, y)
 end
 
-local function parseargs(index, text, action, options)
+function menu:_parseargs(index, text, action, options)
 	local args = {}
+
+	--args can have the form:
+	--		([index, ]text, [action], [options])
+	--		{index=, text=, action=, optionX=...}
 	if type(index) == 'table' then
 		args = index
 		index = args.index
@@ -838,27 +842,47 @@ local function parseargs(index, text, action, options)
 	else
 		args.text, args.action = text, action
 	end
-	glue.merge(args, options)
+
+	--default text is empty, i.e. separator.
 	args.text = args.text or ''
-	if type(args.action) ~= 'function' then
+
+	--action can be a function or a submenu.
+	if type(args.action) == 'table' and args.action.menutype then
 		args.action, args.submenu = nil, args.action
 	end
-	if not args.shortcut then
-		local text, shortcut = args.text:match'^(.-)%s%s+([^%s]+)$'
-		if shortcut then
-			args.text = text
-			args.shortcut = shortcut
-		end
+
+	--options add to the sequential args but don't override them.
+	glue.merge(args, options)
+
+	--a title made of zero or more '-' means separator (not for menu bars).
+	if self.menutype ~= 'menubar' and args.text:find'^%-*$' then
+		args.separator = true
+		args.text = ''
+		args.action = nil
+		args.submenu = nil
+		args.enabled = true
+		args.checked = false
+	else
+		if args.enabled == nil then args.enabled = true end
+		if args.checked == nil then args.checked = false end
 	end
+
+	--the title can be followed by two or more spaces and then by a shortcut.
+	local shortcut = args.text:reverse():match'^%s*(.-)%s%s'
+	if shortcut then
+		args.shortcut = shortcut:reverse()
+		args.text = text
+	end
+
 	return index, args
 end
 
 function menu:add(...)
-	return self.backend:add(parseargs(...))
+	return self.backend:add(self:_parseargs(...))
 end
 
 function menu:set(...)
-	self.backend:set(parseargs(...))
+	self.backend:set(self:_parseargs(...))
 end
 
 function menu:remove(index)
