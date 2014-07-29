@@ -322,7 +322,7 @@ window.defaults = {
 	resizeable = true,
 	fullscreenable = true,
 	autoquit = false, --quit the app on closing
-	edgesnapping = false,
+	edgesnapping = false, --false, 'all', 'app', 'screen' (true)
 }
 
 function app:window(t)
@@ -358,7 +358,7 @@ function window:_new(app, opt)
 	self._resizeable = opt.resizeable
 	self._fullscreenable = opt.fullscreenable
 	self._autoquit = opt.autoquit
-	self._edgesnapping = opt.edgesnapping
+	self:edgesnapping(opt.edgesnapping)
 
 	self.app:_window_created(self)
 	self:_event'created'
@@ -514,9 +514,19 @@ end
 
 --positioning ----------------------------------------------------------------
 
-function window:frame_rect(x, y, w, h) --x, y, w, h
+local function override_rect(x, y, w, h, x1, y1, w1, h1)
+	return x1 or x, y1 or y, w1 or w, h1 or h
+end
+
+function window:frame_rect(x1, y1, w1, h1)
 	self:_check()
-	return self.backend:frame_rect(x, y, w, h)
+	if x1 or y1 or w1 or h1 then
+		local x, y, w, h = self:frame_rect()
+		x, y, w, h = override_rect(x, y, w, h, x1, y1, w1, h1)
+		self.backend:set_frame_rect(x, y, w, h)
+	else
+		return self.backend:get_frame_rect()
+	end
 end
 
 function window:client_rect() --x, y, w, h
@@ -524,35 +534,58 @@ function window:client_rect() --x, y, w, h
 	return self.backend:client_rect()
 end
 
-local function override_rect(x, y, w, h, x1, y1, w1, h1)
-	return x1 or x, y1 or y, w1 or w, h1 or h
-end
-
-function window:_backend_start_resize()
-	self:_event'start_resize'
+function window:_backend_start_resize(how)
+	self._magnets = nil
+	self:_event('start_resize', how)
 end
 
 function window:_backend_end_resize()
+	self._magnets = nil
 	self:_event'end_resize'
+end
+
+function window:_getmagnets()
+	local mode = self:edgesnapping()
+	local t
+	if mode:find'all' then
+		t = self.backend:magnets()
+	elseif mode:find'app' then
+		t = {}
+		for i,win in ipairs(self.app:windows()) do
+			if win ~= self then
+				local x, y, w, h = win:frame_rect()
+				t[#t+1] = {x = x, y = y, w = w, h = h}
+			end
+		end
+	end
+	if mode:find'screen' then
+		t = t or {}
+		for i,disp in ipairs(self.app:displays()) do
+			local x, y, w, h = disp:client_rect()
+			t[#t+1] = {x = x, y = y, w = w, h = h}
+			local x, y, w, h = disp:rect()
+			t[#t+1] = {x = x, y = y, w = w, h = h}
+		end
+	end
+	return t
 end
 
 function window:_backend_resizing(how, x, y, w, h)
 	local x1, y1, w1, h1
 
 	if self:edgesnapping() then
+		self._magnets = self._magnets or self:_getmagnets()
 		if how == 'move' then
-			x1, y1 = box2d.snap_pos(20, x, y, w, h, self.backend:magnets(), true)
+			x1, y1 = box2d.snap_pos(20, x, y, w, h, self._magnets, true)
 		else
-			x1, y1, w1, h1 = box2d.snap_edges(20, x, y, w, h, self.backend:magnets(), true)
+			x1, y1, w1, h1 = box2d.snap_edges(20, x, y, w, h, self._magnets, true)
 		end
 		x1, y1, w1, h1 = override_rect(x, y, w, h, x1, y1, w1, h1)
 	else
 		x1, y1, w1, h1 = x, y, w, h
 	end
 
-	if self.resizing then
-		x1, y1, w1, h1 = override_rect(x1, y1, w1, h1, self:_handle('resizing', how, x1, y1, w1, h1))
-	end
+	x1, y1, w1, h1 = override_rect(x1, y1, w1, h1, self:_handle('resizing', how, x1, y1, w1, h1))
 	self:_fire('resizing', how, x, y, w, h, x1, y1, w1, h1)
 	return x1, y1, w1, h1
 end
@@ -566,8 +599,16 @@ function window:edgesnapping(snapping)
 	if snapping == nil then
 		return self._edgesnapping
 	else
-		self._edgesnapping = snapping
-		self.backend:edgesnapping(snapping)
+		if snapping == true then
+			snapping = 'screen'
+		end
+		if self._edgesnapping ~= snapping then
+			self._magnets = nil
+			self._edgesnapping = snapping
+			if self.backend.set_edgesnapping then
+				self.backend:set_edgesnapping(snapping)
+			end
+		end
 	end
 end
 

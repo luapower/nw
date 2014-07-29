@@ -152,16 +152,7 @@ function window:_new(app, frontend, t)
 	self:reset_keystate()
 
 	--init mouse state
-	local m = self.frontend._mouse
-	local pos = self.win.cursor_pos
-	m.x = pos.x
-	m.y = pos.y
-	m.left   = winapi.GetKeyState(winapi.VK_LBUTTON)
-	m.middle = winapi.GetKeyState(winapi.VK_MBUTTON)
-	m.right  = winapi.GetKeyState(winapi.VK_RBUTTON)
-	m.ex1    = winapi.GetKeyState(winapi.VK_XBUTTON1)
-	m.ex2    = winapi.GetKeyState(winapi.VK_XBUTTON2)
-	m.inside = box2d.hit(m.x, m.y, unpack_rect(self.win.client_rect))
+	self:_updatemouse()
 
 	--start tracking mouse leave
 	winapi.TrackMouseEvent{hwnd = self.win.hwnd, flags = winapi.TME_LEAVE}
@@ -447,65 +438,65 @@ end
 
 --positioning ----------------------------------------------------------------
 
-function app:_getmagnets(around_hwnd)
-	local t = {} --{{x, y, w, h}, ...}
+function window:get_frame_rect()
+	if self._fullscreen then
+		return unpack_rect(self._fs.normal_rect)
+	else
+		return unpack_rect(self.win.normal_rect)
+	end
+end
 
+function window:set_frame_rect(x, y, w, h)
+	if self._fullscreen then
+		self._fs.normal_rect = RECT(x, y, x + w, y + h)
+	else
+		self.win:set_normal_rect(x, y, x + w, y + h)
+	end
+end
+
+function window:client_rect()
+	return unpack_rect(self.win.client_rect)
+end
+
+function window:magnets()
+	local t = {} --{{x, y, w, h}, ...}
 	local rect
 	for i,hwnd in ipairs(winapi.EnumChildWindows()) do --front-to-back order assured
-		if hwnd ~= around_hwnd and winapi.IsVisible(hwnd) then
+		if hwnd ~= self.win.hwnd and winapi.IsVisible(hwnd) then
 			rect = winapi.GetWindowRect(hwnd, rect)
 			t[#t+1] = {x = rect.x, y = rect.y, w = rect.w, h = rect.h}
 		end
 	end
-
 	return t
-end
-
-function app:magnets(around_hwnd)
-	if not self._magnets then
-		self._magnets = self:_getmagnets(around_hwnd)
-	end
-	return self._magnets
-end
-
-function window:magnets()
-	return self.app:magnets(self.win.hwnd)
 end
 
 function Window:on_begin_sizemove()
 	self.app._magnets = nil --clear magnets
 	local m = winapi.Windows.cursor_pos
-	m.x = m.x - self.x
-	m.y = m.y - self.y
-	self.nw_m = m
-	self.frontend:_backend_start_resize()
+	self.nw_dragpoint_x = m.x - self.x
+	self.nw_dragpoint_y = m.y - self.y
+	self.nw_start_resize = true
 end
 
 function Window:on_end_sizemove()
+	self.nw_start_resize = false
 	self.frontend:_backend_end_resize()
 end
 
-function window:frame_rect(x, y, w, h)
-	if x then
-		if self._fullscreen then
-			self._fs.normal_rect = RECT(x, y, x + w, y + h)
-		else
-			self.win:set_normal_rect(x, y, x + w, y + h)
-		end
-	else
-		if self._fullscreen then
-			return unpack_rect(self._fs.normal_rect)
-		else
-			return unpack_rect(self.win.normal_rect)
-		end
-	end
-end
-
 function Window:frame_changing(how, rect)
+	local dx = self.nw_dragpoint_x
+	local dy = self.nw_dragpoint_y
+	if self.nw_start_resize then
+		self.nw_start_resize = false
+		self.frontend:_backend_start_resize(how)
+	end
 	if how == 'move' then
+		--preserve the initial drag point, regardless of how the coordinates
+		--are adjusted on each event.
+		--this also emulates the default OSX behavior.
 		local m = winapi.Windows.cursor_pos
-		rect.x = m.x - self.nw_m.x
-		rect.y = m.y - self.nw_m.y
+		rect.x = m.x - dx
+		rect.y = m.y - dy
 	end
 	local x, y, w, h = self.frontend:_backend_resizing(how, unpack_rect(rect))
 	rect.x = x or rect.x
@@ -555,8 +546,6 @@ end
 function Window:on_pos_changed(info)
 	--self.frontend:_event'frame_changed'
 end
-
-function window:edgesnapping(snapping) end
 
 --displays -------------------------------------------------------------------
 
@@ -999,7 +988,20 @@ local function unpack_buttons(b)
 	return b.lbutton, b.rbutton, b.mbutton, b.xbutton1, b.xbutton2
 end
 
-function Window:setmouse(x, y, buttons)
+function window:_updatemouse()
+	local m = self.frontend._mouse
+	local pos = self.win.cursor_pos
+	m.x = pos.x
+	m.y = pos.y
+	m.left   = winapi.GetKeyState(winapi.VK_LBUTTON)
+	m.middle = winapi.GetKeyState(winapi.VK_MBUTTON)
+	m.right  = winapi.GetKeyState(winapi.VK_RBUTTON)
+	m.ex1    = winapi.GetKeyState(winapi.VK_XBUTTON1)
+	m.ex2    = winapi.GetKeyState(winapi.VK_XBUTTON2)
+	m.inside = box2d.hit(m.x, m.y, unpack_rect(self.win.client_rect))
+end
+
+function window:_setmouse(x, y, buttons)
 
 	--set mouse state
 	local m = self.frontend._mouse
@@ -1014,18 +1016,15 @@ function Window:setmouse(x, y, buttons)
 	--send hover
 	if not m.inside then
 		m.inside = true
-		winapi.TrackMouseEvent{hwnd = self.hwnd, flags = winapi.TME_LEAVE}
+		winapi.TrackMouseEvent{hwnd = self.win.hwnd, flags = winapi.TME_LEAVE}
 		self.frontend:_backend_mouseenter()
 	end
 end
 
 function Window:on_mouse_move(x, y, buttons)
 	local m = self.frontend._mouse
-	local moved = x ~= m.x or y ~= m.y
-	self:setmouse(x, y, buttons)
-	if moved then
-		self.frontend:_backend_mousemove(x, y)
-	end
+	self.backend:_setmouse(x, y, buttons)
+	self.frontend:_backend_mousemove(x, y)
 end
 
 function Window:on_mouse_leave()
@@ -1047,25 +1046,25 @@ function Window:uncapture_mouse()
 end
 
 function Window:on_lbutton_down(x, y, buttons)
-	self:setmouse(x, y, buttons)
+	self.backend:_setmouse(x, y, buttons)
 	self:capture_mouse()
 	self.frontend:_backend_mousedown('left', x, y)
 end
 
 function Window:on_mbutton_down(x, y, buttons)
-	self:setmouse(x, y, buttons)
+	self.backend:_setmouse(x, y, buttons)
 	self:capture_mouse()
 	self.frontend:_backend_mousedown('middle', x, y)
 end
 
 function Window:on_rbutton_down(x, y, buttons)
-	self:setmouse(x, y, buttons)
+	self.backend:_setmouse(x, y, buttons)
 	self:capture_mouse()
 	self.frontend:_backend_mousedown('right', x, y)
 end
 
 function Window:on_xbutton_down(x, y, buttons)
-	self:setmouse(x, y, buttons)
+	self.backend:_setmouse(x, y, buttons)
 	if buttons.xbutton1 then
 		self:capture_mouse()
 		self.frontend:_backend_mousedown('ex1', x, y)
@@ -1077,25 +1076,25 @@ function Window:on_xbutton_down(x, y, buttons)
 end
 
 function Window:on_lbutton_up(x, y, buttons)
-	self:setmouse(x, y, buttons)
+	self.backend:_setmouse(x, y, buttons)
 	self:uncapture_mouse()
 	self.frontend:_backend_mouseup('left', x, y)
 end
 
 function Window:on_mbutton_up(x, y, buttons)
-	self:setmouse(x, y, buttons)
+	self.backend:_setmouse(x, y, buttons)
 	self:uncapture_mouse()
 	self.frontend:_backend_mouseup('middle', x, y)
 end
 
 function Window:on_rbutton_up(x, y, buttons)
-	self:setmouse(x, y, buttons)
+	self.backend:_setmouse(x, y, buttons)
 	self:uncapture_mouse()
 	self.frontend:_backend_mouseup('right', x, y)
 end
 
 function Window:on_xbutton_up(x, y, buttons)
-	self:setmouse(x, y, buttons)
+	self.backend:_setmouse(x, y, buttons)
 	if buttons.xbutton1 then
 		self:uncapture_mouse()
 		self.frontend:_backend_mouseup('ex1', x, y)
@@ -1117,7 +1116,7 @@ function Window:on_mouse_wheel(x, y, buttons, delta)
 		delta = delta - 1
 	end
 	delta = delta / 120 * wheel_scroll_lines()
-	self:setmouse(x, y, buttons)
+	self.backend:_setmouse(x, y, buttons)
 	self.frontend:_backend_mousewheel(delta, x, y)
 end
 
@@ -1129,15 +1128,11 @@ end
 
 function Window:on_mouse_hwheel(x, y, buttons, delta)
 	delta = delta / 120 * wheel_scroll_chars()
-	self:setmouse(x, y, buttons)
+	self.backend:_setmouse(x, y, buttons)
 	self.frontend:_backend_mousehwheel(delta, x, y)
 end
 
 --rendering ------------------------------------------------------------------
-
-function window:client_rect()
-	return unpack_rect(self.win.client_rect)
-end
 
 function window:invalidate()
 	if self.win.layered then

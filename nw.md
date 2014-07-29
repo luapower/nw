@@ -147,6 +147,11 @@ app:run() --start the main loop
   * properties for state are orthogonal to each other
   * iterators are stable and with specified order
 
+## Backends
+
+  * cocoa: OSX 10.7+
+  * winapi: Windows XP/2000+
+
 ## Behavior
 
 ### State variables

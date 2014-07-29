@@ -955,6 +955,57 @@ end)
 
 --positioning ----------------------------------------------------------------
 
+--test that initial coordinates and size are set correctly.
+--test that frame_rect() works.
+--test that client_rect() works and gives sane values.
+add('pos-init', function()
+	local x0, y0, w0, h0 = 51, 52, 201, 202
+	local win = app:window{x = x0, y = y0, w = w0, h = h0}
+	local x, y, w, h = win:frame_rect()
+	assert(x == x0)
+	assert(y == y0)
+	assert(w == w0)
+	assert(h == h0)
+	local x, y, w, h = win:client_rect()
+	assert(x == 0)
+	assert(y == 0)
+	assert(w >= w0 - 50 and w <= w0)
+	assert(h >= h0 - 50 and h <= h0)
+	print'ok'
+end)
+
+--frame_rect(x, y, w, h) works.
+add('pos-set-frame-rect', function()
+	local x0, y0, w0, h0 = 51, 52, 201, 202
+	local win = app:window{x = 0, y = 0, w = 0, h = 0}
+	local function check()
+		local x, y, w, h = win:frame_rect()
+		assert(x == x0)
+		assert(y == y0)
+		assert(w == w0)
+		assert(h == h0)
+	end
+	win:frame_rect(x0, y0, w0, h0); check()
+	x0 = x0 + 10; win:frame_rect(x0); check()
+	y0 = y0 + 10; win:frame_rect(nil, y0); check()
+	w0 = w0 + 10; win:frame_rect(nil, nil, w0); check()
+	h0 = h0 + 10; win:frame_rect(nil, nil, nil, h0); check()
+	print'ok'
+end)
+
+--frame_rect(x, y, w, h) generates only the 'resized' event.
+add('pos-events', function()
+	local rec = recorder()
+	local win = app:window{x = 0, y = 0, w = 0, h = 0}
+	function win:start_resize(how) rec('start_resize', how) end
+	function win:end_resize() rec('end_resize') end
+	function win:resizing(how, x, y, w, h) rec('resizing', how, x, y, w, h) end
+	function win:resized() rec('resized') end
+	win:frame_rect(101, 102, 103, 104)
+	rec{'resized'}
+end)
+
+
 add('size', function()
 	local win = app:window(winpos())
 	function win:mousemove(x, y)
@@ -1019,8 +1070,11 @@ end)
 --edge snapping --------------------------------------------------------------
 
 add('snap', function()
-	local win = app:window(winpos())
-	local win2 = app:window(winpos())
+	local win1 = app:window(winpos{w = 300, title = 'no snap', edgesnapping = false})
+	local win2 = app:window(winpos{w = 300, title = 'snap to screen', edgesnapping = true}) --screen
+	local win3 = app:window(winpos{w = 300, title = 'snap to all windows', edgesnapping = 'all'})
+	local win3 = app:window(winpos{w = 300, title = 'snapp to app windows', edgesnapping = 'app'})
+	local win3 = app:window(winpos{w = 300, title = 'snapp to app windows and screen', edgesnapping = 'app screen'})
 	app:run()
 end)
 
@@ -1179,22 +1233,10 @@ end)
 
 --menus ----------------------------------------------------------------------
 
-local function setmenu_osx(nsapp)
-	local objc = require'objc'
-	local mb = objc.NSMenu:new(); ffi.gc(mb, nil)
-	local ami = objc.NSMenuItem:new(); ffi.gc(ami, nil)
-	mb:addItem(ami)
-	nsapp:setMainMenu(mb)
-	local am = objc.NSMenu:new(); ffi.gc(am, nil)
-	local qmi = objc.NSMenuItem:alloc():initWithTitle_action_keyEquivalent('Quit', 'terminate:', 'q'); ffi.gc(qmi, nil)
-	am:addItem(qmi)
-	ami:setSubmenu(am)
-end
-
 add('menu', function()
 
-	local function menus()
-		local win = app:window{w = 500, h = 300}
+	local function setmenu()
+		local win = app:window(winpos{w = 500, h = 300})
 		local winmenu = win:menu()
 		local menu1 = app:menu()
 		menu1:add('Option1\tCtrl+G', function() print'Option1' end)
@@ -1228,15 +1270,17 @@ add('menu', function()
 				win:popup(pmenu, x, y)
 			end
 		end
+
 		assert(winmenu:item_count() == 3)
 		assert(winmenu:get(1).action == menu1)
 		assert(winmenu:get(3, 'action') == menu2)
 		assert(#winmenu:items() == 3)
 		assert(winmenu:items()[3].action == menu2)
-		winmenu:add('xxxxxxxxxxxx', app:menu()) --separator: not for menu bar items
 	end
 
-	menus()
+	app:runafter(1, function()
+		setmenu()
+	end)
 
 	app:run()
 end)

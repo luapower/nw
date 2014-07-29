@@ -11,8 +11,10 @@
 --windows created after calling activateIgnoringOtherApps(false) go behind the active app.
 --windows created after calling activateIgnoringOtherApps(true) go in front of the active app.
 --windows activated while the app is inactive will go in front when activateIgnoringOtherApps(true) is called,
---but other windows will not, unlike clicking the dock icon. this is hysterical.
+--but other windows will not, unlike clicking the dock icon.
 --only the windows made key after the call to activateIgnoringOtherApps(true) are put in front of the active app!
+--the first call to activateIgnoringOtherApps() doesn't also activate the main menu. to fix this,
+--use NSRunningApplication:currentApplication():activateWithOptions() instead, before you tear your hear out!
 --quitting the app from the app's Dock menu (or calling terminate(nil)) calls appShouldTerminate, then calls close()
 --  on all windows, thus without calling windowShouldClose, but only windowWillClose.
 --there's no windowDidClose event and so windowDidResignKey comes after windowWillClose.
@@ -33,6 +35,7 @@
 --is triggered on the last window made key (unlike windows which activates/deactivates windows as it happens).
 --makeKeyAndOrderFront() is also deferred, if the app is not active, for when it becomes active.
 --applicationDidResignActive() is not sent on exit.
+--the app's menu bar _and_ the app menu (the first menu item) must be created before the app is activated.
 
 local ffi = require'ffi'
 local bit = require'bit'
@@ -46,7 +49,8 @@ objc.load'Foundation'
 objc.load'AppKit'
 objc.load'System' --for mach_absolute_time
 objc.load'Carbon.HIToolbox' --for key codes
-objc.load'CoreGraphics' --for CGWindow*
+objc.load'ApplicationServices.CoreGraphics'
+--objc.load'CoreGraphics' --for CGWindow*
 objc.load'CoreFoundation' --for CFArray
 
 local function unpack_nsrect(r)
@@ -57,9 +61,13 @@ local function override_rect(x, y, w, h, x1, y1, w1, h1)
 	return x1 or x, y1 or y, w1 or w, h1 or h
 end
 
+local function main_screen_h()
+	return objc.NSScreen:mainScreen():frame().size.height
+end
+
 --convert rect from bottom-up relative-to-main-screen space to top-down relative-to-main-screen space
 local function flip_screen_rect(main_h, x, y, w, h)
-	main_h = main_h or objc.NSScreen:mainScreen():frame().size.height
+	main_h = main_h or main_screen_h()
 	return x, main_h - h - y, w, h
 end
 
@@ -82,17 +90,6 @@ end
 
 local App = objc.class('App', 'NSApplication <NSApplicationDelegate>')
 
---[[
-objc.swizzle('NSBundle', 'loadNibNamed:owner:topLevelObjects:', 'nw_loadNibNamed:owner:topLevelObjects:',
-function(self, nib, owner, tl)
-	print('loadNibNamed', nib, owner)
-	if objc.tolua(nib) == 'MainMenu' and owner == App:sharedApplication() then
-		--return true --pretend to load the nib.
-	end
-	return self:nw_loadNibNamed_owner_topLevelObjects(nib, owner, tl)
-end)
-]]
-
 function app:_new(frontend)
 
 	self = glue.inherit({frontend = frontend}, self)
@@ -101,38 +98,36 @@ function app:_new(frontend)
 	self.pool = objc.NSAutoreleasePool:new()
 
 	--TODO: we have to reference mainScreen() before using any of the the display functions,
-	--or we will get errors on [NSRecursiveLock unlock].
+	--or we will get NSRecursiveLock errors.
 	objc.NSScreen:mainScreen()
 
 	self.nsapp = App:sharedApplication()
 	self.nsapp.frontend = frontend
 	self.nsapp.backend = self
 
-	--objc.NSBundle:mainBundle():loadNibNamed_owner_topLevelObjects('MainMenu', self.nsapp, nil)
-
 	self.nsapp:setDelegate(self.nsapp)
 
-	--set it to be a normal app with dock and menu bar
+	--set it to be a normal app with dock and menu bar.
 	self.nsapp:setActivationPolicy(objc.NSApplicationActivationPolicyRegular)
 
 	--disable mouse coalescing so that mouse move events are not skipped.
 	objc.NSEvent:setMouseCoalescingEnabled(false)
 
-	--objc.NSMenu:setMenuBarVisible(false)
-	--objc.NSMenu:setMenuBarVisible(true)
-	--crazy hack: in the absence of a nib file, the main menu is not shown unless
-	--the app is first deactivated and then reactivated.
-	for i,app in objc.iter(objc.NSRunningApplication:runningApplicationsWithBundleIdentifier'com.apple.dock') do
-		app:activateWithOptions(objc.NSApplicationActivateIgnoringOtherApps)
-		break
-	end
+	--before app activation, we have to create the main menu _and_ the app menu, otherwise
+	--the app menu title will be replaced with a little apple icon to our desperation!
+	local menubar = objc.NSMenu:new()
+	menubar:setAutoenablesItems(false)
+	self.nsapp:setMainMenu(menubar)
+	ffi.gc(menubar, nil)
+	local appmenu = objc.NSMenu:new()
+	local appmenuitem = objc.NSMenuItem:new()
+	appmenuitem:setSubmenu(appmenu)
+	ffi.gc(appmenu, nil)
+	menubar:addItem(appmenuitem)
+	ffi.gc(appmenuitem, nil)
 
 	--activate the app before windows are created.
-	--self:activate()
-	self:runevery(0.1, function()
-		self:activate()
-		return false
-	end)
+	self:activate()
 
 	return self
 end
@@ -140,9 +135,7 @@ end
 --message loop ---------------------------------------------------------------
 
 function app:run()
-	--objc.NSApplicationLoad()
-	objc.NSApplicationMain(0, nil)
-	--self.nsapp:run()
+	self.nsapp:run()
 end
 
 function app:stop()
@@ -315,7 +308,9 @@ end
 --activation -----------------------------------------------------------------
 
 function app:activate()
-	self.nsapp:activateIgnoringOtherApps(true)
+	objc.NSRunningApplication:currentApplication():activateWithOptions(bit.bor(
+		objc.NSApplicationActivateIgnoringOtherApps,
+		objc.NSApplicationActivateAllWindows))
 end
 
 function app:active_window()
@@ -478,17 +473,29 @@ end
 
 --positioning ----------------------------------------------------------------
 
-function app:_getmagnets(around_nswin)
+function window:get_frame_rect()
+	return flip_screen_rect(nil, unpack_nsrect(self.nswin:frame()))
+end
+
+function window:set_frame_rect(x, y, w, h)
+	self.nswin:setFrame_display(objc.NSMakeRect(flip_screen_rect(nil, x, y, w, h)), true)
+end
+
+function window:client_rect()
+	return unpack_nsrect(self.nswin:contentView():bounds())
+end
+
+function window:magnets()
 	local t = {} --{{x=, y=, w=, h=}, ...}
 
 	local opt = bit.bor(
 		objc.kCGWindowListOptionOnScreenOnly,
 		objc.kCGWindowListExcludeDesktopElements)
 
-	local nswin_number = tonumber(around_nswin:windowNumber())
+	local nswin_number = tonumber(self.nswin:windowNumber())
 	local list = objc.CGWindowListCopyWindowInfo(opt, nswin_number) --front-to-back order assured
 
-	--a glimpse into the mind of a Cocoa programmer...
+	--a glimpse into the mind of a Cocoa (or Java, .Net, etc.) programmer...
 	local bounds = ffi.new'CGRect[1]'
 	for i = 0, tonumber(objc.CFArrayGetCount(list)-1) do
 		local entry = ffi.cast('id', objc.CFArrayGetValueAtIndex(list, i)) --entry is NSDictionary
@@ -508,17 +515,6 @@ function app:_getmagnets(around_nswin)
 	objc.CFRelease(ffi.cast('id', list))
 
 	return t
-end
-
-function app:magnets(around_nswin)
-	if not self._magnets then
-		self._magnets = self:_getmagnets(around_nswin)
-	end
-	return self._magnets
-end
-
-function window:magnets()
-	return self.app:magnets(self.nswin)
 end
 
 function Window:nw_clientarea_hit(event)
@@ -575,7 +571,7 @@ function Window:nw_resize_area_hit(event)
 	return resize_area_hit(mp.x, mp.y, w, h)
 end
 
-function Window:edgesnapping(snapping)
+function window:set_edgesnapping(snapping)
 	self.nswin:setMovable(not snapping)
 end
 
@@ -586,8 +582,8 @@ function Window:sendEvent(event)
 		if self.dragging then
 			if etype == objc.NSLeftMouseDragged then
 				self:setmouse(event)
-				local mx = self.frontend._mouse.x - self.dragoffset_x
-				local my = self.frontend._mouse.y - self.dragoffset_y
+				local mx = self.frontend._mouse.x - self.dragpoint_x
+				local my = self.frontend._mouse.y - self.dragpoint_y
 				local x, y, w, h = flip_screen_rect(nil, unpack_nsrect(self:frame()))
 				x = x + mx
 				y = y + my
@@ -602,7 +598,7 @@ function Window:sendEvent(event)
 			elseif etype == objc.NSLeftMouseUp then
 				self.dragging = false
 				self.mousepos = nil
-				self.app._magnets = nil --clear magnets
+				self.frontend:_backend_end_resize'move'
 				return
 			end
 		elseif etype == objc.NSLeftMouseDown
@@ -612,10 +608,11 @@ function Window:sendEvent(event)
 		then
 			self:setmouse(event)
 			self:makeKeyAndOrderFront(nil)
-			self.app.nsapp:activateIgnoringOtherApps(true)
+			self.app:activate()
 			self.dragging = true
-			self.dragoffset_x = self.frontend._mouse.x
-			self.dragoffset_y = self.frontend._mouse.y
+			self.dragpoint_x = self.frontend._mouse.x
+			self.dragpoint_y = self.frontend._mouse.y
+			self.frontend:_backend_start_resize'move'
 			return
 		elseif etype == objc.NSLeftMouseDown then
 			self:makeKeyAndOrderFront(nil)
@@ -632,8 +629,7 @@ function Window:windowWillStartLiveResize()
 	local mx, my = self.mousepos.x, self.mousepos.y
 	local _, _, w, h = unpack_nsrect(self:frame())
 	self.how = resize_area_hit(mx, my, w, h)
-	self.app._magnets = nil --clear magnets
-	self.frontend:_backend_start_resize()
+	self.frontend:_backend_start_resize(self.how)
 end
 
 function Window:windowDidEndLiveResize()
@@ -1174,14 +1170,9 @@ end
 
 function window:menu()
 	if not self.app._menu then
-		local nsmenu = objc.NSMenu:new()
-		nsmenu:setAutoenablesItems(false)
-		nsmenu:_setMenuName'NSMainMenu'
-		nsmenu:setTitle'MainMenu'
-		self.app.nsapp:setMainMenu(nsmenu)
-		--self.app.nsapp:setAppleMenu(nsmenu)
-		ffi.gc(nsmenu, nil)
+		local nsmenu = self.app.nsapp:mainMenu()
 		self.app._menu = menu:_new(self.app, nsmenu)
+		self.app._menu:remove(1) --remove the dummy app menu created on app startup
 	end
 	return self.app._menu
 end
@@ -1207,8 +1198,16 @@ function menu:_setitem(item, args)
 	item:setTitle(args.text)
 	item:setState(args.checked and objc.NSOnState or objc.NSOffState)
 	item:setEnabled(args.enabled)
+	item:setKeyEquivalent('G')
+	item:setKeyEquivalentModifierMask(bit.bor(
+		objc.NSShiftKeyMask,
+		objc.NSAlternateKeyMask,
+		objc.NSCommandKeyMask,
+		objc.NSControlKeyMask))
 	if args.submenu then
-		item:setSubmenu(args.submenu.backend.nsmenu)
+		local nsmenu = args.submenu.backend.nsmenu
+		nsmenu:setTitle(args.text) --the menu item uses nenu's title!
+		item:setSubmenu(nsmenu)
 	elseif args.action then
 		item:setTarget(self.app.nsapp)
 		item:setAction'nw_menuItemClicked'
