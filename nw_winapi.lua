@@ -34,12 +34,9 @@ end
 --app object -----------------------------------------------------------------
 
 local app = {}
+nw.app = app
 
-function nw:app(frontend)
-	return app:_new(frontend)
-end
-
-function app:_new(frontend)
+function app:new(frontend)
 
 	self = glue.inherit({frontend = frontend}, self)
 
@@ -102,16 +99,13 @@ end
 --windows --------------------------------------------------------------------
 
 local window = {}
-
-function app:window(frontend, t)
-	return window:_new(self, frontend, t)
-end
+app.window = window
 
 local Window = winapi.subclass({}, winapi.Window)
 
 local win_map = {} --win->window
 
-function window:_new(app, frontend, t)
+function window:new(app, frontend, t)
 	self = glue.inherit({app = app, frontend = frontend}, self)
 
 	local framed = t.frame == 'normal'
@@ -183,7 +177,6 @@ end
 
 function Window:on_destroy()
 	self.frontend:_backend_closed()
-	self:free_surface()
 	win_map[self] = nil
 end
 
@@ -516,25 +509,21 @@ end
 
 function Window:on_moved()
 	if self.layered then
-		self.win_pos.x = self.x
-		self.win_pos.y = self.y
-		self.frontend:invalidate()
+		--TODO
+		--self.win_pos.x = self.x
+		--self.win_pos.y = self.y
+		self:invalidate()
 	end
-end
-
-function Window:resized()
-	self:free_surface()
-	self.frontend:invalidate()
 end
 
 function Window:on_resized(flag)
 	if flag == 'minimized' then
 		self.frontend:_backend_resized'minimize'
 	elseif flag == 'maximized' then
-		self:resized()
+		self:invalidate()
 		self.frontend:_backend_resized'maximize'
 	elseif flag == 'restored' then
-		self:resized()
+		self:invalidate()
 		self.frontend:_backend_resized'restore'
 	end
 end
@@ -1132,86 +1121,30 @@ function Window:on_mouse_hwheel(x, y, buttons, delta)
 	self.frontend:_backend_mousehwheel(delta, x, y)
 end
 
---rendering ------------------------------------------------------------------
+--views ----------------------------------------------------------------------
+
+local view = {}
+window.view = view
+
+function view:new(window, frontend, t)
+	local self = glue.inherit({
+		window = window,
+		app = window.app,
+		frontend = frontend,
+	}, self)
+
+	self:_init(t)
+
+	return self
+end
+
+glue.autoload(window, {
+	cairoview = 'nw_winapi_cairoview',
+	glview    = 'nw_winapi_glview',
+})
 
 function window:invalidate()
-	if self.win.layered then
-		self.win:repaint_surface()
-		self.win:update_layered()
-	else
-		self.win:invalidate()
-	end
-end
-
-function Window:on_paint(hdc)
-	self:repaint_surface()
-	if not self.bmp then return end
-	winapi.BitBlt(hdc, 0, 0, self.bmp_size.w, self.bmp_size.h, self.bmp_hdc, 0, 0, winapi.SRCCOPY)
-end
-
-function Window:WM_ERASEBKGND()
-	return false --we draw our own background (prevent flicker)
-end
-
-local cairo = require'cairo'
-
-function Window:create_surface()
-	if self.bmp then return end
-	self.win_pos = winapi.POINT{x = self.x, y = self.y}
-	local w, h = self.client_w, self.client_h
-	if w <= 0 or h <= 0 then return end
-	self.bmp_pos = winapi.POINT{x = 0, y = 0}
-	self.bmp_size = winapi.SIZE{w = w, h = h}
-
-	local info = winapi.types.BITMAPINFO()
-	info.bmiHeader.biSize = ffi.sizeof'BITMAPINFO'
-	info.bmiHeader.biWidth = w
-	info.bmiHeader.biHeight = -h
-	info.bmiHeader.biPlanes = 1
-	info.bmiHeader.biBitCount = 32
-	info.bmiHeader.biCompression = winapi.BI_RGB
-	self.bmp_hdc = winapi.CreateCompatibleDC()
-	self.bmp, self.bmp_bits = winapi.CreateDIBSection(self.bmp_hdc, info, winapi.DIB_RGB_COLORS)
-	self.old_bmp = winapi.SelectObject(self.bmp_hdc, self.bmp)
-
-	self.blendfunc = winapi.types.BLENDFUNCTION{
-		AlphaFormat = winapi.AC_SRC_ALPHA,
-		BlendFlags = 0,
-		BlendOp = winapi.AC_SRC_OVER,
-		SourceConstantAlpha = 255,
-	}
-	self.pixman_surface = cairo.cairo_image_surface_create_for_data(self.bmp_bits,
-									cairo.CAIRO_FORMAT_ARGB32, w, h, w * 4)
-	self.pixman_cr = self.pixman_surface:create_context()
-end
-
-function Window:free_surface()
-	if not self.bmp then return end
-	local w, h = self.client_w, self.client_h
-	if self.bmp_size.w == w and self.bmp_size.h == h then return end
-	self.pixman_cr:free()
-	self.pixman_surface:free()
-	winapi.SelectObject(self.bmp_hdc, self.old_bmp)
-	winapi.DeleteObject(self.bmp)
-	winapi.DeleteDC(self.bmp_hdc)
-	self.bmp = nil
-end
-
-function Window:repaint_surface()
-	self:create_surface()
-	if not self.bmp then return end
-	winapi.GdiFlush()
-	self.pixman_cr:set_source_rgba(0, 0, 0, 0)
-	self.pixman_cr:set_operator(cairo.CAIRO_OPERATOR_SOURCE)
-	self.pixman_cr:paint()
-	self.pixman_cr:set_operator(cairo.CAIRO_OPERATOR_OVER)
-	self.frontend:_backend_render(self.pixman_cr)
-end
-
-function Window:update_layered()
-	if not self.bmp then return end
-	winapi.UpdateLayeredWindow(self.hwnd, nil, self.win_pos, self.bmp_size, self.bmp_hdc,
-										self.bmp_pos, 0, self.blendfunc, winapi.ULW_ALPHA)
+	self.backend:invalidate()
 end
 
 --menus ----------------------------------------------------------------------

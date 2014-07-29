@@ -148,7 +148,7 @@ function nw:app()
 		if not self.backend then
 			self:init()
 		end
-		self._app = app:_new(self)
+		self._app = app:_new(self, self.backend.app)
 	end
 	return self._app
 end
@@ -158,13 +158,13 @@ app.defaults = {
 	ignore_numlock = false, --ignore the state of the numlock key on keyboard events
 }
 
-function app:_new()
-	self = glue.inherit({}, self)
+function app:_new(nw, backend_class)
+	self = glue.inherit({nw = nw}, self)
 	self._running = false
 	self._windows = {} --{window1, ...}
 	self._autoquit = self.defaults.autoquit
 	self._ignore_numlock = self.defaults.ignore_numlock
-	self.backend = nw.backend:app(self)
+	self.backend = backend_class:new(self)
 	return self
 end
 
@@ -326,10 +326,10 @@ window.defaults = {
 }
 
 function app:window(t)
-	return window:_new(self, t)
+	return window:_new(self, self.backend.window, t)
 end
 
-function window:_new(app, opt)
+function window:_new(app, backend_class, opt)
 	opt = glue.update({}, self.defaults, opt)
 	assert(opt.w, 'width missing')
 	assert(opt.h, 'height missing')
@@ -338,6 +338,7 @@ function window:_new(app, opt)
 
 	self._mouse = {}
 	self._down = {}
+	self._views = {}
 
 	--if missing x and/or y, center the window horizontally and/or vertically.
 	if not opt.x or not opt.y then
@@ -347,7 +348,7 @@ function window:_new(app, opt)
 		opt.y = opt.y or y
 	end
 
-	self.backend = self.app.backend:window(self, opt)
+	self.backend = backend_class:new(app.backend, self, opt)
 
 	--stored properties
 	self._parent = opt.parent
@@ -411,6 +412,7 @@ function window:_backend_closed()
 
 	self._closed = true --_backend_closing() and _backend_closed() barrier
 	self:_event'closed'
+	self:_free_views()
 	self.app:_window_closed(self)
 	self._dead = true
 
@@ -829,15 +831,71 @@ function window:_backend_mousehwheel(delta, x, y)
 	self:_event('mousehwheel', delta, x, y)
 end
 
---rendering ------------------------------------------------------------------
+--views ----------------------------------------------------------------------
+
+local view = glue.update({}, object)
+
+function view:_new(window, backend_class, t)
+	local self = glue.inherit({
+		window = window,
+		app = window.app,
+	}, self)
+	self.backend = backend_class:new(window.backend, self, t)
+	window._views[self] = true
+	return self
+end
+
+function window:_free_views()
+	for view in pairs(self._views) do
+		view:_free()
+	end
+end
+
+function view:_free()
+	self.backend:free()
+	self.window._views[self] = nil
+end
+
+function view:_backend_render(cr)
+	self:_event('render', cr)
+end
+
+function view:invalidate()
+	self:_check()
+	self.backend:invalidate()
+end
 
 function window:invalidate()
 	self:_check()
 	self.backend:invalidate()
 end
 
-function window:_backend_render(cr)
+function view:rect()
+	return self.backend:rect()
+end
+
+local cairoview = glue.inherit({}, view)
+
+local cairo
+
+function window:cairoview(t)
+	cairo = cairo or require'cairo'
+	return cairoview:_new(self, self.backend.cairoview, t)
+end
+
+function cairoview:_backend_render(cr)
+	cr:identity_matrix()
+	cr:set_source_rgba(0, 0, 0, 0)
+	cr:set_operator(cairo.CAIRO_OPERATOR_SOURCE)
+	cr:paint()
+	cr:set_operator(cairo.CAIRO_OPERATOR_OVER)
 	self:_event('render', cr)
+end
+
+local glview = glue.inherit({}, view)
+
+function window:glview(t)
+	return glview:_new(self, self.backend.glview, t)
 end
 
 --menus ----------------------------------------------------------------------

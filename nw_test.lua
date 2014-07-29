@@ -1231,6 +1231,37 @@ add('input', function()
 	app:run()
 end)
 
+--views ----------------------------------------------------------------------
+
+local cairo = require'cairo'
+
+add('view-cairo', function()
+	local win = app:window{w = 500, h = 300, frame = 'transparent'}
+	local w, h = 450, 250
+	local view = win:cairoview{x = 10, y = 10, w = w, h = h}
+	local cx, cy = w / 2, h / 2
+	local fps = 60
+	local step = 0.02 * 60 / fps
+	local alpha, angle = 0, 0
+	function view:render(cr)
+		alpha = alpha + step; if alpha <= 0 or alpha >= 1 then step = -step end
+		angle = angle + math.abs(step)
+		cr:rectangle(0, 0, w, h)
+		cr:set_source_rgba(0, 0, 1, 1)
+		cr:stroke()
+		cr:translate(cx, cy)
+		cr:rotate(angle)
+		cr:translate(-cx, -cy)
+		cr:set_source_rgba(1, 0, 0, alpha)
+		cr:rectangle(cx - 50, cy - 50, 100, 100)
+		cr:fill()
+	end
+	app:runevery(1/fps, function()
+		view:invalidate()
+	end)
+	app:run()
+end)
+
 --menus ----------------------------------------------------------------------
 
 add('menu', function()
@@ -1288,6 +1319,7 @@ end)
 --run tests ------------------------------------------------------------------
 
 local name = ...
+name = 'view-cairo'
 if not name then
 	print(string.format('Usage: %s <name> | <name>*', arg[0]))
 	print'Available tests:'

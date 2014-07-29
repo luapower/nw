@@ -83,14 +83,11 @@ end
 --app object -----------------------------------------------------------------
 
 local app = {}
-
-function nw:app(frontend)
-	return app:_new(frontend)
-end
+nw.app = app
 
 local App = objc.class('App', 'NSApplication <NSApplicationDelegate>')
 
-function app:_new(frontend)
+function app:new(frontend)
 
 	self = glue.inherit({frontend = frontend}, self)
 
@@ -189,26 +186,23 @@ end
 --windows --------------------------------------------------------------------
 
 local window = {}
-
-function app:window(frontend, t)
-	return window:_new(self, frontend, t)
-end
+app.window = window
 
 local nswin_map = {} --nswin->window
 
 local Window = objc.class('Window', 'NSWindow <NSWindowDelegate>')
-local View = objc.class('View', 'NSView')
 
-function window:_new(app, frontend, t)
+function window:new(app, frontend, t)
 	self = glue.inherit({app = app, frontend = frontend}, self)
 
+	local transparent = t.frame == 'transparent'
 	local style = t.frame == 'normal' and bit.bor(
 							objc.NSTitledWindowMask,
 							t.closeable and objc.NSClosableWindowMask or 0,
 							t.minimizable and objc.NSMiniaturizableWindowMask or 0,
 							t.resizeable and objc.NSResizableWindowMask or 0) or
 						t.frame == 'none' and bit.bor(objc.NSBorderlessWindowMask) or
-						t.frame == 'transparent' and bit.bor(objc.NSBorderlessWindowMask) --TODO
+						transparent and bit.bor(objc.NSBorderlessWindowMask)
 
 	local frame_rect = objc.NSMakeRect(flip_screen_rect(nil, t.x, t.y, t.w, t.h))
 	local content_rect = objc.NSWindow:contentRectForFrameRect_styleMask(frame_rect, style)
@@ -223,9 +217,10 @@ function window:_new(app, frontend, t)
 
 	nswin_map[objc.nptr(self.nswin)] = self.frontend
 
-	local view = View:alloc():initWithFrame(objc.NSMakeRect(0, 0, 100, 100))
-	self.nswin:setContentView(view)
-	ffi.gc(view, nil) --disown, nswin owns it now
+	if transparent then
+		self.nswin:setOpaque(false)
+		self.nswin:setBackgroundColor(objc.NSColor:clearColor())
+	end
 
 	if t.parent then
 		t.parent.backend.nswin:addChildWindow_ordered(self.nswin, objc.NSWindowAbove)
@@ -261,8 +256,6 @@ function window:_new(app, frontend, t)
 	local area = objc.NSTrackingArea:alloc():initWithRect_options_owner_userInfo(
 		rect, opts, self.nswin:contentView(), nil)
 	self.nswin:contentView():addTrackingArea(area)
-
-	self.nswin:setBackgroundColor(objc.NSColor:redColor()) --TODO: remove
 
 	if t.maximized then
 		if not self:maximized() then
@@ -1153,9 +1146,27 @@ function window:mouse_pos()
 	--return objc.NSEvent:
 end
 
---rendering ------------------------------------------------------------------
+--views ----------------------------------------------------------------------
 
---TODO
+local view = {}
+window.view = view
+
+function view:new(window, frontend, t)
+	local self = glue.inherit({
+		window = window,
+		app = window.app,
+		frontend = frontend,
+	}, self)
+
+	self:_init(t)
+
+	return self
+end
+
+glue.autoload(window, {
+	cairoview = 'nw_cocoa_cairoview',
+	glview    = 'nw_cocoa_glview',
+})
 
 --menus ----------------------------------------------------------------------
 
