@@ -80,32 +80,61 @@ local function recorder()
 	end
 end
 
---generate value combinations for sets of binary flags
+--add key bindings for window commands for interactive tests.
 
-local function base2(x, digits)
-	local s = ''
-	while x > 0 do
-		 s = '' ..  (x % 2) .. s
-		 x = math.floor(x / 2)
-	end
-	return ('0'):rep(digits - #s) .. s
-end
-
-local function combination(flags, x)
-	local s = base2(x, #flags)
-	local t = {}
-	for i, flag in ipairs(flags) do
-		t[flag] = s:sub(i,i) == '1'
-	end
-	return t
-end
-
-local function combinations(flags)
-	return coroutine.wrap(function()
-		for i = 0, 2^#flags-1 do
-			coroutine.yield(combination(flags, i))
+local function make_interactive(win)
+	function win:keydown(key)
+		if key == 'S' then
+			self:show()
+		elseif key == 'H' then
+			self:hide()
+		elseif key == 'R' then
+			self:restore()
+		elseif key == 'F' then
+			self:fullscreen(true)
+		elseif key == 'G' then
+			self:fullscreen(false)
+		elseif key == 'M' then
+			self:maximize()
+		elseif key == 'N' then
+			self:minimize()
+		else
+			print[[
+S    show
+H    hide
+R    restore
+F    enter fullscreen
+G    exit fullscreen
+M    maximize
+N    minimize
+]]
 		end
-	end)
+	end
+end
+
+--function wrapper that provides a sleep() function.
+
+local function sleep(seconds)
+	coroutine.yield(seconds)
+end
+
+local function process(func)
+	return function(...)
+		local proc = coroutine.wrap(function(...)
+			local ok, res = xpcall(func, debug.traceback, ...)
+			if not ok then error(res) end
+			return res
+		end)
+		local function step(...)
+			local seconds = proc(...)
+			if not seconds then return end
+			app:runafter(seconds, step)
+		end
+		step(...)
+		if app:window_count() > 0 then
+			app:run()
+		end
+	end
 end
 
 --os version -----------------------------------------------------------------
@@ -406,6 +435,26 @@ add('quit-quitting-while-closing', function()
 	rec{'ignored', 'closed'}
 end)
 
+--window default options -----------------------------------------------------
+
+add('init-defaults', function()
+	local win = app:window(winpos())
+	assert(win:visible())
+	assert(not win:minimized())
+	assert(not win:fullscreen())
+	assert(not win:maximized())
+	assert(win:title() == '')
+	assert(win:frame() == 'normal')
+	assert(not win:topmost())
+	assert(win:minimizable())
+	assert(win:maximizable())
+	assert(win:closeable())
+	assert(win:resizeable())
+	assert(win:fullscreenable())
+	assert(not win:autoquit())
+	assert(not win:edgesnapping())
+end)
+
 --window closing -------------------------------------------------------------
 
 --closed() event works, even before the app starts.
@@ -485,8 +534,9 @@ end)
 --5. activation events deferred for when the app starts, and then,
 --a single app:activated() event is fired, followed by a single
 --win:activated() event from the last window that was activated.
---6. app:active() is true all the way, until after the last window is closed (Windows only).
---7. app:active_window() works (gives the expected window).
+--6. app:active() is true all the way.
+--7. only in Windows, after the last window is closed, the app is deactivated.
+--8. app:active_window() works (gives the expected window).
 add('activation-events', function()
 	local rec = recorder()
 	local win1 = app:window(winpos())
@@ -637,7 +687,7 @@ add('activation-window-activate-defer', function()
 end)
 
 --window:activate() doesn't do anything for hidden windows.
---when the window is shown, the app doesn't activate.
+--when the window is finally shown, the app doesn't activate.
 --this is an interactive test: you must activate another app to see it.
 add('activation-window-activate-hidden', function()
 	local rec = recorder()
@@ -652,7 +702,7 @@ add('activation-window-activate-hidden', function()
 		win1:activate()
 		app:runafter(2, function()
 			win2:show()
-			app:runafter(2, function()
+			app:runafter(1, function()
 				app:quit()
 			end)
 		end)
@@ -661,302 +711,177 @@ add('activation-window-activate-hidden', function()
 	rec{}
 end)
 
---window state flags  --------------------------------------------------------
+--window states --------------------------------------------------------------
 
-add('fullscreen', function()
-	local win = app:window{w = 500, h = 300, fullscreen = false}
-	function win:keydown(key)
-		if key == 'space' then
-			win:fullscreen(not win:fullscreen())
-		end
-	end
-	app:run()
-end)
+--check various state transitions.
+--each entry in the table describes one test: {initial-flags, command-list, flagcheck, command-list, flag-check}.
+--these tests take some time, better disable window animations in the OS before running them.
+for i,test in ipairs({
 
-local flag_list = {
-	'visible', 'minimized', 'maximized', 'fullscreen',
-}
+	--transitions fron normal
+	{{}, {}, 'v', {'show'}, 'v'},
+	{{}, {}, 'v', {'hide'}, ''},
+	{{}, {}, 'v', {'maximize'}, 'vM'},
+	{{}, {}, 'v', {'minimize'}, 'vm'},
+	{{}, {}, 'v', {'restore'}, 'v'},
+	{{}, {}, 'v', {'shownormal'}, 'v'},
+	--transitions fron hidden
+	{{}, {'hide'}, '', {'show'}, 'v'},
+	{{}, {'hide'}, '', {'hide'}, ''},
+	{{}, {'hide'}, '', {'maximize'}, 'vM'},
+	{{}, {'hide'}, '', {'minimize'}, 'vm'},
+	{{}, {'hide'}, '', {'restore'}, 'v'},
+	{{}, {'hide'}, '', {'shownormal'}, 'v'},
+	--transitions fron minimized
+	{{}, {'minimize'}, 'vm', {'show'}, 'vm'},
+	{{}, {'minimize'}, 'vm', {'hide'}, 'm'},
+	{{}, {'minimize'}, 'vm', {'maximize'}, 'vM'},
+	{{}, {'minimize'}, 'vm', {'minimize'}, 'vm'},
+	{{}, {'minimize'}, 'vm', {'restore'}, 'v'},
+	{{}, {'minimize'}, 'vm', {'shownormal'}, 'v'},
+	--transitions from maximized
+	{{}, {'maximize'}, 'vM', {'show'}, 'vM'},
+	{{}, {'maximize'}, 'vM', {'hide'}, 'M'},
+	{{}, {'maximize'}, 'vM', {'maximize'}, 'vM'},
+	{{}, {'maximize'}, 'vM', {'minimize'}, 'vmM'},
+	{{}, {'maximize'}, 'vM', {'restore'}, 'v'},
+	{{}, {'maximize'}, 'vM', {'shownormal'}, 'v'},
+	--transitions from hidden minimized
+	{{}, {'minimize', 'hide'}, 'm', {'show'}, 'vm'},
+	{{}, {'minimize', 'hide'}, 'm', {'maximize'}, 'vM'},
+	{{}, {'minimize', 'hide'}, 'm', {'minimize'}, 'vm'},
+	{{}, {'minimize', 'hide'}, 'm', {'restore'}, 'v'},
+	{{}, {'minimize', 'hide'}, 'm', {'shownormal'}, 'v'},
+	--transitions from hidden maximized
+	{{}, {'maximize', 'hide'}, 'M', {'show'}, 'vM'},
+	{{}, {'maximize', 'hide'}, 'M', {'maximize'}, 'vM'},
+	{{}, {'maximize', 'hide'}, 'M', {'minimize'}, 'vmM'},
+	{{}, {'maximize', 'hide'}, 'M', {'restore'}, 'v'},
+	{{}, {'maximize', 'hide'}, 'M', {'shownormal'}, 'v'},
+	--transitions from minimized maximized
+	{{}, {'maximize', 'minimize'}, 'vmM', {'show'}, 'vmM'},
+	{{}, {'maximize', 'minimize'}, 'vmM', {'maximize'}, 'vM'},
+	{{}, {'maximize', 'minimize'}, 'vmM', {'minimize'}, 'vmM'},
+	{{}, {'maximize', 'minimize'}, 'vmM', {'restore'}, 'vM'},
+	{{}, {'maximize', 'minimize'}, 'vmM', {'shownormal'}, 'v'},
+	--transitions from hidden minimized maximized
+	{{}, {'maximize', 'minimize', 'hide'}, 'mM', {'show'}, 'vmM'},
+	{{}, {'maximize', 'minimize', 'hide'}, 'mM', {'maximize'}, 'vM'},
+	{{}, {'maximize', 'minimize', 'hide'}, 'mM', {'minimize'}, 'vmM'},
+	{{}, {'maximize', 'minimize', 'hide'}, 'mM', {'restore'}, 'vM'},
+	{{}, {'maximize', 'minimize', 'hide'}, 'mM', {'shownormal'}, 'v'},
 
---generate a name for a test given a combination of flags.
-local function test_name_for_flags(flags, name_prefix)
+	--transitions from fullscreen
+	{{}, {'enter_fullscreen'}, 'vF', {'show'}, 'vF'},
+	{{}, {'enter_fullscreen'}, 'vF', {'hide'}, 'F'},
+	{{}, {'enter_fullscreen'}, 'vF', {'maximize'}, 'vF'},
+	{{}, {'enter_fullscreen'}, 'vF', {'minimize'}, 'vF'},
+	{{}, {'enter_fullscreen'}, 'vF', {'restore'}, 'v'},
+	{{}, {'enter_fullscreen'}, 'vF', {'shownormal'}, 'vF'},
+	--transitions from hidden fullscreen
+	{{}, {'enter_fullscreen', 'hide'}, 'F', {'show'}, 'vF'},
+	{{}, {'enter_fullscreen', 'hide'}, 'F', {'hide'}, 'F'},
+	{{}, {'enter_fullscreen', 'hide'}, 'F', {'maximize'}, 'F'},
+	{{}, {'enter_fullscreen', 'hide'}, 'F', {'minimize'}, 'F'},
+	{{}, {'enter_fullscreen', 'hide'}, 'F', {'restore'}, 'v'},
+	{{}, {'enter_fullscreen', 'hide'}, 'F', {'shownormal'}, 'F'},
+	--transitions from maximized fullscreen
+	{{}, {'maximize', 'enter_fullscreen'}, 'vMF', {'show'}, 'vMF'},
+	{{}, {'maximize', 'enter_fullscreen'}, 'vMF', {'hide'}, 'MF'},
+	{{}, {'maximize', 'enter_fullscreen'}, 'vMF', {'maximize'}, 'vMF'},
+	{{}, {'maximize', 'enter_fullscreen'}, 'vMF', {'minimize'}, 'vMF'},
+	{{}, {'maximize', 'enter_fullscreen'}, 'vMF', {'restore'}, 'vM'},
+	{{}, {'maximize', 'enter_fullscreen'}, 'vMF', {'shownormal'}, 'vMF'},
+	--transitions from hidden maximized fullscreen
+	{{}, {'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'show'}, 'vMF'},
+	{{}, {'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'hide'}, 'MF'},
+	{{}, {'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'maximize'}, 'MF'},
+	{{}, {'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'minimize'}, 'MF'},
+	{{}, {'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'restore'}, 'vM'},
+	{{}, {'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'shownormal'}, 'MF'},
+	--transitions to enter fullscreen
+	{{}, {}, 'v', {'enter_fullscreen'}, 'vF'},
+	{{}, {'hide'}, '', {'enter_fullscreen'}, 'vF'},
+	{{}, {'minimize'}, 'vm', {'enter_fullscreen'}, 'vF'},
+	{{}, {'maximize'}, 'vM', {'enter_fullscreen'}, 'vMF'},
+	{{}, {'minimize', 'hide'}, 'm', {'enter_fullscreen'}, 'vF'},
+	{{}, {'maximize', 'minimize'}, 'vmM', {'enter_fullscreen'}, 'vMF'},
+	{{}, {'maximize', 'minimize', 'hide'}, 'mM', {'enter_fullscreen'}, 'vMF'},
+	{{}, {'enter_fullscreen'}, 'vF', {'enter_fullscreen'}, 'vF'},
+	{{}, {'enter_fullscreen', 'hide'}, 'F', {'enter_fullscreen'}, 'vF'},
+	{{}, {'maximize', 'enter_fullscreen'}, 'vMF', {'enter_fullscreen'}, 'vMF'},
+	{{}, {'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'enter_fullscreen'}, 'vMF'},
+	--transitions to exit fullscreen
+	{{}, {}, 'v', {'exit_fullscreen'}, 'v'},
+	{{}, {'hide'}, '', {'exit_fullscreen'}, ''},
+	{{}, {'minimize'}, 'vm', {'exit_fullscreen'}, 'vm'},
+	{{}, {'maximize'}, 'vM', {'exit_fullscreen'}, 'vM'},
+	{{}, {'minimize', 'hide'}, 'm', {'exit_fullscreen'}, 'm'},
+	{{}, {'maximize', 'minimize'}, 'vmM', {'exit_fullscreen'}, 'vmM'},
+	{{}, {'maximize', 'minimize', 'hide'}, 'mM', {'exit_fullscreen'}, 'mM'},
+	{{}, {'enter_fullscreen'}, 'vF', {'exit_fullscreen'}, 'v'},
+	{{}, {'enter_fullscreen', 'hide'}, 'F', {'exit_fullscreen'}, 'v'},
+	{{}, {'maximize', 'enter_fullscreen'}, 'vMF', {'exit_fullscreen'}, 'vM'},
+	{{}, {'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'exit_fullscreen'}, 'vM'},
+
+}) do
+	local init_flags, commands1, check1, commands2, check2 = unpack(test)
+
 	local t = {}
-	for i,flag in ipairs(flag_list) do
-		if flags[flag] then t[#t+1] = flag end
-	end
-	return name_prefix .. '-' .. table.concat(t, '-')
+	t[#t+1] = init_flags.visible == false and 'hidden' or nil
+	t[#t+1] = init_flags.maximized and 'maximized' or nil
+	glue.extend(t, commands1, commands2)
+	local test_name = table.concat(t, '-')
+
+	add('state-'..test_name, process(function()
+
+		app:autoquit(false)
+		local win = app:window(winpos(init_flags))
+
+		local async_commands = glue.index{'enter_fullscreen', 'exit_fullscreen', 'restore'}
+
+		local function run_commands(commands, expected_flags)
+
+			--run a list of commands without args on a window object.
+			for i, command in ipairs(commands) do
+				if command == 'enter_fullscreen' then
+					win:fullscreen(true)
+				elseif command == 'exit_fullscreen' then
+					win:fullscreen(false)
+				else
+					win[command](win)
+				end
+				if ffi.os == 'OSX' and async_commands[command] then
+					sleep(1.5)
+				end
+			end
+
+			--check current state flags against a flag combination string.
+			local actual_flags =
+				(win:visible() and 'v' or '')..
+				(win:minimized() and 'm' or '')..
+				(win:maximized() and 'M' or '')..
+				(win:fullscreen() and 'F' or '')
+
+			if actual_flags ~= expected_flags then
+				error(actual_flags .. ', expected ' .. expected_flags)
+			end
+		end
+
+		run_commands(commands1, check1)
+		run_commands(commands2, check2)
+
+		local was_fs = win:fullscreen() and ffi.os == 'OSX'
+		win:close()
+		if was_fs then sleep(1.5) end
+		app:quit()
+	end))
 end
-
---create a window with a certain combination of flags,
---and with key bindings for interactive state transitioning.
-local function window_with_flags(flags)
-
-	local win = app:window(winpos(glue.update({w = 500, h = 200}, flags)))
-
-	function win:keydown(key)
-		if key == 'F8' or key == 'S' then
-			self:show()
-		elseif key == 'F7' or key == 'H' then
-			self:hide()
-		elseif key == 'F10' or key == 'R' then
-			self:restore()
-		elseif key == 'F11' or key == 'F' then
-			self:fullscreen(not self:fullscreen())
-		elseif key == 'F12' or key == 'M' then
-			self:maximize()
-		elseif key == 'F9' or key == 'N' then
-			self:minimize()
-		else
-			print[[
-F8    S    show
-F7    H    hide
-F10   R    restore
-F11   F    fullscreen on/off
-F12   M    maximize
-F9    N    minimize
-]]
-		end
-	end
-
-	return win
-end
-
---test that the initial flags were all set correctly.
---also, create key bindings for interactive use.
-local function test_initial_flags(win, flags)
-	for i,flag in ipairs(flag_list) do
-		assert(win[flag](win) == flags[flag], flag)
-	end
-end
-
---test transitions to normal state.
-local function test_flags_to_normal(win, flags, after_test)
-
-	local nfs = 0
-	local fs = nw:os'osx' and 1.5 or nfs --fullscreen animation duration (seconds)
-	local go1, go2, go3, go4, go5
-
-	function go1()
-		--visible -> minimized | normal | maximized | fullscreen
-		if not flags.visible then
-			win:show()
-			app:runafter(flags.fullscreen and not flags.minimized and fs or nfs, go2)
-		else
-			go2()
-		end
-	end
-	function go2()
-		assert(win:visible())
-		assert(win:minimized() == flags.minimized)
-		--print(win:maximized(), flags.maximized)
-		assert(win:maximized() == flags.maximized)
-		assert(win:fullscreen() == flags.fullscreen)
-
-		-- minimized -> normal | maximized | fullscreen
-		if flags.minimized then
-			win:restore()
-			app:runafter(flags.fullscreen and fs or nfs, go3)
-		else
-			go3()
-		end
-	end
-	function go3()
-		assert(not win:minimized())
-		assert(win:maximized() == flags.maximized)
-		assert(win:fullscreen() == flags.fullscreen)
-
-		-- fullscreen -> normal | maximized
-		if flags.fullscreen then
-			win:restore()
-			app:runafter(fs, go4)
-		else
-			go4()
-		end
-	end
-	function go4()
-		assert(not win:fullscreen())
-		assert(win:maximized() == flags.maximized)
-
-		-- maximized -> normal
-		if flags.maximized then
-			win:restore()
-			app:runafter(nfs, go5)
-		else
-			go5()
-		end
-	end
-	function go5()
-		assert(not win:maximized())
-
-		--normal
-		assert(win:visible())
-		assert(not win:minimized())
-		assert(not win:maximized())
-		assert(not win:fullscreen())
-
-		if after_test then
-			after_test()
-		else
-			win:close()
-		end
-	end
-
-	go1()
-end
-
---generate interactive tests for testing all combinations of initial flags
---and the transitions to normal state.
-for flags in combinations(flag_list) do
-	add(test_name_for_flags(flags, 'states-init'), function()
-		local win = window_with_flags(flags)
-		test_initial_flags(win, flags)
-		test_flags_to_normal(win, flags)
-		app:run()
-	end)
-end
-
-add('states-init-all', function()
-	app:autoquit(false)
-	local t = {}
-	for flags in combinations(flag_list) do
-		t[#t+1] = flags
-	end
-	local i = 0
-	local function next_test()
-		i = i + 1
-		local flags = t[i]
-		if not flags then
-			app:quit()
-			return
-		end
-		print(test_name_for_flags(flags, ''))
-		local win = window_with_flags(flags)
-		test_initial_flags(win, flags)
-		test_flags_to_normal(win, flags, function()
-			win:close()
-			next_test()
-		end)
-	end
-	app:runafter(0, next_test)
-	app:run()
-end)
-
---test transitions between various states.
-add('states', function()
-	local win = app:window{x = 100, y = 100, w = 300, h = 100}
-
-	local function check(s)
-		assert(win:visible() == (s:match'v' ~= nil))
-		assert(win:minimized() == (s:match'm' ~= nil))
-		assert(win:maximized() == (s:match'M' ~= nil))
-		assert(win:fullscreen() == (s:match'F' ~= nil))
-	end
-
-	win:maximize()
-	win:minimize()
-
-	--restore to maximized from minimized
-	win:shownormal()
-	win:maximize()
-	win:minimize(); check'vmM'
-	win:restore(); check'vM'
-
-	--restore to normal from minimized
-	win:shownormal()
-	win:minimize(); check'vm'
-	win:restore(); check'v'
-
-	--restore to normal from maximized
-	win:shownormal()
-	win:maximize(); check'vM'
-	win:restore(); check'v'
-
-	--maximize from minimized
-	win:shownormal()
-	win:minimize(); check'vm'
-	win:maximize(); check'vM'
-
-	--show normal from minimized
-	win:shownormal()
-	win:maximize()
-	win:minimize(); check'vmM'
-	win:shownormal(); check'v'
-
-	--minimize from hidden
-	win:shownormal()
-	win:hide(); check''
-	win:minimize(); check'vm'
-
-	--shownormal from hidden
-	win:shownormal()
-	win:hide(); check''
-	win:shownormal(); check'v'
-
-	--show from hidden
-	win:shownormal()
-	win:hide(); check''
-	win:show(); check'v'
-
-	--maximize from hidden
-	win:shownormal()
-	win:hide(); check''
-	win:maximize(); check'vM'
-
-	--restore to normal from hidden
-	win:shownormal()
-	win:hide(); check''
-	win:restore(); check'v'
-
-	--restore to normal from hidden/maximized
-	win:shownormal()
-	win:maximized()
-	win:hide(); check''
-	win:restore(); check'v'
-
-	--restore to maximized from hidden/minimized
-	win:maximize()
-	win:minimize()
-	win:hide(); check'mM'
-	win:restore(); check'vM'
-
-	--show minimized and then restore to normal from hidden
-	win:shownormal()
-	win:minimize()
-	win:hide(); check'm'
-	win:show(); check'vm'
-	win:restore(); check'v'
-
-	--show minimized and then restore to maximized from hidden
-	win:maximize()
-	win:minimize()
-	win:hide(); check'mM'
-	win:show(); check'vmM'
-	win:restore(); check'vM'
-
-	win:close()
-end)
-
---default flags
-
-add('defaults', function()
-	local win = app:window(winpos())
-	assert(win:visible())
-	assert(not win:minimized())
-	assert(not win:fullscreen())
-	assert(not win:maximized())
-	assert(win:title() == '')
-	assert(win:frame() == 'normal')
-	assert(not win:topmost())
-	assert(win:minimizable())
-	assert(win:maximizable())
-	assert(win:closeable())
-	assert(win:resizeable())
-	assert(win:fullscreenable())
-end)
 
 --positioning ----------------------------------------------------------------
 
 --test that initial coordinates and size are set correctly.
---test that frame_rect() works.
+--test that frame_rect() works in normal state.
 --test that client_rect() works and gives sane values.
 add('pos-init', function()
 	local x0, y0, w0, h0 = 51, 52, 201, 202
@@ -974,52 +899,95 @@ add('pos-init', function()
 	print'ok'
 end)
 
---frame_rect(x, y, w, h) works.
-add('pos-set-frame-rect', function()
+--normal_rect() -> x, y, w, h works.
+--normal_rect(x, y, w, h) works.
+add('pos-normal-rect', function()
 	local x0, y0, w0, h0 = 51, 52, 201, 202
 	local win = app:window{x = 0, y = 0, w = 0, h = 0}
 	local function check()
-		local x, y, w, h = win:frame_rect()
+		local x, y, w, h = win:normal_rect()
 		assert(x == x0)
 		assert(y == y0)
 		assert(w == w0)
 		assert(h == h0)
 	end
-	win:frame_rect(x0, y0, w0, h0); check()
-	x0 = x0 + 10; win:frame_rect(x0); check()
-	y0 = y0 + 10; win:frame_rect(nil, y0); check()
-	w0 = w0 + 10; win:frame_rect(nil, nil, w0); check()
-	h0 = h0 + 10; win:frame_rect(nil, nil, nil, h0); check()
+	win:normal_rect(x0, y0, w0, h0); check()
+	x0 = x0 + 10; win:normal_rect(x0); check()
+	y0 = y0 + 10; win:normal_rect(nil, y0); check()
+	w0 = w0 + 10; win:normal_rect(nil, nil, w0); check()
+	h0 = h0 + 10; win:normal_rect(nil, nil, nil, h0); check()
 	print'ok'
 end)
 
---frame_rect(x, y, w, h) generates only the 'resized' event.
-add('pos-events', function()
+--setting frame_rect() when minimized and maximized works.
+add('pos-set-frame-rect', function()
+	local win1 = app:window(winpos{minimized = true, maximized = true})
+	local win2 = app:window(winpos{minimized = false, maximized = true})
+	win1:frame_rect(800, 600, 500, 300)
+	win2:frame_rect(600, 200, 500, 300)
+	app:run()
+end)
+
+--check frame_rect() and client_rect() values in minimized state.
+add('pos-frame-rect-minimized', function()
+	local function test(visible, minimized, maximized)
+		local win = app:window{x = 100, y = 100, w = 500, h = 300,
+			maximized = maximized, minimized = minimized, visible = visible}
+		print((visible and 'v' or '')..(minimized and 'm' or '')..(maximized and 'M' or ''))
+		assert(not win:frame_rect())
+		local x, y, w, h = win:client_rect()
+		assert(x == 0 and y == 0 and w == 0 and h == 0)
+	end
+	test(true, true, true)
+	test(true, true, false)
+	test(false, true, false)
+	test(false, true, true)
+	print'ok'
+end)
+
+--normal_rect(x, y, w, h) generates only one ('resized', 'set') event.
+add('pos-set-event', function()
 	local rec = recorder()
 	local win = app:window{x = 0, y = 0, w = 0, h = 0}
 	function win:start_resize(how) rec('start_resize', how) end
 	function win:end_resize() rec('end_resize') end
 	function win:resizing(how, x, y, w, h) rec('resizing', how, x, y, w, h) end
-	function win:resized() rec('resized') end
-	win:frame_rect(101, 102, 103, 104)
-	rec{'resized'}
+	function win:resized(how) rec('resized', how) end
+	win:normal_rect(1, 0, 0, 0)
+	rec{'resized', 'set'}
 end)
 
-
-add('size', function()
+--interactive test showing resizing events.
+add('pos-events', function()
 	local win = app:window(winpos())
 	function win:mousemove(x, y)
 		--print('mousemove', x, y)
 	end
-	function win:start_resize() print'start_resize' end
-	function win:end_resize() print'end_resize' end
+	function win:start_resize(how) print('start_resize', how) end
+	function win:end_resize(how) print('end_resize', how) end
 	function win:resizing(how, x, y, w, h)
 		print('resizing', how, x, y, w, h)
 	end
-	function win:resized()
-		print('resized')
+	function win:resized(how)
+		print('resized', how)
 	end
 	app:run()
+end)
+
+--to_screen() and to_client() conversions work.
+add('pos-conversions', function()
+	local win = app:window{x = 100, y = 100, w = 100, h = 100, visible = false}
+	local x, y, w, h = win:to_screen(100, 100, 100, 100)
+	assert(x >= 200 and x <= 250)
+	assert(y >= 200 and y <= 250)
+	assert(w == 100)
+	assert(h == 100)
+	local x, y, w, h = win:to_client(x, y, w, h)
+	assert(x == 100)
+	assert(y == 100)
+	assert(w == 100)
+	assert(h == 100)
+	print'ok'
 end)
 
 --displays -------------------------------------------------------------------
@@ -1137,8 +1105,8 @@ add('frameless', function()
 end)
 
 add('transparent', function()
-	local win = app:window(winpos{frame = 'transparent'})
-	assert(win:frame() == 'transparent')
+	local win = app:window(winpos{frame = 'none-transparent'})
+	assert(win:frame() == 'none-transparent')
 end)
 
 --parent/child relationship --------------------------------------------------
@@ -1160,14 +1128,14 @@ end)
 --input events ---------------------------------------------------------------
 
 --double click time is sane
-add('info-click-time', function()
+add('input-click-time', function()
 	local t = app.backend:double_click_time()
 	print('double_click_time', t)
 	assert(t > 0 and t < 5000)
 end)
 
 --target area is sane
-add('info-click-area', function()
+add('input-click-area', function()
 	local w, h = app.backend:double_click_target_area()
 	print('double_click_target_area', w, h)
 	assert(w > 0 and w < 100)
@@ -1234,16 +1202,178 @@ end)
 --views ----------------------------------------------------------------------
 
 local cairo = require'cairo'
+local gl
+
+if ffi.os == 'Windows' then
+	gl = require'winapi.gl11'
+elseif ffi.os == 'OSX' then
+	gl = require'objc'
+	gl.load'OpenGL'
+end
+
+local r = 30
+local function cube(w)
+	r = r + 1
+	gl.glPushMatrix()
+	gl.glTranslated(0,0,-4)
+	gl.glScaled(w, w, 1)
+	gl.glRotated(r,1,r,r)
+	gl.glTranslated(0,0,2)
+	local function face(c)
+		gl.glBegin(gl.GL_QUADS)
+		gl.glColor4d(c,0,0,.5)
+		gl.glVertex3d(-1, -1, -1)
+		gl.glColor4d(0,c,0,.5)
+		gl.glVertex3d(1, -1, -1)
+		gl.glColor4d(0,0,c,.5)
+		gl.glVertex3d(1, 1, -1)
+		gl.glColor4d(c,0,c,.5)
+		gl.glVertex3d(-1, 1, -1)
+		gl.glEnd()
+	end
+	gl.glTranslated(0,0,-2)
+	face(1)
+	gl.glTranslated(0,0,2)
+	face(1)
+	gl.glTranslated(0,0,-2)
+	gl.glRotated(-90,0,1,0)
+	face(1)
+	gl.glTranslated(0,0,2)
+	face(1)
+	gl.glRotated(-90,1,0,0)
+	gl.glTranslated(0,2,0)
+	face(1)
+	gl.glTranslated(0,0,2)
+	face(1)
+	gl.glPopMatrix()
+end
+
+add('bitmap', function()
+	local win = app:window{w = 500, h = 300, frame = 'none-transparent', maximized = true, fullscreen = true}
+
+	function win:event(...)
+		print(...)
+	end
+
+	function win:repaint()
+		local cairo = require'cairo'
+		local bmp = win:bitmap()
+		if not bmp then return end
+		if not bmp.cr then
+			bmp.surface = cairo.cairo_image_surface_create_for_data(bmp.data,
+									cairo.CAIRO_FORMAT_ARGB32, bmp.w, bmp.h, bmp.stride)
+			bmp.cr = bmp.surface:create_context()
+			function bmp:free()
+				self.cr:free()
+				self.surface:free()
+			end
+		end
+		local cr = bmp.cr
+
+		--background
+		cr:set_operator(cairo.CAIRO_OPERATOR_SOURCE)
+		cr:set_source_rgba(0, 0, 0.1, 0.5)
+		cr:paint()
+		cr:set_operator(cairo.CAIRO_OPERATOR_OVER)
+
+		--matrix
+		cr:identity_matrix()
+		cr:translate(.5, .5)
+
+		--border
+		cr:set_source_rgba(1, 0, 0, 1)
+		cr:set_line_width(1)
+		cr:rectangle(0, 0, bmp.w-1, bmp.h-1)
+		cr:stroke()
+	end
+
+	local action, dx, dy
+
+	function win:keypress(key)
+
+		if key == 'space' then
+			win:maximize()
+		elseif key == 'esc' then
+			win:restore()
+		elseif key == 'F' then
+			win:fullscreen(not win:fullscreen())
+		elseif win:key'command f4' or win:key'command w' then
+			win:close()
+		end
+	end
+
+	app:runevery(1/60, function()
+
+		local self = win
+		local d = 10
+
+		if self:key'left' then
+			local x, y = win:normal_rect()
+			win:normal_rect(x - d, y)
+		end
+		if self:key'right' then
+			local x, y = win:normal_rect()
+			win:normal_rect(x + d, y)
+		end
+		if self:key'up' then
+			local x, y = win:normal_rect()
+			win:normal_rect(x, y - d)
+		end
+		if self:key'down' then
+			local x, y = win:normal_rect()
+			win:normal_rect(x, y + d)
+		end
+	end)
+
+	function win:mousedown(button, x, y)
+		if self:fullscreen() then return end
+		if button == 'left' then
+			local _, _, w, h = win:normal_rect()
+			if x >= w - 20 and x <= w and y >= h - 20 and y <= h then
+				action = 'resize'
+				dx = w - x
+				dy = h - y
+			else
+				action = 'move'
+				dx, dy = x, y
+			end
+		end
+	end
+
+	function win:mouseup(button)
+		if button == 'left' and action then
+			action = nil
+		end
+	end
+
+	function win:mousemove(x, y)
+		if action == 'move' then
+			local fx, fy = win:normal_rect()
+			win:normal_rect(fx + x - dx, fy + y - dy)
+		elseif action == 'resize' then
+			win:normal_rect(nil, nil, x + dx, y + dy)
+		end
+	end
+
+	win:invalidate()
+	app:run()
+end)
 
 add('view-cairo', function()
-	local win = app:window{w = 500, h = 300, frame = 'transparent'}
-	local w, h = 450, 250
-	local view = win:cairoview{x = 10, y = 10, w = w, h = h}
-	local cx, cy = w / 2, h / 2
+	local win = app:window{w = 500, h = 300}--, frame = 'none-transparent'}
 	local fps = 60
+
+	local x, y = 150, 10
+	local w, h = 100, 250
+	local cx, cy = w / 2, h / 2
 	local step = 0.02 * 60 / fps
 	local alpha, angle = 0, 0
+
+	local view = win:cairoview{x = x, y = y, w = w, h = h}
 	function view:render(cr)
+
+		cr:identity_matrix()
+
 		alpha = alpha + step; if alpha <= 0 or alpha >= 1 then step = -step end
 		angle = angle + math.abs(step)
 		cr:rectangle(0, 0, w, h)
@@ -1256,8 +1386,94 @@ add('view-cairo', function()
 		cr:rectangle(cx - 50, cy - 50, 100, 100)
 		cr:fill()
 	end
+
+	local x, y = 150, 170
+	local w, h = 300, 80
+
+	local glview = win:glview{x = x, y = y, w = w, h = h}
+	function glview:render()
+
+		--set default viewport
+		gl.glViewport(0, 0, w, h)
+		gl.glMatrixMode(gl.GL_PROJECTION)
+		gl.glLoadIdentity()
+		gl.glFrustum(-1, 1, -1, 1, 1, 100) --so fov is 90 deg
+		gl.glScaled(1, w/h, 1)
+
+		gl.glClearColor(0, 0, 0, 1)
+		gl.glClear(bit.bor(gl.GL_COLOR_BUFFER_BIT, gl.GL_DEPTH_BUFFER_BIT))
+		gl.glEnable(gl.GL_BLEND)
+		gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_SRC_ALPHA)
+		gl.glDisable(gl.GL_DEPTH_TEST)
+		gl.glDisable(gl.GL_CULL_FACE)
+		gl.glDisable(gl.GL_LIGHTING)
+		gl.glMatrixMode(gl.GL_MODELVIEW)
+		gl.glLoadIdentity()
+		gl.glTranslated(0,0,-1)
+		cube(1)
+	end
+
+	local x, y = 230, 20
+	local w, h = 80, 230
+	local cx, cy = w / 2, h / 2
+	local step = 0.02 * 60 / fps
+	local alpha, angle = 0, 0
+
+	local view2 = win:cairoview{x = x, y = y, w = w, h = h}
+	function view2:render(cr)
+		cr:identity_matrix()
+
+		alpha = alpha + step; if alpha <= 0 or alpha >= 1 then step = -step end
+		angle = angle - math.abs(step)
+		cr:rectangle(0, 0, w, h)
+		cr:set_source_rgba(0, 0, 1, 1)
+		cr:stroke()
+		cr:translate(cx, cy)
+		cr:rotate(angle)
+		cr:translate(-cx, -cy)
+		cr:set_source_rgba(0, r, 0, alpha)
+		cr:rectangle(cx - 50, cy - 50, 100, 100)
+		cr:fill()
+	end
+
+	local win2 = app:window{x = 500, y = 400, w = 500, h = 300}
+
+	local x, y = 100, 170
+	local w, h = 300, 80
+
+	local glview2 = win2:glview{x = x, y = y, w = w, h = h}
+	function glview2:render()
+
+		--set default viewport
+		gl.glViewport(0, 0, w, h)
+		gl.glMatrixMode(gl.GL_PROJECTION)
+		gl.glLoadIdentity()
+		gl.glFrustum(-1, 1, -1, 1, 1, 100) --so fov is 90 deg
+		gl.glScaled(1, w/h, 1)
+
+		gl.glClearColor(0, 0, 0, 1)
+		gl.glClear(bit.bor(gl.GL_COLOR_BUFFER_BIT, gl.GL_DEPTH_BUFFER_BIT))
+		gl.glEnable(gl.GL_BLEND)
+		gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_SRC_ALPHA)
+		gl.glDisable(gl.GL_DEPTH_TEST)
+		gl.glDisable(gl.GL_CULL_FACE)
+		gl.glDisable(gl.GL_LIGHTING)
+		gl.glMatrixMode(gl.GL_MODELVIEW)
+		gl.glLoadIdentity()
+		gl.glTranslated(0,0,-1)
+		cube(1)
+	end
+
 	app:runevery(1/fps, function()
-		view:invalidate()
+		if not win:dead() then
+			view:invalidate()
+			view2:invalidate()
+			glview:invalidate()
+			--win:invalidate()
+		end
+		if not win2:dead() then
+			glview2:invalidate()
+		end
 	end)
 	app:run()
 end)
@@ -1319,9 +1535,9 @@ end)
 --run tests ------------------------------------------------------------------
 
 local name = ...
-name = 'view-cairo'
+--name = 'pos-conversions'
 if not name then
-	print(string.format('Usage: %s <name> | <name>*', arg[0]))
+	print(string.format('Usage: %s name | prefix*', arg[0]))
 	print'Available tests:'
 	for i,name in ipairs(tests) do
 		print('', name)

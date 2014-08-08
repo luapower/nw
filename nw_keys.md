@@ -106,6 +106,7 @@ volumedown
 volumeup
 ~~~
 
+> Note: ctrl+numlock doesn't change the numlock state. Same with ctrl+scrolllock.
 
 ## Crossing cultures
 

@@ -1,10 +1,21 @@
---native widgets (Cosmin Apreutesei, public domain).
-local glue = require'glue'
+
+--native widgets - frontend.
+--Written by Cosmin Apreutesei. Public domain.
+
 local ffi = require'ffi'
+local glue = require'glue'
 local box2d = require'box2d'
 require'strict'
 
 local nw = {}
+
+--helpers --------------------------------------------------------------------
+
+local function indexof(dv, t)
+	for i,v in ipairs(t) do
+		if v == dv then return i end
+	end
+end
 
 --backends -------------------------------------------------------------------
 
@@ -113,12 +124,14 @@ end
 
 --handle a query event by calling its event handler
 function object:_handle(event, ...)
+	if self._events_disabled then return end
 	if not self[event] then return end
 	return self[event](self, ...)
 end
 
 --fire an event, i.e. call observers and create a meta event 'event'
 function object:_fire(event, ...)
+	if self._events_disabled then return end
 	--call any observers
 	if self.observers and self.observers[event] then
 		for obs in pairs(self.observers[event]) do
@@ -135,6 +148,13 @@ end
 function object:_event(event, ...)
 	self:_handle(event, ...)
 	self:_fire(event, ...)
+end
+
+--enable or disable events. returns the old state.
+function object:events(enabled)
+	local old = not self._events_disabled
+	self._events_disabled = not enabled
+	return old
 end
 
 --app object -----------------------------------------------------------------
@@ -290,12 +310,6 @@ function app:_window_created(win)
 	self:_event('window_created', win)
 end
 
-local function indexof(dv, t)
-	for i,v in ipairs(t) do
-		if v == dv then return i end
-	end
-end
-
 function app:_window_closed(win)
 	self:_event('window_closed', win)
 	table.remove(self._windows, indexof(win, self._windows))
@@ -313,7 +327,7 @@ window.defaults = {
 	maximized = false,
 	--frame
 	title = '',
-	frame = 'normal', --normal, none, transparent
+	frame = 'normal',
 	--behavior
 	topmost = false,
 	minimizable = true,
@@ -322,17 +336,29 @@ window.defaults = {
 	resizeable = true,
 	fullscreenable = true,
 	autoquit = false, --quit the app on closing
-	edgesnapping = false, --false, 'all', 'app', 'screen' (true)
+	edgesnapping = false,
 }
 
 function app:window(t)
 	return window:_new(self, self.backend.window, t)
 end
 
+local bool_frame = {[false] = 'none', [true] = 'normal'}
+
 function window:_new(app, backend_class, opt)
 	opt = glue.update({}, self.defaults, opt)
+
 	assert(opt.w, 'width missing')
 	assert(opt.h, 'height missing')
+
+	opt.frame = bool_frame[opt.frame] or opt.frame
+
+	--sanitize booleans so that backends don't have to.
+	for k,v in pairs(self.defaults) do
+		if type(v) == 'boolean' then
+			opt[k] = not not opt[k]
+		end
+	end
 
 	self = glue.inherit({app = app}, self)
 
@@ -364,7 +390,8 @@ function window:_new(app, backend_class, opt)
 	self.app:_window_created(self)
 	self:_event'created'
 
-	--windows are created hidden
+	--windows are created hidden by the backends so that we can set them up
+	--properly before showing them, so that events can work.
 	if opt.visible then
 		self:show()
 	end
@@ -451,6 +478,7 @@ end
 
 function window:active()
 	self:_check()
+	if not self:visible() then return end --ignore if hidden.
 	return self.backend:active()
 end
 
@@ -484,34 +512,64 @@ function window:minimized()
 	return self.backend:minimized()
 end
 
+function window:minimize()
+	self:_check()
+	if self:fullscreen() then return end --ignore because OSX can't do it
+	self.backend:minimize()
+end
+
 function window:maximized()
 	self:_check()
 	return self.backend:maximized()
 end
 
-function window:minimize()
-	self:_check()
-	self.backend:minimize()
-end
-
 function window:maximize()
 	self:_check()
+	if self:fullscreen() then return end --ignore because OSX can't do it
 	self.backend:maximize()
 end
 
 function window:restore()
 	self:_check()
-	self.backend:restore()
+	if self:fullscreen() then
+		self:fullscreen(false)
+	else
+		self.backend:restore()
+	end
 end
 
 function window:shownormal()
 	self:_check()
+	if self:fullscreen() then return end --ignore because OSX can't do it
 	self.backend:shownormal()
 end
 
 function window:fullscreen(fullscreen)
 	self:_check()
-	return self.backend:fullscreen(fullscreen)
+	if fullscreen == nil then
+		return self.backend:get_fullscreen()
+	elseif fullscreen then
+		self.backend:enter_fullscreen()
+	else
+		self.backend:exit_fullscreen()
+	end
+end
+
+function window:_backend_fullscreen_enter()
+	self:_event'fullscreen_enter'
+end
+
+function window:_backend_fullscreen_exit()
+	self:_event'fullscreen_exit'
+end
+
+function window:state()
+	return
+		not self:visible() and 'hidden'
+		or self:minimized() and 'minimized'
+		or self:fullscreen() and 'fullscreen'
+		or self:maximized() and 'maximized'
+		or 'normal'
 end
 
 --positioning ----------------------------------------------------------------
@@ -520,20 +578,44 @@ local function override_rect(x, y, w, h, x1, y1, w1, h1)
 	return x1 or x, y1 or y, w1 or w, h1 or h
 end
 
-function window:frame_rect(x1, y1, w1, h1)
+function window:frame_rect(x, y, w, h) --returns x, y, w, h
 	self:_check()
-	if x1 or y1 or w1 or h1 then
-		local x, y, w, h = self:frame_rect()
-		x, y, w, h = override_rect(x, y, w, h, x1, y1, w1, h1)
-		self.backend:set_frame_rect(x, y, w, h)
-	else
+	if x or y or w or h then
+		self:normal_rect(x, y, w, h)
+		if self:visible() then
+			self:shownormal()
+		end
+	elseif not self:minimized() then
 		return self.backend:get_frame_rect()
 	end
 end
 
-function window:client_rect() --x, y, w, h
+function window:normal_rect(x1, y1, w1, h1)
 	self:_check()
-	return self.backend:client_rect()
+	if x1 or y1 or w1 or h1 then
+		local x, y, w, h = self.backend:get_normal_rect()
+		self.backend:set_normal_rect(override_rect(x, y, w, h, x1, y1, w1, h1))
+	else
+		return self.backend:get_normal_rect()
+	end
+end
+
+function window:client_rect() --returns x, y, w, h
+	self:_check()
+	if self:minimized() then
+		return 0, 0, 0, 0
+	end
+	return self.backend:get_client_rect()
+end
+
+function window:to_screen(...)
+	self:_check()
+	return self.backend:to_screen(...)
+end
+
+function window:to_client(...)
+	self:_check()
+	return self.backend:to_client(...)
 end
 
 function window:_backend_start_resize(how)
@@ -541,24 +623,30 @@ function window:_backend_start_resize(how)
 	self:_event('start_resize', how)
 end
 
-function window:_backend_end_resize()
+function window:_backend_end_resize(how)
 	self._magnets = nil
-	self:_event'end_resize'
+	self:_event('end_resize', how)
 end
 
 function window:_getmagnets()
 	local mode = self:edgesnapping()
 	local t
-	if mode:find'all' then
-		t = self.backend:magnets()
-	elseif mode:find'app' then
-		t = {}
-		for i,win in ipairs(self.app:windows()) do
-			if win ~= self then
-				local x, y, w, h = win:frame_rect()
-				t[#t+1] = {x = x, y = y, w = w, h = h}
+	if mode:find'app' then
+		if mode:find'other' then
+			t = self.backend:magnets() --app + other
+		else
+			t = {}
+			for i,win in ipairs(self.app:windows()) do
+				if win ~= self then
+					local x, y, w, h = win:frame_rect()
+					if x then
+						t[#t+1] = {x = x, y = y, w = w, h = h}
+					end
+				end
 			end
 		end
+	elseif mode:find'other' then
+		error'NYI' --TODO
 	end
 	if mode:find'screen' then
 		t = t or {}
@@ -592,8 +680,8 @@ function window:_backend_resizing(how, x, y, w, h)
 	return x1, y1, w1, h1
 end
 
-function window:_backend_resized()
-	self:_event'resized'
+function window:_backend_resized(how)
+	self:_event('resized', how)
 end
 
 function window:edgesnapping(snapping)
@@ -659,9 +747,13 @@ end
 
 --frame ----------------------------------------------------------------------
 
-function window:title(newtitle)
+function window:title(title)
 	self:_check()
-	return self.backend:title(newtitle)
+	if title == nil then
+		return self.backend:get_title()
+	else
+		self.backend:set_title(title)
+	end
 end
 
 function window:frame() self:_check(); return self._frame end
@@ -684,7 +776,11 @@ end
 
 function window:topmost(topmost)
 	self:_check()
-	return self.backend:topmost(topmost)
+	if topmost == nil then
+		return self.backend:get_topmost()
+	else
+		self.backend:set_topmost(topmost)
+	end
 end
 
 --parent ---------------------------------------------------------------------
@@ -766,6 +862,8 @@ end
 --mouse ----------------------------------------------------------------------
 
 function window:mouse(var)
+	--hidden or minimized windows don't have a mouse state.
+	if not self:visible() or self:minimized() then return end
 	if var then
 		return self._mouse[var]
 	else
@@ -795,7 +893,7 @@ function window:_backend_mousedown(button, mx, my)
 		t.y = my - t.h / 2
 	end
 
-	self:_event('mousedown', button)
+	self:_event('mousedown', button, mx, my)
 
 	local reset = false
 	if self.click then
@@ -831,38 +929,10 @@ function window:_backend_mousehwheel(delta, x, y)
 	self:_event('mousehwheel', delta, x, y)
 end
 
---views ----------------------------------------------------------------------
+--rendering ------------------------------------------------------------------
 
-local view = glue.update({}, object)
-
-function view:_new(window, backend_class, t)
-	local self = glue.inherit({
-		window = window,
-		app = window.app,
-	}, self)
-	self.backend = backend_class:new(window.backend, self, t)
-	window._views[self] = true
-	return self
-end
-
-function window:_free_views()
-	for view in pairs(self._views) do
-		view:_free()
-	end
-end
-
-function view:_free()
-	self.backend:free()
-	self.window._views[self] = nil
-end
-
-function view:_backend_render(cr)
-	self:_event('render', cr)
-end
-
-function view:invalidate()
-	self:_check()
-	self.backend:invalidate()
+function window:bitmap()
+	return self.backend:bitmap()
 end
 
 function window:invalidate()
@@ -870,26 +940,89 @@ function window:invalidate()
 	self.backend:invalidate()
 end
 
+function window:_backend_repaint()
+	self:_event'repaint'
+end
+
+function window:_backend_free_bitmap(bitmap)
+	self:_event'free_bitmap'
+
+	--call a user-supplied bitmap destructor.
+	if bitmap.free then
+		bitmap:free()
+	end
+end
+
+--views ----------------------------------------------------------------------
+
+local view = glue.update({}, object)
+
+function window:views()
+	return glue.extend({}, self._views) --take a snapshot; back-to-front order
+end
+
+function window:view_count()
+	return #self._views
+end
+
+function view:_new(window, backend_class, t)
+	local self = glue.inherit({
+		window = window,
+		app = window.app,
+	}, self)
+	self.backend = backend_class:new(window.backend, self, t)
+	table.insert(window._views, self)
+	return self
+end
+
+function window:_free_views()
+	while #self._views > 0 do
+		self._views[#self._views]:free()
+	end
+end
+
+function view:free()
+	if self._dead then return end
+	self:_event'freeing'
+	self.backend:free()
+	self._dead = true
+	table.remove(self.window._views, indexof(self, self.window._views))
+end
+
+function view:_backend_render(...)
+	self:_event('render', ...)
+end
+
+function view:invalidate()
+	self:_check()
+	self.backend:invalidate()
+end
+
+function app:invalidate()
+	for i,win in ipairs(self:windows()) do
+		if not win:dead() then
+			win:invalidate()
+		end
+	end
+end
+
 function view:rect()
 	return self.backend:rect()
 end
 
-local cairoview = glue.inherit({}, view)
-
-local cairo
-
-function window:cairoview(t)
-	cairo = cairo or require'cairo'
-	return cairoview:_new(self, self.backend.cairoview, t)
-end
-
-function cairoview:_backend_render(cr)
-	cr:identity_matrix()
-	cr:set_source_rgba(0, 0, 0, 0)
-	cr:set_operator(cairo.CAIRO_OPERATOR_SOURCE)
-	cr:paint()
-	cr:set_operator(cairo.CAIRO_OPERATOR_OVER)
-	self:_event('render', cr)
+function view:zorder(zorder, relto)
+	if zorder == nil then
+		return indexof(self, self.window._views)
+	else
+		if zorder == 'front' then
+			--TODO
+		elseif zorder == 'back' then
+			--TODO
+		else --number
+			zorder = math.min(math.max(zorder, 1), self.window:view_count())
+		end
+		self.backend:set_zorder(zorder)
+	end
 end
 
 local glview = glue.inherit({}, view)
@@ -915,8 +1048,8 @@ function app:menu(menu)
 	return wrap_menu(self.backend:menu(), 'menu')
 end
 
-function window:menu()
-	return wrap_menu(self.backend:menu(), 'menubar')
+function window:menubar()
+	return wrap_menu(self.backend:menubar(), 'menubar')
 end
 
 function window:popup(menu, x, y)
@@ -1023,10 +1156,6 @@ function menu:enabled(index, enabled)
 	else
 		self.backend:set_enabled(index, enabled)
 	end
-end
-
-function menu:count()
-	return self.backend:count()
 end
 
 --buttons --------------------------------------------------------------------

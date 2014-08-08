@@ -1,50 +1,16 @@
---native widgets cococa backend (Cosmin Apreutesei, public domain).
 
---COCOA NOTES
--------------
---windows are created hidden by default.
---zoom()'ing a hidden window does not show it, but does change its maximized flag.
---orderOut() doesn't hide a window if it's the key window, instead it disables mouse on it making it appear frozen.
---makeKeyWindow() and makeKeyAndOrderFront() do the same thing (both bring the window to front).
---makeKeyAndOrderFront() is ignored if the window is hidden.
---isVisible() returns false both when the window is orderOut() and when it's minimized().
---windows created after calling activateIgnoringOtherApps(false) go behind the active app.
---windows created after calling activateIgnoringOtherApps(true) go in front of the active app.
---windows activated while the app is inactive will go in front when activateIgnoringOtherApps(true) is called,
---but other windows will not, unlike clicking the dock icon.
---only the windows made key after the call to activateIgnoringOtherApps(true) are put in front of the active app!
---the first call to activateIgnoringOtherApps() doesn't also activate the main menu. to fix this,
---use NSRunningApplication:currentApplication():activateWithOptions() instead, before you tear your hear out!
---quitting the app from the app's Dock menu (or calling terminate(nil)) calls appShouldTerminate, then calls close()
---  on all windows, thus without calling windowShouldClose, but only windowWillClose.
---there's no windowDidClose event and so windowDidResignKey comes after windowWillClose.
---screen:visibleFrame() is in virtual screen coordinates just like winapi's MONITORINFO.
---applicationWillTerminate() is never called.
---terminate() doesn't return, unless applicationShouldTerminate() returns false.
---no keyDown() for modifier keys, must use flagsChanged().
---flagsChanged() returns undocumented, and possibly not portable bits to distinguish between left/right modifier keys.
---these bits are not given with NSEvent:modifierFlags(), so we can't get the initial state of specific modifier keys.
---no keyDown() on the 'help' key (which is the 'insert' key on a win keyboard).
---flagsChanged() can only get you so far in simulating keyDown/keyUp events for the modifier keys:
---  holding down these keys won't trigger repeated key events.
---  can't know when capslock is depressed, only when it is pressed.
---no event while moving a window - frame() is not updated while moving the window either.
---can't know which corner/side a window is dragged by to be resized. good luck implementing edge snapping correctly.
---can't reference resizing cursors directly with constants, must dig and get them yourself.
---makeKeyAndOrderFront() is deferred to after the message loop is started, after which a single windowDidBecomeKey
---is triggered on the last window made key (unlike windows which activates/deactivates windows as it happens).
---makeKeyAndOrderFront() is also deferred, if the app is not active, for when it becomes active.
---applicationDidResignActive() is not sent on exit.
---the app's menu bar _and_ the app menu (the first menu item) must be created before the app is activated.
+--native widgets - cococa backend.
+--Written by Cosmin Apreutesei. Public domain.
 
 local ffi = require'ffi'
 local bit = require'bit'
 local glue = require'glue'
-local objc = require'objc'
 local box2d = require'box2d'
+local objc = require'objc'
 local cbframe = require'cbframe'
 
-objc.debug.cbframe = true --use cbframe for problem callbacks
+local _cbframe = objc.debug.cbframe
+objc.debug.cbframe = true --use cbframe for struct-by-val overrides.
 objc.load'Foundation'
 objc.load'AppKit'
 objc.load'System' --for mach_absolute_time
@@ -52,6 +18,10 @@ objc.load'Carbon.HIToolbox' --for key codes
 objc.load'ApplicationServices.CoreGraphics'
 --objc.load'CoreGraphics' --for CGWindow*
 objc.load'CoreFoundation' --for CFArray
+
+local nw = {name = 'cocoa'}
+
+--helpers --------------------------------------------------------------------
 
 local function unpack_nsrect(r)
 	return r.origin.x, r.origin.y, r.size.width, r.size.height
@@ -70,8 +40,6 @@ local function flip_screen_rect(main_h, x, y, w, h)
 	main_h = main_h or main_screen_h()
 	return x, main_h - h - y, w, h
 end
-
-local nw = {name = 'cocoa'}
 
 --os version -----------------------------------------------------------------
 
@@ -110,8 +78,9 @@ function app:new(frontend)
 	--disable mouse coalescing so that mouse move events are not skipped.
 	objc.NSEvent:setMouseCoalescingEnabled(false)
 
-	--before app activation, we have to create the main menu _and_ the app menu, otherwise
-	--the app menu title will be replaced with a little apple icon to our desperation!
+	--NOTE: the app's menu bar _and_ the app menu (the first menu item) must be created
+	--before the app is activated, otherwise the app menu title will be replaced with
+	--a little apple icon to your desperation!
 	local menubar = objc.NSMenu:new()
 	menubar:setAutoenablesItems(false)
 	self.nsapp:setMainMenu(menubar)
@@ -145,6 +114,11 @@ function app:stop()
 end
 
 --quitting -------------------------------------------------------------------
+
+--NOTE: quitting the app from the app's Dock menu calls appShouldTerminate, then calls close()
+--on all windows, thus without calling windowShouldClose(), but only windowWillClose().
+--NOTE: there's no windowDidClose() event and so windowDidResignKey() comes after windowWillClose().
+--NOTE: applicationWillTerminate() is never called.
 
 function App:applicationShouldTerminate()
 	self.frontend:_backend_quitting() --calls quit() which calls stop().
@@ -180,6 +154,7 @@ end, 'v@:@')
 function app:runevery(seconds, func)
 	local timer = objc.NSTimer:scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
 		seconds, self.nsapp, 'nw_timerEvent', nil, true)
+	objc.NSRunLoop:currentRunLoop():addTimer_forMode(timer, objc.NSDefaultRunLoopMode)
 	timer.nw_func = func
 end
 
@@ -192,17 +167,27 @@ local nswin_map = {} --nswin->window
 
 local Window = objc.class('Window', 'NSWindow <NSWindowDelegate>')
 
+--NOTE: windows are created hidden by default.
+
 function window:new(app, frontend, t)
 	self = glue.inherit({app = app, frontend = frontend}, self)
 
-	local transparent = t.frame == 'transparent'
-	local style = t.frame == 'normal' and bit.bor(
-							objc.NSTitledWindowMask,
-							t.closeable and objc.NSClosableWindowMask or 0,
-							t.minimizable and objc.NSMiniaturizableWindowMask or 0,
-							t.resizeable and objc.NSResizableWindowMask or 0) or
-						t.frame == 'none' and bit.bor(objc.NSBorderlessWindowMask) or
-						transparent and bit.bor(objc.NSBorderlessWindowMask)
+	local framed = t.frame == 'normal'
+	local transparent = t.frame == 'none-transparent'
+
+	local style
+	if framed then
+		style = bit.bor(
+			objc.NSTitledWindowMask,
+			t.closeable and objc.NSClosableWindowMask or 0,
+			t.minimizable and objc.NSMiniaturizableWindowMask or 0,
+			t.resizeable and objc.NSResizableWindowMask or 0)
+	else
+		style = objc.NSBorderlessWindowMask
+		--for borderless windows we have to handle maximization manually.
+		self._borderless = true
+		self._maximized = false
+	end
 
 	local frame_rect = objc.NSMakeRect(flip_screen_rect(nil, t.x, t.y, t.w, t.h))
 	local content_rect = objc.NSWindow:contentRectForFrameRect_styleMask(frame_rect, style)
@@ -210,12 +195,6 @@ function window:new(app, frontend, t)
 	self.nswin = Window:alloc():initWithContentRect_styleMask_backing_defer(
 							content_rect, style, objc.NSBackingStoreBuffered, false)
 	ffi.gc(self.nswin, nil) --disown, the user owns it now
-
-	self.nswin.frontend = frontend
-	self.nswin.backend = self
-	self.nswin.app = app
-
-	nswin_map[objc.nptr(self.nswin)] = self.frontend
 
 	if transparent then
 		self.nswin:setOpaque(false)
@@ -225,13 +204,16 @@ function window:new(app, frontend, t)
 	if t.parent then
 		t.parent.backend.nswin:addChildWindow_ordered(self.nswin, objc.NSWindowAbove)
 	end
+
 	if t.edgesnapping then
 		self.nswin:setMovable(false)
 	end
+
 	if t.fullscreenable and nw.frontend:os'OSX 10.7' then
 		self.nswin:setCollectionBehavior(bit.bor(tonumber(self.nswin:collectionBehavior()),
 			objc.NSWindowCollectionBehaviorFullScreenPrimary)) --OSX 10.7+
 	end
+
 	if not t.maximizable then
 		if not t.minimizable then
 			--hide the minimize and maximize buttons when they're both disabled
@@ -242,6 +224,7 @@ function window:new(app, frontend, t)
 			self.nswin:standardWindowButton(objc.NSWindowZoomButton):setEnabled(false)
 		end
 	end
+
 	self.nswin:setTitle(t.title)
 
 	self.nswin:reset_keystate()
@@ -258,17 +241,25 @@ function window:new(app, frontend, t)
 	self.nswin:contentView():addTrackingArea(area)
 
 	if t.maximized then
-		if not self:maximized() then
-			self.nswin:zoom(nil)
-		end
+		self:_set_maximized()
 	end
+
+	--set drawable content view
+	self:_set_content_view()
+
+	--set window state
+	self._visible = false
+
+	--set back references
+	self.nswin.frontend = frontend
+	self.nswin.backend = self
+	self.nswin.app = app
+
+	--register window
+	nswin_map[objc.nptr(self.nswin)] = self.frontend
 
 	--enable events
 	self.nswin:setDelegate(self.nswin)
-
-	self._show_minimized = t.minimized --minimize on the next show()
-	self._show_fullscreen = t.fullscreen --fullscreen on the next show()
-	self._visible = false
 
 	return self
 end
@@ -301,6 +292,11 @@ end
 --activation -----------------------------------------------------------------
 
 function app:activate()
+
+	--NOTE: windows created after calling activateIgnoringOtherApps(false) go behind the active app.
+	--NOTE: windows created after calling activateIgnoringOtherApps(true) go in front of the active app.
+	--NOTE: the first call to nsapp:activateIgnoringOtherApps() doesn't also activate the main menu.
+	--but NSRunningApplication:currentApplication():activateWithOptions() does, so we use that instead!
 	objc.NSRunningApplication:currentApplication():activateWithOptions(bit.bor(
 		objc.NSApplicationActivateIgnoringOtherApps,
 		objc.NSApplicationActivateAllWindows))
@@ -318,6 +314,7 @@ function App:applicationWillBecomeActive()
 	self.frontend:_backend_activated()
 end
 
+--NOTE: applicationDidResignActive() is not sent on exit because the loop will be stopped at that time.
 function App:applicationDidResignActive()
 	self.frontend:_backend_deactivated()
 end
@@ -339,6 +336,15 @@ function Window:windowDidResignKey()
 end
 
 function window:activate()
+	--NOTE: makeKeyAndOrderFront() on an initially hidden window is ignored, but not on an orderOut() window.
+	--NOTE: makeKeyWindow() and makeKeyAndOrderFront() do the same thing (both bring the window to front).
+	--NOTE: makeKeyAndOrderFront() is deferred, if the app is not active, for when it becomes active.
+	--Only windows activated while the app is inactive will move to front when the app is activated,
+	--but other windows will not, unlike clicking the dock icon, which moves all the app's window in front.
+	--So only the windows made key after the call to activateIgnoringOtherApps(true) are moved to front!
+	--NOTE: makeKeyAndOrderFront() is deferred to after the message loop is started,
+	--after which a single windowDidBecomeKey is triggered on the last window made key,
+	--unlike Windows which activates/deactivates windows as it happens, without a message loop.
 	self.nswin:makeKeyAndOrderFront(nil)
 end
 
@@ -359,56 +365,101 @@ end
 --state ----------------------------------------------------------------------
 
 function window:show()
+	if self._visible then return end
 	self._visible = true
-	if self._show_minimized then
-		self._show_minimized = nil
-		if self._show_fullscreen then
-			self:_enter_fullscreen(true)
-		else
-			self.nswin:miniaturize(nil)
-		end
+	if self._show_minimized then --was minimized before hiding
+		self._show_minimized = false
+		self.nswin:miniaturize(nil)
+	elseif self:minimized() then --is minimized but hidden
+		self:minimize()
 	else
-		if self._show_fullscreen then
-			self:_enter_fullscreen()
-		else
-			self.nswin:makeKeyAndOrderFront(nil)
-		end
+		self.nswin:makeKeyAndOrderFront(nil)
 	end
 end
 
 function window:hide()
 	self._visible = false
+	self._show_minimized = self.nswin:isMiniaturized()
+	--TODO: orderOut() doesn't hide a window if it's the key window, instead it acts all weird:
+	--it disables mouse on it making it appear frozen.
 	self.nswin:orderOut(nil)
 end
 
 function window:visible()
+	--can't use isVisible() because it also returns false when the window is minimized.
 	return self._visible
 end
 
 function window:minimize()
 	self._visible = true
+	--miniaturize() in fullscreen mode is ignored.
+	--miniaturize() shows the window if hidden.
 	self.nswin:miniaturize(nil)
 end
 
-function window:maximize()
-	if not self:maximized() then
-		self.nswin:zoom(nil)
+function window:minimized()
+	return self._show_minimized or self.nswin:isMiniaturized()
+end
+
+--make a window maximized without showing it.
+function window:_set_maximized()
+	self._restore_rect = {self:get_normal_rect()}
+	if self._borderless then
+		self:set_normal_rect(self:display():client_rect())
+		self._maximized = true
+	elseif not self:maximized() then
+		if self:minimized() then
+			--zoom() on a minimized window is ignored completely.
+			self:set_normal_rect(self:display():client_rect())
+		else
+			--zoom() on a hidden window does not show it, but does maximize it.
+			--zoom() in fullscreen mode does nothing.
+			self.nswin:zoom(nil)
+		end
 	end
-	self:show()
+end
+
+function window:maximize()
+	self:_set_maximized()
+	if self:minimized() then
+		self:restore()
+	else
+		self:show()
+	end
 end
 
 function window:restore()
-	if self:fullscreen() then
-		self:fullscreen(false)
+	if self:minimized() then
+		self._visible = true
+		self._show_minimized = false
+		--deminiaturize() shows the window if it's hidden.
+		self.nswin:deminiaturize(nil)
 	elseif self:maximized() then
-		self.nswin:zoom(nil)
-	elseif self:minimized() then
-		self.nswin:deminiaturize()
+		if self._borderless then
+			self._maximized = false
+			self:set_normal_rect(unpack(self._restore_rect))
+			self._restore_rect = nil
+			if not self._visible then
+				self:show()
+			end
+		else
+			self.nswin:zoom(nil)
+			--zoom() on a hidden window does not show it.
+			self:show()
+		end
+	elseif not self:visible() then
+		self:show()
 	end
 end
 
 function window:shownormal()
-	if self:maximized() then
+	if self:minimized() then
+		if self:maximized() then
+			self._maximized = false
+			self:set_normal_rect(unpack(self._restore_rect))
+		end
+		self:restore()
+	elseif self:maximized() then
 		self:restore()
 	end
 	if not self:visible() then
@@ -416,37 +467,27 @@ function window:shownormal()
 	end
 end
 
-function window:minimized()
-	return self.nswin:isMiniaturized()
-end
-
 function window:maximized()
-	return self.nswin:isZoomed()
-end
-
-function window:_enter_fullscreen(show_minimized)
-	self._show_fullscreen = nil
-	--self.nswin:makeKeyAndOrderFront(nil)
-	self.nswin:toggleFullScreen(nil)
-end
-
-function window:_exit_fullscreen(show_maximized)
-	self.nswin:toggleFullScreen(nil)
-end
-
-function window:fullscreen(fullscreen)
-	if fullscreen ~= nil then
-		if fullscreen ~= self:fullscreen() then
-			if fullscreen then
-				self:_enter_fullscreen()
-			else
-				self:_exit_fullscreen()
-			end
-		end
+	if self._borderless or self:get_fullscreen() then
+		--NSWindow:isZoomed() returns true for borderless windows.
+		--NSWindow:isZoomed() returns true in fullscreen windows.
+		return self._maximized
 	else
-		return self._show_fullscreen or
-			bit.band(tonumber(self.nswin:styleMask()), objc.NSFullScreenWindowMask) == objc.NSFullScreenWindowMask
+		return self.nswin:isZoomed()
 	end
+end
+
+function window:enter_fullscreen()
+	self.nswin:makeKeyAndOrderFront(nil)
+	self.nswin:toggleFullScreen(nil)
+end
+
+function window:exit_fullscreen()
+	self.nswin:toggleFullScreen(nil)
+end
+
+function window:get_fullscreen()
+	return bit.band(tonumber(self.nswin:styleMask()), objc.NSFullScreenWindowMask) == objc.NSFullScreenWindowMask
 end
 
 function Window:windowWillEnterFullScreen()
@@ -464,17 +505,40 @@ function Window:windowWillExitFullScreen()
 	self:setFrame_display(self.nw_frame, true)
 end
 
+function Window:windowDidEnterFullScreen()
+	self.frontend:_backend_fullscreen_enter()
+end
+
+function Window:windowDidExitFullScreen()
+	self.frontend:_backend_fullscreen_exit()
+end
+
 --positioning ----------------------------------------------------------------
+
+--NOTE: no event is triggered while moving a window. frame() is not updated either.
+--NOTE: there's no API to get the corner or side that window is dragged by when resized.
 
 function window:get_frame_rect()
 	return flip_screen_rect(nil, unpack_nsrect(self.nswin:frame()))
 end
 
-function window:set_frame_rect(x, y, w, h)
-	self.nswin:setFrame_display(objc.NSMakeRect(flip_screen_rect(nil, x, y, w, h)), true)
+function window:get_normal_rect(x, y, w, h)
+	if self._borderless and self._maximized then
+		return unpack(self._restore_rect)
+	else
+		return flip_screen_rect(nil, unpack_nsrect(self.nswin:frame()))
+	end
 end
 
-function window:client_rect()
+function window:set_normal_rect(x, y, w, h)
+	if self._borderless and self._maximized then
+		self._restore_rect = {x, y, w, h}
+	else
+		self.nswin:setFrame_display(objc.NSMakeRect(flip_screen_rect(nil, x, y, w, h)), true)
+	end
+end
+
+function window:get_client_rect()
 	return unpack_nsrect(self.nswin:contentView():bounds())
 end
 
@@ -671,6 +735,7 @@ end
 
 --displays -------------------------------------------------------------------
 
+--NOTE: screen:visibleFrame() is in virtual screen coordinates just like winapi's MONITORINFO, which is what we want.
 function app:_display(main_h, screen)
 	local t = {}
 	t.x, t.y, t.w, t.h = flip_screen_rect(main_h, unpack_nsrect(screen:frame()))
@@ -712,6 +777,8 @@ function App:applicationDidChangeScreenParameters()
 end
 
 --cursors --------------------------------------------------------------------
+
+--NOTE: can't reference resizing cursors directly with constants, hence load_hicursor().
 
 local cursors = {
 	--pointers
@@ -773,23 +840,33 @@ end
 
 --frame
 
-function window:title(title)
-	if title then
-		self.nswin:setTitle(title)
-	else
-		return objc.tolua(self.nswin:title())
-	end
+function window:get_title(title)
+	return objc.tolua(self.nswin:title())
 end
 
-function window:topmost(topmost)
-	if topmost ~= nil then
-		self.backend.topmost = topmost
-	else
-		return self.backend.topmost
-	end
+function window:set_title(title)
+	self.nswin:setTitle(title)
+end
+
+function window:get_topmost()
+	--TODO
+end
+
+function window:set_topmost(topmost)
+	--TODO
 end
 
 --keyboard -------------------------------------------------------------------
+
+
+--NOTE: there's no keyDown() for modifier keys, must use flagsChanged().
+--NOTE: flagsChanged() returns undocumented, and possibly not portable bits to distinguish
+--between left/right modifier keys. these bits are not given with NSEvent:modifierFlags(),
+--so we can't get the initial state of specific modifier keys.
+--NOTE: there's no keyDown() on the 'help' key (which is the 'insert' key on a win keyboard).
+--NOTE: flagsChanged() can only get you so far in simulating keyDown/keyUp events for the modifier keys:
+--  holding down these keys won't trigger repeated key events.
+--  can't know when capslock is depressed, only when it is pressed.
 
 local keynames = {
 
@@ -912,7 +989,10 @@ local keynames = {
 	[objc.kVK_F15] = 'F19', --mac keyboard
 }
 
-local keycodes = glue.index(keynames)
+local keycodes = {}
+for vk, name in pairs(keynames) do
+	keycodes[name:lower()] = vk
+end
 
 local function modifier_flag(mask, flags)
 	flags = flags or tonumber(objc.NSEvent:modifierFlags())
@@ -1132,6 +1212,7 @@ end
 
 function Window:scrollWheel(event)
 	local m = self:setmouse(event)
+	local x, y = m.x, m.y
 	local dx = event:deltaX()
 	if dx ~= 0 then
 		self.frontend:_backend_mousehwheel(dx, x, y)
@@ -1146,7 +1227,151 @@ function window:mouse_pos()
 	--return objc.NSEvent:
 end
 
+--rendering ------------------------------------------------------------------
+
+ffi.cdef[[
+void* malloc (size_t size);
+void  free   (void*);
+]]
+
+local View = objc.class('View', 'NSView')
+
+function View.drawRect(cpu)
+
+	--get arg1 from the ABI guts.
+	local self
+	if ffi.arch == 'x64' then
+		self = ffi.cast('id', cpu.RDI.p) --RDI = self
+	else
+		self = ffi.cast('id', cpu.ESP.dp[1].p) --ESP[1] = self
+	end
+
+	--let the user acquire the window's bitmap and draw on it.
+	self.nw_frontend:_backend_repaint()
+
+	--if bitmap acquired, paint it on the current graphics context.
+	self.nw_backend:_paint_bitmap()
+end
+
+function window:_set_content_view()
+	--create our custom view and set it as the content view.
+	local bounds = self.nswin:contentView():bounds()
+	self.nsview = View:alloc():initWithFrame(bounds)
+	self.nswin:setContentView(self.nsview)
+	self.nsview.nw_backend = self
+	self.nsview.nw_frontend = self.frontend
+end
+
+function window:bitmap()
+
+	local _, _, w, h = self.frontend:client_rect()
+
+	--we can't create a zero-sized bitmap.
+	if w <= 0 or h <= 0 then
+		self:_free_bitmap()
+		return
+	end
+
+	return self:_get_bitmap(w, h)
+end
+
+local function stub() end
+
+function window:_get_bitmap(w, h)
+	return self:_create_bitmap(w, h)
+end
+
+function window:_create_bitmap(w, h)
+
+	local stride = w * 4
+	local size = stride * h
+
+	local data = ffi.C.malloc(size)
+	assert(data ~= nil)
+
+	local bitmap = {
+		w = w,
+		h = h,
+		data = ffi.cast('uint32_t*', data), --set pixels with 0xAARRGGBB
+		stride = stride,
+		size = size,
+	}
+
+	local colorspace = objc.CGColorSpaceCreateDeviceRGB()
+	local provider = objc.CGDataProviderCreateWithData(nil, data, size, nil)
+	local info = bit.bor(
+		ffi.abi'le' and
+			objc.kCGBitmapByteOrder32Little or
+			objc.kCGBitmapByteOrder32Big,      --native endianness
+		objc.kCGImageAlphaPremultipliedFirst) --ARGB32
+	local bounds = objc.NSMakeRect(0, 0, w, h)
+
+	function self:_paint_bitmap()
+
+		--CGImage expects the pixel buffer to be immutable, which is why
+		--we create a new one every time. bummer.
+		local image = objc.CGImageCreate(w, h,
+			8,  --bpc
+			32, --bpp
+			stride,
+			colorspace,
+			info,
+			provider,
+			nil, --no decode
+			false, --no interpolation
+			objc.kCGRenderingIntentDefault)
+
+		--get the current graphics context and draw our image on it.
+		local context = objc.NSGraphicsContext:currentContext():graphicsPort()
+		objc.CGContextDrawImage(context, bounds, image)
+
+		objc.CGImageRelease(image)
+	end
+
+	function self:_free_bitmap()
+
+		--trigger a free bitmap event.
+		self.frontend:_backend_free_bitmap(bitmap)
+
+		--free image args
+		objc.CGColorSpaceRelease(colorspace)
+		objc.CGDataProviderRelease(provider)
+
+		--free the bitmap
+		ffi.C.free(data)
+		bitmap.data = nil
+		bitmap = nil
+
+		--restore stubs
+		self._paint_bitmap = stub
+		self._free_bitmap = stub
+	end
+
+	function self:_get_bitmap(w1, h1)
+
+		--replace the bitmap if its size had changed.
+		if w1 ~= w or h1 ~= h then
+			self:_free_bitmap()
+			return self:_create_bitmap(w1, h1)
+		end
+
+		return bitmap
+	end
+
+	return bitmap
+end
+
+window._paint_bitmap = stub
+window._free_bitmap = stub
+
+function window:invalidate()
+	self.nswin:contentView():setNeedsDisplay(true)
+end
+
 --views ----------------------------------------------------------------------
+
+--NOTE: you can't put a view in front of an OpenGL view. You can put a child NSWindow,
+--which will follow the parent around, but it won't be clipped by the parent.
 
 local view = {}
 window.view = view
@@ -1168,6 +1393,10 @@ glue.autoload(window, {
 	glview    = 'nw_cocoa_glview',
 })
 
+function window:getcairoview()
+	return self.cairoview
+end
+
 --menus ----------------------------------------------------------------------
 
 local menu = {}
@@ -1179,7 +1408,7 @@ function app:menu()
 	return menu:_new(self, nsmenu)
 end
 
-function window:menu()
+function window:menubar()
 	if not self.app._menu then
 		local nsmenu = self.app.nsapp:mainMenu()
 		self.app._menu = menu:_new(self.app, nsmenu)
@@ -1287,6 +1516,10 @@ function window:popup(menu, x, y)
 end
 
 --buttons --------------------------------------------------------------------
+
+
+
+objc.debug.cbframe = _cbframe --restore cbframe setting.
 
 if not ... then require'nw_test' end
 

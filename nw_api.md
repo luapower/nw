@@ -98,7 +98,7 @@ mouse																win:mouse() -> m \						win:mousedown(button) \
 
 rendering			win:invalidate()																		win:render(cr)
 
-menus					app:menu() -> menu					win:menu() -> menu \
+menus					app:menu() -> menu					win:menubar() -> menu \
 						menu:add([i,]text,action) -> i\	\												action()
 						menu:add([i,]text,menu) -> i \	\
 						menu:add(args) -> i \				\

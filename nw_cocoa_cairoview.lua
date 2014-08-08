@@ -42,9 +42,27 @@ function cairoview:rect()
 end
 
 function cairoview:_init(t)
-	self.nsview = CairoView:alloc():initWithFrame(objc.NSMakeRect(self:_flip_rect(t.x, t.y, t.w, t.h)))
-	self.window.nswin:contentView():addSubview(self.nsview)
-	self.nsview.nw_backend = self
+	if true then
+		local x, y, w, h = t.x, t.y, t.w, t.h
+		self.nsview = CairoView:alloc():initWithFrame(objc.NSMakeRect(0, 0, w, h))
+		self.nsview.nw_backend = self
+		x = x + self.window.nswin:frame().origin.x
+		y = y - self.window.nswin:frame().origin.y
+		local nsrect = objc.NSMakeRect(self:_flip_rect(x, y, w, h))
+		self.nswin = objc.NSWindow:alloc():initWithContentRect_styleMask_backing_defer(
+			nsrect, 0, objc.NSBackingStoreBuffered, false)
+		self.nswin:setOpaque(false)
+		self.nswin:setBackgroundColor(objc.NSColor:clearColor())
+		self.nswin:setContentView(self.nsview)
+		self.window.nswin:addChildWindow_ordered(self.nswin, objc.NSWindowAbove)
+	else
+		local nsrect = objc.NSMakeRect(self:_flip_rect(t.x, t.y, t.w, t.h))
+		self.nsview = CairoView:alloc():initWithFrame(nsrect)
+		self.nsview.nw_backend = self
+		self.window.nswin:contentView():addSubview(self.nsview)
+	end
+
+	--self.nsview:setWantsLayer(true)
 end
 
 function cairoview:free()
@@ -63,10 +81,10 @@ function cairoview:_create_surface()
 	local sz = self.nsview:bounds().size
 	local w, h = sz.width, sz.height
 	local stride = w * 4
-	local size = stride * h
-	self.pixels = ffi.C.malloc(size + 200)
+	self.size = stride * h
+	self.pixels = ffi.C.malloc(self.size)
 	assert(self.pixels ~= nil)
-	self.provider = objc.CGDataProviderCreateWithData(nil, self.pixels, size, nil)
+	self.provider = objc.CGDataProviderCreateWithData(nil, self.pixels, self.size, nil)
 	self.pixman_surface = cairo.cairo_image_surface_create_for_data(self.pixels,
 									cairo.CAIRO_FORMAT_ARGB32, w, h, stride)
 	self.pixman_cr = self.pixman_surface:create_context()
@@ -82,8 +100,8 @@ function cairoview:_free_surface()
 	self.pixels = nil
 end
 
-local i = 0
 function cairoview:_draw()
+	if not self.nsview then return end
 	self:_create_surface()
 
 	--CGImage expect the pixel buffer to be immutable, which is why we have to
@@ -110,6 +128,8 @@ function cairoview:_draw()
 		false, --no interpolation
 		objc.kCGRenderingIntentDefault
 	)
+
+	ffi.fill(self.pixels, self.size)
 
 	self.frontend:_backend_render(self.pixman_cr)
 

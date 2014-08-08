@@ -1,4 +1,7 @@
---native widgets winapi backend (Cosmin Apreutesei, public domain).
+
+--native widgets - winapi backend.
+--Written by Cosmin Apreutesei. Public domain.
+
 local ffi = require'ffi'
 local bit = require'bit'
 local glue = require'glue'
@@ -15,10 +18,6 @@ require'winapi.keyboard'
 require'winapi.rawinput'
 require'winapi.gdi'
 require'winapi.cursor'
-
-local function unpack_rect(rect)
-	return rect.x, rect.y, rect.w, rect.h
-end
 
 local nw = {name = 'winapi'}
 
@@ -103,12 +102,13 @@ app.window = window
 
 local Window = winapi.subclass({}, winapi.Window)
 
-local win_map = {} --win->window
+local win_map = {} --win->window, for app:active_window()
 
 function window:new(app, frontend, t)
 	self = glue.inherit({app = app, frontend = frontend}, self)
 
 	local framed = t.frame == 'normal'
+	self._layered = t.frame == 'none-transparent'
 
 	self.win = Window{
 		--state
@@ -123,7 +123,7 @@ function window:new(app, frontend, t)
 		border = framed,
 		frame = framed,
 		window_edge = framed,
-		layered = t.frame == 'transparent',
+		layered = self._layered,
 		--behavior
 		topmost = t.topmost,
 		minimize_button = t.minimizable,
@@ -133,31 +133,26 @@ function window:new(app, frontend, t)
 		receive_double_clicks = false, --we do our own double-clicking
 	}
 
-	win_map[self.win] = self.frontend
-
+	--init keyboard state
 	self.win.__wantallkeys = true --don't let IsDialogMessage() filter out our precious WM_CHARs
-
-	self.win.frontend = frontend
-	self.win.backend = self
-	self.win.app = app
-
-	self.frontend.backend = self
-
-	self:reset_keystate()
+	self:_reset_keystate()
 
 	--init mouse state
-	self:_updatemouse()
+	self:_update_mouse()
 
 	--start tracking mouse leave
 	winapi.TrackMouseEvent{hwnd = self.win.hwnd, flags = winapi.TME_LEAVE}
 
-	self._fullscreen = t.fullscreen
-	self._show_minimized = t.minimized
-	self._show_fullscreen = t.fullscreen
-	if self._show_fullscreen then
-		--until shown, we need this for maximized()
-		self._fs = {maximized = self.win.maximized}
-	end
+	--set window state
+	self._fullscreen = false
+
+	--set back-references
+	self.win.frontend = frontend
+	self.win.backend = self
+	self.win.app = app
+
+	--register window
+	win_map[self.win] = self.frontend
 
 	return self
 end
@@ -177,6 +172,7 @@ end
 
 function Window:on_destroy()
 	self.frontend:_backend_closed()
+	self.backend:_free_bitmap()
 	win_map[self] = nil
 end
 
@@ -222,9 +218,9 @@ function app:_activate_started()
 end
 
 function window:_activated()
-	self.app:_activated()
+	self.app:_activated() --window activation implies app activation.
 	self.app._last_active_window = self --for the next app:activate()
-	self:reset_keystate()
+	self:_reset_keystate()
 	if not self.app._started then
 		--defer activation if the app is not started, to emulate OSX behavior.
 		self.app._activate_window = self
@@ -235,7 +231,7 @@ function window:_activated()
 end
 
 function window:_deactivated()
-	self:reset_keystate()
+	self:_reset_keystate()
 	if not self.app._started then
 		--clear deferred activation if the app is not started, to emulate OSX behavior.
 		self.app._activate_window = nil
@@ -246,6 +242,8 @@ function window:_deactivated()
 end
 
 function app:activate()
+	--unlike OSX, in Windows you don't activate an app, you have to activate a specific window.
+	--activating this app means activating the last window that was active.
 	local win = self._last_active_window
 	if win and not win.frontend:dead() then
 		win.win:setforeground()
@@ -262,9 +260,9 @@ function app:active()
 end
 
 function window:activate()
-	--if the app is inactive, this doesn't activate the window,
+	--if the app is inactive, this function doesn't activate the window,
 	--so we want to set _last_active_window for a later call to app:activate(),
-	--which will flash this window's button.
+	--which will flash this window's button on the taskbar.
 	self.app._last_active_window = self
 	self.win:activate()
 end
@@ -274,8 +272,9 @@ function window:active()
 	return self.app._active and self.win.active or false
 end
 
---this event is received when the titlebar is activated.
---on_activate() is received even when the app is inactive and the window doesn't actually activate.
+--this event is received when the window's titlebar is activated.
+--we want this event instead of on_activate() because on_activate() is also triggered
+--when the app is inactive and the window flashes its taskbar button instead of activating.
 function Window:on_nc_activate()
 	self.backend:_activated()
 end
@@ -284,26 +283,24 @@ function Window:on_deactivate()
 	self.backend:_deactivated()
 end
 
-function Window:on_deactivate_app()
+function Window:on_deactivate_app() --triggered after on_deactivate().
 	self.app:_deactivated()
 end
 
 --state ----------------------------------------------------------------------
 
+local function unpack_rect(rect)
+	return rect.x, rect.y, rect.w, rect.h
+end
+
+local function pack_rect(rect, x, y, w, h)
+	rect = rect or winapi.RECT()
+	rect.x, rect.y, rect.w, rect.h = x, y, w, h
+	return rect
+end
+
 function window:show()
-	if self._show_minimized then
-		if self._show_fullscreen then
-			self:_enter_fullscreen(true)
-		else
-			self:minimize()
-		end
-	else
-		if self._show_fullscreen then
-			self:_enter_fullscreen()
-		else
-			self.win:show()
-		end
-	end
+	self.win:show()
 end
 
 function window:hide()
@@ -315,123 +312,114 @@ function window:visible()
 end
 
 function window:minimize()
-	self._show_minimized = nil
 	self.win:minimize()
 end
 
-function window:_maximize()
-	self._show_minimized = nil
-	self._show_fullscreen = nil
-	self.win:maximize()
-	--frameless windows maximize to the entire screen, covering the taskbar. fix that.
-	if not self.win.frame then
-		local t = self:display()
-		self.win:move(t:client_rect())
-	end
+function window:minimized()
+	return self.win.minimized
 end
+
 function window:maximize()
-	if self:fullscreen() then
-		self:_exit_fullscreen(true)
-	else
-		self:_maximize()
+	self.win:maximize()
+end
+
+function window:maximized()
+	if self._fullscreen then
+		return self._fs.maximized
+	elseif self.win.minimized then
+		return self.win.restore_to_maximized
 	end
+	return self.win.maximized
 end
 
 function window:restore()
-	if self:fullscreen() and not self:minimized() then
-		self:_exit_fullscreen()
-	else
-		self._show_minimized = nil
-		self.win:restore()
-	end
+	self.win:restore()
 end
 
 function window:shownormal()
-	self._show_minimized = nil
 	self.win:shownormal()
 end
 
-function window:_enter_fullscreen(to_minimized)
-	self._show_fullscreen = nil
+function window:get_fullscreen()
+	return self._fullscreen
+end
+
+function window:enter_fullscreen(to_minimized)
 
 	self._fs = {
-		maximized = self.win.maximized,
+		maximized = self:maximized(),
 		normal_rect = self.win.normal_rect,
 		frame = self.win.frame,
 		sizeable = self.win.sizeable,
 	}
 
+	--clear the screen for layered windows, which makes the taskbar dissapear
+	--immediately later on, when the window will be repainted.
+	self:_clear_layered()
+
+	--disable events while we're changing the frame and size.
+	local events = self.frontend:events(false)
+	self._norepaint = true --invalidate() barrier
+
+	--this flickers, but without it, the taskbar does not dissapear immediately.
 	self.win.visible = false
+
 	self.win.frame = false
 	self.win.border = false
 	self.win.sizeable = false
-	local d = self:display()
-	local r = winapi.RECT(d.x, d.y, d.x + d.w, d.y + d.h)
+	self.win.normal_rect = pack_rect(nil, self:display():rect())
+
 	if to_minimized then
-		self.win.normal_rect = r
-		assert(not self.win.visible)
-		self.restore_to_maximized = false
-		assert(not self.win.visible)
+		self.win.restore_to_maximized = false
 		self.win:minimize()
-	else
-		self.win.normal_rect = r
-		if not self.win.visible then
-			self.win:shownormal()
-		end
-	end
-
-	self._fullscreen = true
-end
-
-function window:_exit_fullscreen(to_maximized)
-	self.win.visible = false
-	self.win.frame = self._fs.frame
-	self.win.border = self._fs.frame
-	self.win.sizeable = self._fs.sizeable
-	self.win.normal_rect = self._fs.normal_rect
-	if to_maximized or self._fs.maximized then
-		self:_maximize()
 	else
 		self.win:shownormal()
 	end
 
-	self._fullscreen = false
-	self._noevents = nil
+	self._fullscreen = true
+
+	--restore events, and trigger a single resize event and a repaint.
+	self._norepaint = false
+	self.frontend:events(events)
+	self.frontend:_backend_resized'enter_fullscreen'
+	self:invalidate()
 end
 
-function window:minimized()
-	if self._show_minimized then
-		return self._show_minimized
-	end
-	return self.win.minimized
-end
+function window:exit_fullscreen(to_maximized)
 
-function window:maximized()
-	if self.win.minimized then
-		return self.win.restore_to_maximized
-	elseif self._fullscreen then
-		return self._fs.maximized
-	end
-	return self.win.maximized
-end
+	if not self:get_fullscreen() then return end
 
-function window:fullscreen(fullscreen)
-	if fullscreen ~= nil then
-		if fullscreen ~= self._fullscreen then
-			if fullscreen then
-				self:_enter_fullscreen()
-			else
-				self:_exit_fullscreen()
-			end
-		end
+	--disable events while we're changing the frame and size.
+	local events = self.frontend:events(false)
+	self._norepaint = true
+
+	if to_maximized or self._fs.maximized then
+		self.win:maximize()
 	else
-		return self._fullscreen
+		self.win:shownormal()
 	end
+	self.win.frame = self._fs.frame
+	self.win.border = self._fs.frame
+	self.win.sizeable = self._fs.sizeable
+
+	self.win.normal_rect = self._fs.normal_rect --we set this after maximize() above.
+
+	self._fullscreen = false
+
+	--restore events, and trigger a single resize event and a repaint.
+	self._norepaint = false
+	self.frontend:events(events)
+	self.frontend:_backend_resized'exit_fullscreen'
+	self:invalidate()
 end
 
 --positioning ----------------------------------------------------------------
 
 function window:get_frame_rect()
+	return unpack_rect(self.win.screen_rect)
+end
+
+function window:get_normal_rect()
 	if self._fullscreen then
 		return unpack_rect(self._fs.normal_rect)
 	else
@@ -439,16 +427,27 @@ function window:get_frame_rect()
 	end
 end
 
-function window:set_frame_rect(x, y, w, h)
+function window:set_normal_rect(x, y, w, h)
 	if self._fullscreen then
-		self._fs.normal_rect = RECT(x, y, x + w, y + h)
+		self._fs.normal_rect = pack_rect(nil, x, y, w, h)
 	else
-		self.win:set_normal_rect(x, y, x + w, y + h)
+		self.win.normal_rect = pack_rect(nil, x, y, w, h)
+		self.frontend:_backend_resized'set'
 	end
 end
 
-function window:client_rect()
+function window:get_client_rect()
 	return unpack_rect(self.win.client_rect)
+end
+
+function window:to_screen(x, y, ...)
+	local p = self.win:map_point(nil, x, y)
+	return p.x, p.y, ...
+end
+
+function window:to_client(x, y, ...)
+	local p = winapi.Windows:map_point(self.win, x, y)
+	return p.x, p.y, ...
 end
 
 function window:magnets()
@@ -464,43 +463,49 @@ function window:magnets()
 end
 
 function Window:on_begin_sizemove()
-	self.app._magnets = nil --clear magnets
+	--when moving the window, we want its position relative to
+	--the mouse position to remain constant, and we're going to enforce that.
 	local m = winapi.Windows.cursor_pos
-	self.nw_dragpoint_x = m.x - self.x
-	self.nw_dragpoint_y = m.y - self.y
+	self.nw_dx = m.x - self.x
+	self.nw_dy = m.y - self.y
+
+	--defer the start_resize event because we don't know whether
+	--it's a move or resize event at this point.
 	self.nw_start_resize = true
 end
 
 function Window:on_end_sizemove()
 	self.nw_start_resize = false
-	self.frontend:_backend_end_resize()
+	local how = self.nw_end_sizemove_how
+	self.nw_end_sizemove_how = nil
+	self.frontend:_backend_end_resize(how)
 end
 
 function Window:frame_changing(how, rect)
-	local dx = self.nw_dragpoint_x
-	local dy = self.nw_dragpoint_y
+
+	self.nw_end_sizemove_how = how
+
+	--trigger the deferred start_resize event, once.
 	if self.nw_start_resize then
 		self.nw_start_resize = false
 		self.frontend:_backend_start_resize(how)
 	end
+
 	if how == 'move' then
-		--preserve the initial drag point, regardless of how the coordinates
-		--are adjusted on each event.
+		--set window's position based on current mouse position and initial offset,
+		--regardless of how the coordinates are adjusted by the user on each event.
 		--this also emulates the default OSX behavior.
 		local m = winapi.Windows.cursor_pos
-		rect.x = m.x - dx
-		rect.y = m.y - dy
+		rect.x = m.x - self.nw_dx
+		rect.y = m.y - self.nw_dy
 	end
-	local x, y, w, h = self.frontend:_backend_resizing(how, unpack_rect(rect))
-	rect.x = x or rect.x
-	rect.y = y or rect.y
-	rect.w = w or rect.w
-	rect.h = h or rect.h
+
+	pack_rect(rect, self.frontend:_backend_resizing(how, unpack_rect(rect)))
 end
 
 function Window:on_moving(rect)
 	self:frame_changing('move', rect)
-	return true
+	return true --signal that the position was modified
 end
 
 function Window:on_resizing(how, rect)
@@ -508,32 +513,36 @@ function Window:on_resizing(how, rect)
 end
 
 function Window:on_moved()
-	if self.layered then
-		--TODO
-		--self.win_pos.x = self.x
-		--self.win_pos.y = self.y
-		self:invalidate()
-	end
+	self.frontend:_backend_resized'move'
 end
 
 function Window:on_resized(flag)
+
 	if flag == 'minimized' then
+
 		self.frontend:_backend_resized'minimize'
+
 	elseif flag == 'maximized' then
-		self:invalidate()
+
+		if self.nw_maximizing then return end
+
+		--frameless windows maximize to the entire screen, covering the taskbar. fix that.
+		if not self.frame then
+			local t = self.backend:display()
+			self.nw_maximizing = true --on_resized() barrier
+			self:move(t:client_rect())
+			self.nw_maximizing = false
+		end
+
+		self.backend:invalidate()
 		self.frontend:_backend_resized'maximize'
-	elseif flag == 'restored' then
-		self:invalidate()
-		self.frontend:_backend_resized'restore'
+
+	elseif flag == 'restored' then --also triggered on show
+
+		self.backend:invalidate()
+		self.frontend:_backend_resized'resize'
+
 	end
-end
-
-function window:mouse_pos()
-	return winapi.GetMessagePos()
-end
-
-function Window:on_pos_changed(info)
-	--self.frontend:_event'frame_changed'
 end
 
 --displays -------------------------------------------------------------------
@@ -617,20 +626,20 @@ end
 
 --frame ----------------------------------------------------------------------
 
-function window:title(title)
-	if title then
-		self.win.title = title
-	else
-		return self.win.title
-	end
+function window:get_title()
+	return self.win.title
 end
 
-function window:topmost(topmost)
-	if topmost ~= nil then
-		self.win.topmost = topmost
-	else
-		return self.win.topmost
-	end
+function window:set_title(title)
+	self.win.title = title
+end
+
+function window:get_topmost()
+	return self.win.topmost
+end
+
+function window:set_topmost(topmost)
+	self.win.topmost = topmost
 end
 
 --keyboard -------------------------------------------------------------------
@@ -671,7 +680,6 @@ local keynames = { --vkey code -> vkey name
 	[winapi.VK_NUMLOCK]  = 'numlock',     --win keyboard; mapped to 'numclear' on mac
 	[winapi.VK_SNAPSHOT] = 'printscreen', --win keyboard; mapped to 'F13' on mac; taken on windows (screen snapshot)
 	[winapi.VK_SCROLL]   = 'scrolllock',  --win keyboard; mapped to 'F14' on mac
-	[winapi.VK_PAUSE]    = 'break',       --win keyboard; mapped to 'F15' on mac
 
 	[winapi.VK_NUMPAD0] = 'num0',
 	[winapi.VK_NUMPAD1] = 'num1',
@@ -747,7 +755,10 @@ keynames_ext[true] = { --vkey code -> vkey name when flags.extended_key is true
 	[winapi.VK_RETURN]  = 'numenter',
 }
 
-local keycodes  = glue.index(keynames)
+local keycodes = {}
+for vk, name in pairs(keynames) do
+	keycodes[name:lower()] = vk
+end
 
 --additional key codes that we can query directly
 keycodes.lctrl    = winapi.VK_LCONTROL
@@ -786,14 +797,16 @@ local ignore_numlock_keys = {
 
 local numlock_off_keys = glue.index(ignore_numlock_keys)
 
-local keystate
-local repeatstate
-local altgr
+local keystate     --key state for keys that we can't get with GetKeyState()
+local repeatstate  --repeat state for keys we want to prevent repeating for.
+local altgr        --altgr flag, indicating that the next 'ralt' is actually 'altgr'.
+local realkey      --set via raw input to distinguish break from ctrl+numlock, etc.
 
-function window:reset_keystate()
+function window:_reset_keystate()
 	keystate = {}
 	repeatstate = {}
 	altgr = nil
+	realkey = nil
 end
 
 function Window:setkey(vk, flags, down)
@@ -804,15 +817,17 @@ function Window:setkey(vk, flags, down)
 		altgr = true --next key is 'ralt' which we'll make into 'altgr'
 		return
 	end
-	local name = keynames_ext[flags.extended_key][vk] or keynames[vk]
+	local name = realkey or keynames_ext[flags.extended_key][vk] or keynames[vk]
+	realkey = nil --reset realkey. important!
 	if altgr then
 		altgr = nil
 		if name == 'ralt' then
 			name = 'altgr'
 		end
 	end
-	if not keycodes[name] then --save the state of this key because we can't get it with GetKeyState()
-		keystate[name] = down
+	local searchname = name:lower()
+	if not keycodes[searchname] then --save the state of this key because we can't get it with GetKeyState()
+		keystate[searchname] = down
 	end
 	if self.app.frontend:ignore_numlock() then --ignore the state of the numlock key (for games)
 		name = ignore_numlock_keys[name] or name
@@ -821,7 +836,7 @@ function Window:setkey(vk, flags, down)
 end
 
 --prevent repeating these keys to emulate OSX behavior, and also because flags.prev_key_state
---doesn't work for them.
+--doesn't work on them.
 local norepeat = glue.index{'lshift', 'rshift', 'lalt', 'ralt', 'altgr', 'lctrl', 'rctrl', 'capslock'}
 
 function Window:on_key_down(vk, flags)
@@ -869,7 +884,7 @@ end
 
 local toggle_keys = glue.index{'capslock', 'numlock', 'scrolllock'}
 
-function window:key(name)
+function window:key(name) --name is in lowercase!
 	if name:find'^%^' then --'^key' means get the toggle state for that key
 		name = name:sub(2)
 		if not toggle_keys[name] then return false end --windows has toggle state for all keys, we don't want that.
@@ -895,12 +910,11 @@ end
 
 function Window:on_raw_input(raw)
 
-	--handle shift key presses
 	local vk = raw.data.keyboard.VKey
 	if vk == winapi.VK_SHIFT then
 		vk = winapi.MapVirtualKey(raw.data.keyboard.MakeCode, winapi.MAPVK_VSC_TO_VK_EX)
 		local key = vk == winapi.VK_LSHIFT and 'lshift' or 'rshift'
-		if bit.band(raw.data.keyboard.Flags, 1) == 0 then --keydown
+		if bit.band(raw.data.keyboard.Flags, winapi.RI_KEY_BREAK) == 0 then --keydown
 			if not repeatstate[key] then
 				keystate.shift = true
 				keystate[key] = true
@@ -914,50 +928,20 @@ function Window:on_raw_input(raw)
 			repeatstate[key] = false
 			self.frontend:_backend_keyup(key)
 		end
-	end
-end
-
---[[
-local function memoize(func)
-	local cache = setmetatable({}, {__mode = 'v'})
-	return function(k)
-		local v = cache[k]
-		if v == nil then
-			v = func(k)
-			cache[k] = v
+	elseif vk == winapi.VK_PAUSE then
+		if bit.band(raw.data.keyboard.Flags, winapi.RI_KEY_E1) == 0 then --Ctrl+Numlock
+			realkey = 'numlock'
+		else
+			realkey = 'break'
 		end
-		return v
+	elseif vk == winapi.VK_CANCEL then
+		if bit.band(raw.data.keyboard.Flags, winapi.RI_KEY_E0) == 0 then --Ctrl+ScrollLock
+			realkey = 'scrolllock'
+		else
+			realkey = 'break'
+		end
 	end
 end
-
-local parse_shortcut = memoize(function(s) --'ctrl+shift+F10' -> {'ctrl', 'shift', 'F10'}
-	--escape '+'
-	local esc
-	if s:find('num+', nil, true) then esc = true; s = s:gsub('num%+', 'num#') end
-	if s:find('++',   nil, true) then esc = true; s = s:gsub('%+%+', '+#') end
-	if s:find'^%+'               then esc = true; s = s:gsub('^%+', '#') end
-	local t = {}
-	for s in glue.gsplit(s, '+', nil, true) do
-		if esc then s = s:gsub('#', '+') end --unescape
-		t[#t+1] = s
-	end
-	return t
-end)
-
-local function get_key_combination(s) --'name+name+...'
-	if s == '' then return end
-	for i,s in ipairs(parse_shortcut(s)) do
-		if s == '' then return end
-		local down = get_key(s)
-		if not down then return down end
-	end
-	return true
-end
-
-function window:key(s)
-	return get_key_combination(s)
-end
-]]
 
 --mouse ----------------------------------------------------------------------
 
@@ -977,7 +961,7 @@ local function unpack_buttons(b)
 	return b.lbutton, b.rbutton, b.mbutton, b.xbutton1, b.xbutton2
 end
 
-function window:_updatemouse()
+function window:_update_mouse()
 	local m = self.frontend._mouse
 	local pos = self.win.cursor_pos
 	m.x = pos.x
@@ -1121,6 +1105,141 @@ function Window:on_mouse_hwheel(x, y, buttons, delta)
 	self.frontend:_backend_mousehwheel(delta, x, y)
 end
 
+function window:mouse_pos()
+	return winapi.GetMessagePos()
+end
+
+--rendering ------------------------------------------------------------------
+
+--create or replace the window's singleton bitmap which is used to draw on the window.
+function window:bitmap()
+
+	--get needed width and height.
+	local _, _, w, h = self.frontend:client_rect()
+
+	--can't make a zero-sized bitmap and there's no API to clear the screen.
+	--clearing the bitmap simulates a zero-sized bitmap on screen.
+	if w <= 0 or h <= 0 then
+		if self._bitmap then
+			self._bmp_size.w = 1
+			self._bmp_size.h = 1
+			self:_clear_layered()
+			self:_free_bitmap()
+			--we just changed the size to (1,1), change it back to (0,0).
+			self.win:resize(0, 0)
+		end
+		return
+	end
+
+	--free current bitmap if needed width or height has changed.
+	if self._bitmap then
+		local b = self._bmp_size
+		if w ~= b.w or h ~= b.h then
+			self:_free_bitmap()
+		end
+	end
+
+	--return current bitmap, if any.
+	if self._bitmap then
+		return self._bitmap
+	end
+
+	--make an ARGB32 bitmap.
+	local info = winapi.types.BITMAPINFO()
+	info.bmiHeader.biSize = ffi.sizeof'BITMAPINFO'
+	info.bmiHeader.biWidth = w
+	info.bmiHeader.biHeight = -h
+	info.bmiHeader.biPlanes = 1
+	info.bmiHeader.biBitCount = 32
+	info.bmiHeader.biCompression = winapi.BI_RGB
+
+	self._bmp_hdc = winapi.CreateCompatibleDC()
+	self._bmp, self._bmp_data = winapi.CreateDIBSection(self._bmp_hdc, info, winapi.DIB_RGB_COLORS)
+	self._old_bmp = winapi.SelectObject(self._bmp_hdc, self._bmp)
+
+	self._bitmap = {
+		w = w,
+		h = h,
+		data = ffi.cast('uint32_t*', self._bmp_data), --set pixels with 0xAARRGGBB
+		stride = w * 4,
+		size = w * h * 4,
+	}
+
+	--preallocate arguments for UpdateLayeredWindow().
+	self._win_pos = winapi.POINT()
+	self._bmp_pos = winapi.POINT()
+	self._bmp_size = winapi.SIZE(w, h)
+	self._blendfunc = winapi.types.BLENDFUNCTION{
+		AlphaFormat = winapi.AC_SRC_ALPHA,
+		BlendFlags = 0,
+		BlendOp = winapi.AC_SRC_OVER,
+		SourceConstantAlpha = 255,
+	}
+
+	return self._bitmap
+end
+
+function window:_free_bitmap()
+	if not self._bitmap then return end
+
+	--trigger a free bitmap event.
+	self.frontend:_backend_free_bitmap(self._bitmap)
+
+	winapi.SelectObject(self._bmp_hdc, self._old_bmp)
+	winapi.DeleteObject(self._bmp)
+	winapi.DeleteDC(self._bmp_hdc)
+	self._bitmap.data = nil
+	self._bitmap = nil
+end
+
+--paint the bitmap on a hdc.
+function window:_paint_bitmap(dest_hdc)
+	if not self._bitmap then return end
+	winapi.BitBlt(dest_hdc, 0, 0, self._bmp_size.w, self._bmp_size.h, self._bmp_hdc, 0, 0, winapi.SRCCOPY)
+end
+
+--update a WS_EX_LAYERED window with the bitmap.
+--the bitmap must have client_rect size, otherwise Windows resizes the window to fit the bitmap.
+function window:_update_layered()
+	if not self._bitmap then return end
+	local r = self.win.screen_rect
+	self._win_pos.x = r.x
+	self._win_pos.y = r.y
+	winapi.UpdateLayeredWindow(self.win.hwnd, nil, self._win_pos, self._bmp_size,
+		self._bmp_hdc, self._bmp_pos, 0, self._blendfunc, winapi.ULW_ALPHA)
+end
+
+function window:invalidate()
+	if self._norepaint then return end
+	if self._layered then
+		self.frontend:_backend_repaint()
+		self:_update_layered()
+	else
+		self.win:invalidate()
+	end
+end
+
+local function clamp(x, a, b)
+	return math.min(math.max(x, a), b)
+end
+
+--clear the bitmap's pixels and update the layered window.
+function window:_clear_layered()
+	if not self._bitmap or not self._layered then return end
+	ffi.fill(self._bmp_data, self._bmp_size.w * self._bmp_size.h * 4)
+	self:_update_layered()
+end
+
+function Window:WM_ERASEBKGND()
+	if not self.backend._bitmap then return end
+	return false --skip drawing the background to prevent flicker.
+end
+
+function Window:on_paint(hdc)
+	self.frontend:_backend_repaint()
+	self.backend:_paint_bitmap(hdc)
+end
+
 --views ----------------------------------------------------------------------
 
 local view = {}
@@ -1139,12 +1258,17 @@ function view:new(window, frontend, t)
 end
 
 glue.autoload(window, {
-	cairoview = 'nw_winapi_cairoview',
 	glview    = 'nw_winapi_glview',
+	cairoview = 'nw_winapi_cairoview',
+	cairoview2 = 'nw_winapi_cairoview2',
 })
 
-function window:invalidate()
-	self.backend:invalidate()
+function window:getcairoview()
+	if self._layered then
+		return self.cairoview
+	else
+		return self.cairoview2
+	end
 end
 
 --menus ----------------------------------------------------------------------
@@ -1155,7 +1279,7 @@ function app:menu()
 	return menu:_new(winapi.Menu())
 end
 
-function window:menu()
+function window:menubar()
 	if not self._menu then
 		local menubar = winapi.MenuBar()
 		self.win.menu = menubar
