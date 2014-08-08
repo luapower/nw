@@ -313,10 +313,27 @@ function window:hide()
 	self.win:hide()
 end
 
+--[[
 function Window:on_show(show)
+	--NOTE: not sent when maximized from hidden, use on_pos_changed() for that.
 	if show then
 		self.frontend:_backend_shown()
 	else
+		self.frontend:_backend_hidden()
+	end
+end
+]]
+
+function Window:on_pos_changing(winpos)
+	self.nw_visible = self.visible
+	--print('changing', self.nw_visible)
+end
+
+function Window:on_pos_changed(winpos)
+	--print('changed', self.nw_visible, winpos.flagbits.SWP_SHOWWINDOW, winpos.flagbits.SWP_HIDEWINDOW)
+	if winpos.flagbits.SWP_SHOWWINDOW and not self.nw_visible then
+		self.frontend:_backend_shown()
+	elseif winpos.flagbits.SWP_HIDEWINDOW and self.nw_visible then
 		self.frontend:_backend_hidden()
 	end
 end
@@ -529,6 +546,7 @@ function Window:on_resized(flag)
 	if flag == 'minimized' then
 
 		self.frontend:_backend_resized'minimize'
+		self.frontend:_backend_minimized()
 
 	elseif flag == 'maximized' then
 
@@ -544,12 +562,46 @@ function Window:on_resized(flag)
 
 		self.backend:invalidate()
 		self.frontend:_backend_resized'maximize'
+		self.frontend:_backend_maximized()
 
 	elseif flag == 'restored' then --also triggered on show
 
 		self.backend:invalidate()
 		self.frontend:_backend_resized'resize'
 
+		if self.minimized then
+			self.frontend:_backend_unmaximized()
+		else
+			self.frontend:_backend_unminimized()
+		end
+	end
+end
+
+--titlebar -------------------------------------------------------------------
+
+function window:get_title()
+	return self.win.title
+end
+
+function window:set_title(title)
+	self.win.title = title
+end
+
+--z-order --------------------------------------------------------------------
+
+function window:get_topmost()
+	return self.win.topmost
+end
+
+function window:set_topmost(topmost)
+	self.win.topmost = topmost
+end
+
+function window:set_zorder(mode, relto)
+	if mode == 'back' then
+		self.win:send_to_back(relto)
+	elseif mode == 'front' then
+		self.win:bring_to_front(relto)
 	end
 end
 
@@ -630,24 +682,6 @@ function Window:on_set_cursor(_, ht)
 	if not cursor then return end
 	winapi.SetCursor(winapi.LoadCursor(cursor))
 	return true --important
-end
-
---frame ----------------------------------------------------------------------
-
-function window:get_title()
-	return self.win.title
-end
-
-function window:set_title(title)
-	self.win.title = title
-end
-
-function window:get_topmost()
-	return self.win.topmost
-end
-
-function window:set_topmost(topmost)
-	self.win.topmost = topmost
 end
 
 --keyboard -------------------------------------------------------------------
@@ -884,8 +918,8 @@ end
 Window.on_syskey_down_char = Window.on_key_down_char
 
 --take control of the ALT and F10 keys
-function Window:WM_SYSCOMMAND(sc, char_code)
-	if sc == winapi.SC_KEYMENU and char_code == 0 then
+function Window:on_menu_key(char_code)
+	if char_code == 0 then
 		return 0
 	end
 end

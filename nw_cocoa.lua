@@ -258,6 +258,11 @@ function window:new(app, frontend, t)
 	--register window
 	nswin_map[objc.nptr(self.nswin)] = self.frontend
 
+	--set topmost
+	if t.topmost then
+		self:set_topmost(true)
+	end
+
 	--enable events
 	self.nswin:setDelegate(self.nswin)
 
@@ -798,6 +803,36 @@ function Window:windowDidMove()
 	self.backend:_end_frame_change()
 end
 
+--z-order --------------------------------------------------------------------
+
+function window:get_topmost()
+	return self.nswin:level() == objc.NSFloatingWindowLevel
+end
+
+function window:set_topmost(topmost)
+	if topmost then
+		self.nswin:setLevel(objc.NSFloatingWindowLevel)
+	else
+		self.nswin:setLevel(objc.NSNormalWindowLevel)
+	end
+end
+
+local modes = {front = objc.NSWindowAbove, back = objc.NSWindowBelow}
+
+function window:set_zorder(zorder, relto)
+	self.nswin:orderWindow_relativeTo(modes[zorder], relto and relto.backend.nswin or 0)
+end
+
+--titlebar -------------------------------------------------------------------
+
+function window:get_title(title)
+	return objc.tolua(self.nswin:title())
+end
+
+function window:set_title(title)
+	self.nswin:setTitle(title)
+end
+
 --displays -------------------------------------------------------------------
 
 --NOTE: screen:visibleFrame() is in virtual screen coordinates just like winapi's MONITORINFO, which is what we want.
@@ -901,24 +936,6 @@ function Window:cursorUpdate(event)
 	else
 		objc.callsuper(self, 'cursorUpdate', event)
 	end
-end
-
---frame
-
-function window:get_title(title)
-	return objc.tolua(self.nswin:title())
-end
-
-function window:set_title(title)
-	self.nswin:setTitle(title)
-end
-
-function window:get_topmost()
-	--TODO
-end
-
-function window:set_topmost(topmost)
-	--TODO
 end
 
 --keyboard -------------------------------------------------------------------

@@ -37,7 +37,7 @@ local function run_all_matching(patt)
 	end
 end
 
---window position generator
+--window position generators
 
 local x = 100
 local y = 100
@@ -51,6 +51,12 @@ local function winpos(t, same_pos)
 		end
 	end
 	return glue.update({x = x, y = y, w = 140, h = 90}, t)
+end
+
+local function cascadepos(t)
+	x = x + 50
+	y = y + 50
+	return glue.update({x = x, y = y, w = 240, h = 190}, t)
 end
 
 --event recorder/checker
@@ -847,6 +853,7 @@ for i,test in ipairs({
 
 		function win:event(e, ...)
 			if e == 'state_changed' then
+				--TODO: check flags: visible, maximized, minimized, fullscreen
 				rec(...)
 			end
 		end
@@ -855,6 +862,7 @@ for i,test in ipairs({
 
 			--run a list of commands without args on a window object.
 			for i, command in ipairs(commands) do
+				print('> '..command)
 				local fs = ffi.os == 'OSX' and win:fullscreen() or command == 'enter_fullscreen'
 				if command == 'enter_fullscreen' then
 					win:fullscreen(true)
@@ -866,6 +874,7 @@ for i,test in ipairs({
 				if fs then
 					sleep(1.5)
 				end
+				sleep(1)
 			end
 
 			--check current state flags against a flag combination string.
@@ -893,14 +902,8 @@ for i,test in ipairs({
 end
 
 add('test', function()
-	local win = app:window(winpos{edgesnapping = true})
-	function win.backend.win:on_minimize()
-		print'on_minimize'
-	end
-	function win:state_changed(how)
-		print(how)
-	end
-	make_interactive(win)
+	local win = app:window(winpos{})
+	--
 	app:run()
 end)
 
@@ -1016,6 +1019,58 @@ add('pos-conversions', function()
 	print'ok'
 end)
 
+--title ----------------------------------------------------------------------
+
+add('title', function()
+	local win = app:window(winpos{title = 'with title'})
+	assert(win:title() == 'with title')
+	win:title'changed'
+	assert(win:title() == 'changed')
+	win:close()
+end)
+
+--z-order --------------------------------------------------------------------
+
+--interactive test showing topmost.
+add('topmost', function()
+	local win = app:window(winpos{title = 'top1', x = 100, y = 100, topmost = true, autoquit = true})
+	assert(win:topmost())
+	win:topmost(false)
+	assert(not win:topmost())
+	win:topmost(true)
+	assert(win:topmost())
+
+	local win2 = app:window(winpos{title = 'top2', x = 120, y = 140, autoquit = true})
+	win2:topmost(true)
+	assert(win:topmost())
+
+	local win3 = app:window(winpos{title = 'normal1', x = 40, y = 160, autoquit = true})
+	local win4 = app:window(winpos{title = 'normal2', x = 160, y = 200, topmost = true, autoquit = true})
+	win4:topmost(false)
+
+	app:run()
+end)
+
+add('zorder', function()
+	local ix, iy = x, y
+	for i = 1,5 do
+		app:window(cascadepos{title = 'window'..i})
+	end
+	x, y = ix + 500, iy
+	for i = 1,5 do
+		app:window(cascadepos{title = 'window'..i..'-top', topmost = true})
+	end
+	function app:activated()
+		app:runafter(0.5, function()
+			app:windows()[3]:zorder'front'; assert(not app:windows()[3]:topmost())
+			app:windows()[5]:zorder'back' ; assert(not app:windows()[5]:topmost())
+			app:windows()[8]:zorder'front'; assert(app:windows()[8]:topmost())
+			app:windows()[10]:zorder'back'; assert(app:windows()[10]:topmost())
+		end)
+	end
+	app:run()
+end)
+
 --displays -------------------------------------------------------------------
 
 --client rect is fully enclosed in screen rect and has a sane size
@@ -1099,28 +1154,6 @@ end)
 add('resizeable', function()
 	local win = app:window(winpos{title = 'fixed size', resizeable = false})
 	assert(not win:resizeable())
-end)
-
---test get/set title
-
-add('title', function()
-	local win = app:window(winpos{title = 'with title'})
-	assert(win:title() == 'with title')
-	win:title'changed'
-	assert(win:title() == 'changed')
-	win:close()
-end)
-
---test get/set topmost
-
-add('topmost', function()
-	local win = app:window(winpos{topmost = true})
-	assert(win:topmost())
-	win:topmost(false)
-	assert(not win:topmost())
-	win:topmost(true)
-	assert(win:topmost())
-	win:close()
 end)
 
 --frame types

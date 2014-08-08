@@ -728,6 +728,36 @@ function window:edgesnapping(snapping)
 	end
 end
 
+--z-order --------------------------------------------------------------------
+
+function window:topmost(topmost)
+	self:_check()
+	if topmost == nil then
+		return self.backend:get_topmost()
+	else
+		self.backend:set_topmost(topmost)
+	end
+end
+
+function window:zorder(zorder, relto)
+	self:_check()
+	if relto then
+		relto:_check()
+	end
+	self.backend:set_zorder(zorder, relto)
+end
+
+--titlebar -------------------------------------------------------------------
+
+function window:title(title)
+	self:_check()
+	if title == nil then
+		return self.backend:get_title()
+	else
+		self.backend:set_title(title)
+	end
+end
+
 --displays -------------------------------------------------------------------
 
 local display = {}
@@ -773,15 +803,6 @@ end
 
 --frame ----------------------------------------------------------------------
 
-function window:title(title)
-	self:_check()
-	if title == nil then
-		return self.backend:get_title()
-	else
-		self.backend:set_title(title)
-	end
-end
-
 function window:frame() self:_check(); return self._frame end
 function window:minimizable() self:_check(); return self._minimizable end
 function window:maximizable() self:_check(); return self._maximizable end
@@ -795,17 +816,6 @@ function window:autoquit(autoquit)
 		return self._autoquit
 	else
 		self._autoquit = autoquit
-	end
-end
-
---z-order --------------------------------------------------------------------
-
-function window:topmost(topmost)
-	self:_check()
-	if topmost == nil then
-		return self.backend:get_topmost()
-	else
-		self.backend:set_topmost(topmost)
 	end
 end
 
