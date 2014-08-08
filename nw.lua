@@ -502,6 +502,14 @@ function window:show()
 	self.backend:show()
 end
 
+function window:_backend_shown()
+	self:_event('state_changed', 'show')
+end
+
+function window:_backend_hidden()
+	self:_event('state_changed', 'hide')
+end
+
 function window:hide()
 	self:_check()
 	self.backend:hide()
@@ -518,6 +526,14 @@ function window:minimize()
 	self.backend:minimize()
 end
 
+function window:_backend_minimized()
+	self:_event('state_changed', 'minimize')
+end
+
+function window:_backend_unminimized()
+	self:_event('state_changed', 'unminimize')
+end
+
 function window:maximized()
 	self:_check()
 	return self.backend:maximized()
@@ -527,6 +543,14 @@ function window:maximize()
 	self:_check()
 	if self:fullscreen() then return end --ignore because OSX can't do it
 	self.backend:maximize()
+end
+
+function window:_backend_maximized()
+	self:_event('state_changed', 'maximize')
+end
+
+function window:_backend_unmaximized()
+	self:_event('state_changed', 'unmaximize')
 end
 
 function window:restore()
@@ -547,20 +571,22 @@ end
 function window:fullscreen(fullscreen)
 	self:_check()
 	if fullscreen == nil then
-		return self.backend:get_fullscreen()
+		return self.backend:fullscreen()
 	elseif fullscreen then
+		if self:fullscreen() then return end --ignore null transition
 		self.backend:enter_fullscreen()
 	else
+		if not self:fullscreen() then return end --ignore null transition
 		self.backend:exit_fullscreen()
 	end
 end
 
-function window:_backend_fullscreen_enter()
-	self:_event'fullscreen_enter'
+function window:_backend_entered_fullscreen()
+	self:_event('state_changed', 'enter_fullscreen')
 end
 
-function window:_backend_fullscreen_exit()
-	self:_event'fullscreen_exit'
+function window:_backend_exited_fullscreen()
+	self:_event('state_changed', 'exit_fullscreen')
 end
 
 function window:state()

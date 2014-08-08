@@ -21,6 +21,18 @@ require'winapi.cursor'
 
 local nw = {name = 'winapi'}
 
+--helpers --------------------------------------------------------------------
+
+local function unpack_rect(rect)
+	return rect.x, rect.y, rect.w, rect.h
+end
+
+local function pack_rect(rect, x, y, w, h)
+	rect = rect or winapi.RECT()
+	rect.x, rect.y, rect.w, rect.h = x, y, w, h
+	return rect
+end
+
 --os version -----------------------------------------------------------------
 
 function nw:os(ver)
@@ -289,14 +301,8 @@ end
 
 --state ----------------------------------------------------------------------
 
-local function unpack_rect(rect)
-	return rect.x, rect.y, rect.w, rect.h
-end
-
-local function pack_rect(rect, x, y, w, h)
-	rect = rect or winapi.RECT()
-	rect.x, rect.y, rect.w, rect.h = x, y, w, h
-	return rect
+function window:visible()
+	return self.win.visible
 end
 
 function window:show()
@@ -307,20 +313,20 @@ function window:hide()
 	self.win:hide()
 end
 
-function window:visible()
-	return self.win.visible
-end
-
-function window:minimize()
-	self.win:minimize()
+function Window:on_show(show)
+	if show then
+		self.frontend:_backend_shown()
+	else
+		self.frontend:_backend_hidden()
+	end
 end
 
 function window:minimized()
 	return self.win.minimized
 end
 
-function window:maximize()
-	self.win:maximize()
+function window:minimize()
+	self.win:minimize()
 end
 
 function window:maximized()
@@ -332,6 +338,10 @@ function window:maximized()
 	return self.win.maximized
 end
 
+function window:maximize()
+	self.win:maximize()
+end
+
 function window:restore()
 	self.win:restore()
 end
@@ -340,7 +350,7 @@ function window:shownormal()
 	self.win:shownormal()
 end
 
-function window:get_fullscreen()
+function window:fullscreen()
 	return self._fullscreen
 end
 
@@ -386,8 +396,6 @@ function window:enter_fullscreen(to_minimized)
 end
 
 function window:exit_fullscreen(to_maximized)
-
-	if not self:get_fullscreen() then return end
 
 	--disable events while we're changing the frame and size.
 	local events = self.frontend:events(false)

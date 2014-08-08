@@ -274,25 +274,24 @@ function Window:windowShouldClose()
 	return self.frontend:_backend_closing() or false
 end
 
-function Window:nw_close()
+function window:_close()
 	self.frontend:_backend_closed()
-	nswin_map[objc.nptr(self)] = nil
-	self.backend.nswin = nil
+	nswin_map[objc.nptr(self.nswin)] = nil
+	self.nswin = nil
 end
 
 function Window:windowWillClose()
 	--defer closing on deactivation so that 'deactivated' event is sent before the 'closed' event
 	if self.backend:active() then
-		self._close_on_deactivate = true
+		self.nw_close_on_deactivate = true
 	else
-		self:nw_close()
+		self.backend:_close()
 	end
 end
 
 --activation -----------------------------------------------------------------
 
 function app:activate()
-
 	--NOTE: windows created after calling activateIgnoringOtherApps(false) go behind the active app.
 	--NOTE: windows created after calling activateIgnoringOtherApps(true) go in front of the active app.
 	--NOTE: the first call to nsapp:activateIgnoringOtherApps() doesn't also activate the main menu.
@@ -330,8 +329,8 @@ function Window:windowDidResignKey()
 	self.frontend:_backend_deactivated()
 
 	--check for deferred close
-	if self._close_on_deactivate then
-		self:nw_close()
+	if self.nw_close_on_deactivate then
+		self.backend:_close()
 	end
 end
 
@@ -362,11 +361,26 @@ function Window:canBecomeMainWindow()
 	return true
 end
 
---state ----------------------------------------------------------------------
+--state/visibility -----------------------------------------------------------
+
+function window:visible()
+	--can't use isVisible() because it also returns false when the window is minimized.
+	return self._visible
+end
+
+function window:_set_visible(visible)
+	if self._visible == visible then return end
+	self._visible = visible
+	if visible then
+		self.frontend:_backend_shown()
+	else
+		self.frontend:_backend_hidden()
+	end
+	return true
+end
 
 function window:show()
-	if self._visible then return end
-	self._visible = true
+	if not self:_set_visible(true) then return end
 	if self._show_minimized then --was minimized before hiding
 		self._show_minimized = false
 		self.nswin:miniaturize(nil)
@@ -378,27 +392,44 @@ function window:show()
 end
 
 function window:hide()
-	self._visible = false
+	if not self:_set_visible(false) then return end
 	self._show_minimized = self.nswin:isMiniaturized()
 	--TODO: orderOut() doesn't hide a window if it's the key window, instead it acts all weird:
 	--it disables mouse on it making it appear frozen.
 	self.nswin:orderOut(nil)
 end
 
-function window:visible()
-	--can't use isVisible() because it also returns false when the window is minimized.
-	return self._visible
+--state/minimization ---------------------------------------------------------
+
+function window:minimized()
+	return self._show_minimized or self.nswin:isMiniaturized()
 end
 
 function window:minimize()
-	self._visible = true
+	self:_set_visible(true)
 	--miniaturize() in fullscreen mode is ignored.
 	--miniaturize() shows the window if hidden.
 	self.nswin:miniaturize(nil)
 end
 
-function window:minimized()
-	return self._show_minimized or self.nswin:isMiniaturized()
+function Window:windowDidMiniaturize()
+	self.frontend:_backend_minimized()
+end
+
+function Window:windowDidDeminiaturize()
+	self.frontend:_backend_unminimized()
+end
+
+--state/maximization ---------------------------------------------------------
+
+function window:maximized()
+	if self._borderless or self:fullscreen() then
+		--NSWindow:isZoomed() returns true for borderless windows.
+		--NSWindow:isZoomed() returns true in fullscreen windows.
+		return self._maximized
+	else
+		return self.nswin:isZoomed()
+	end
 end
 
 --make a window maximized without showing it.
@@ -420,17 +451,36 @@ function window:_set_maximized()
 end
 
 function window:maximize()
+	self:_start_frame_change()
 	self:_set_maximized()
 	if self:minimized() then
 		self:restore()
 	else
 		self:show()
 	end
+	self:_end_frame_change()
 end
+
+function window:_start_frame_change()
+	self._started_maximized = self:maximized()
+end
+
+function window:_end_frame_change()
+	if self._started_maximized == self:maximized() then return end
+	if self._started_maximized then
+		self._started_maximized = false
+		self.frontend:_backend_unmaximized()
+	else
+		self._started_maximized = true
+		self.frontend:_backend_maximized()
+	end
+end
+
+--state/restoration ----------------------------------------------------------
 
 function window:restore()
 	if self:minimized() then
-		self._visible = true
+		self:_set_visible(true)
 		self._show_minimized = false
 		--deminiaturize() shows the window if it's hidden.
 		self.nswin:deminiaturize(nil)
@@ -439,13 +489,13 @@ function window:restore()
 			self._maximized = false
 			self:set_normal_rect(unpack(self._restore_rect))
 			self._restore_rect = nil
-			if not self._visible then
-				self:show()
-			end
+			self:show()
 		else
+			self:_start_frame_change()
 			self.nswin:zoom(nil)
 			--zoom() on a hidden window does not show it.
 			self:show()
+			self:_end_frame_change()
 		end
 	elseif not self:visible() then
 		self:show()
@@ -455,10 +505,14 @@ end
 function window:shownormal()
 	if self:minimized() then
 		if self:maximized() then
+			self:_start_frame_change()
 			self._maximized = false
 			self:set_normal_rect(unpack(self._restore_rect))
+			self:restore()
+			self:_end_frame_change()
+		else
+			self:restore()
 		end
-		self:restore()
 	elseif self:maximized() then
 		self:restore()
 	end
@@ -467,14 +521,10 @@ function window:shownormal()
 	end
 end
 
-function window:maximized()
-	if self._borderless or self:get_fullscreen() then
-		--NSWindow:isZoomed() returns true for borderless windows.
-		--NSWindow:isZoomed() returns true in fullscreen windows.
-		return self._maximized
-	else
-		return self.nswin:isZoomed()
-	end
+--state/fullscreen mode ------------------------------------------------------
+
+function window:fullscreen()
+	return bit.band(tonumber(self.nswin:styleMask()), objc.NSFullScreenWindowMask) == objc.NSFullScreenWindowMask
 end
 
 function window:enter_fullscreen()
@@ -483,11 +533,10 @@ function window:enter_fullscreen()
 end
 
 function window:exit_fullscreen()
+	if not self:visible() then
+		self:show()
+	end
 	self.nswin:toggleFullScreen(nil)
-end
-
-function window:get_fullscreen()
-	return bit.band(tonumber(self.nswin:styleMask()), objc.NSFullScreenWindowMask) == objc.NSFullScreenWindowMask
 end
 
 function Window:windowWillEnterFullScreen()
@@ -500,17 +549,19 @@ function Window:windowWillEnterFullScreen()
 	self:setFrame_display(self:screen():frame(), true)
 end
 
+function Window:windowDidEnterFullScreen()
+	self.frontend:_backend_entered_fullscreen()
+end
+
 function Window:windowWillExitFullScreen()
 	self:setStyleMask(self.nw_stylemask)
 	self:setFrame_display(self.nw_frame, true)
 end
 
-function Window:windowDidEnterFullScreen()
-	self.frontend:_backend_fullscreen_enter()
-end
-
 function Window:windowDidExitFullScreen()
-	self.frontend:_backend_fullscreen_exit()
+	--window will exit fullscreen before closing. suppress that.
+	if self.frontend:dead() then return end
+	self.frontend:_backend_exited_fullscreen()
 end
 
 --positioning ----------------------------------------------------------------
@@ -656,6 +707,7 @@ function Window:sendEvent(event)
 				self.dragging = false
 				self.mousepos = nil
 				self.frontend:_backend_end_resize'move'
+				self.backend:_end_frame_change()
 				return
 			end
 		elseif etype == objc.NSLeftMouseDown
@@ -663,6 +715,7 @@ function Window:sendEvent(event)
 			and not self:nw_titlebar_buttons_hit(event)
 			and not self:nw_resize_area_hit(event)
 		then
+			self.backend:_start_frame_change()
 			self:setmouse(event)
 			self:makeKeyAndOrderFront(nil)
 			self.app:activate()
@@ -679,7 +732,9 @@ function Window:sendEvent(event)
 	objc.callsuper(self, 'sendEvent', event)
 end
 
+--also triggered on maximize.
 function Window:windowWillStartLiveResize()
+	self.backend:_start_frame_change()
 	if not self.mousepos then
 		self.mousepos = self:mouseLocationOutsideOfEventStream()
 	end
@@ -689,8 +744,10 @@ function Window:windowWillStartLiveResize()
 	self.frontend:_backend_start_resize(self.how)
 end
 
+--also triggered on maximize.
 function Window:windowDidEndLiveResize()
 	self.frontend:_backend_end_resize()
+	self.backend:_end_frame_change()
 end
 
 function Window:nw_resizing(w_, h_)
@@ -731,6 +788,14 @@ end
 
 function Window:windowDidResize()
 	self.frontend:_backend_resized()
+end
+
+function Window:windowWillMove()
+	self.backend:_start_frame_change()
+end
+
+function Window:windowDidMove()
+	self.backend:_end_frame_change()
 end
 
 --displays -------------------------------------------------------------------
