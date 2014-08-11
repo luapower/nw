@@ -1308,7 +1308,7 @@ local function cube(w)
 end
 
 add('bitmap', function()
-	local win = app:window{w = 500, h = 300, frame = 'none-transparent', maximized = true, fullscreen = true}
+	local win = app:window{w = 500, h = 300, frame = 'none-transparent'}
 
 	function win:event(...)
 		print(...)
@@ -1591,10 +1591,58 @@ add('menu', function()
 	app:run()
 end)
 
+--notification icons ---------------------------------------------------------
+
+add('notify', function()
+	--local win = app:window(winpos())
+
+	local icon = app:notifyicon{text = 'hello', length = 80}
+
+	local menu = app:menu()
+	menu:add'Option1'
+	menu:add'Option2'
+
+	icon:tooltip'Hey imma tooltip'
+	icon:menu(menu)
+
+	local function premul(r, g, b, a)
+		return r * a, g * a, b * a, a
+	end
+
+	local function bgra8(r, g, b, a)
+		a = bit.band(a * 255, 255)
+		r = bit.band(r * 255, 255)
+		g = bit.band(g * 255, 255)
+		b = bit.band(b * 255, 255)
+		return bit.bor(bit.lshift(a, 24), bit.lshift(r, 16), bit.lshift(g, 8), b)
+	end
+
+	--paint it all blue with increasing alpha.
+	local i = 1
+	app:runevery(1/60, function()
+		local bmp = icon:bitmap()
+		local data = ffi.cast('uint32_t*', bmp.data)
+		i = (i + 1/60) % 1
+		local c = bgra8(premul(0, 0, 1, i))
+		for y=0,bmp.h-1 do
+			for x=0,bmp.w-1 do
+				data[y * bmp.w + x] = bit.band('0xffffffff', c)
+			end
+		end
+		icon:invalidate()
+	end)
+
+	app:runafter(30, function()
+		app:quit()
+	end)
+
+	app:run()
+end)
+
 --run tests ------------------------------------------------------------------
 
 local name = ...
---name = 'pos-conversions'
+name = 'notify'
 if not name then
 	print(string.format('Usage: %s name | prefix*', arg[0]))
 	print'Available tests:'

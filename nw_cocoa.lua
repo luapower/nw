@@ -281,6 +281,7 @@ end
 
 function window:_close()
 	self.frontend:_backend_closed()
+	self:_bitmap_free()
 	nswin_map[objc.nptr(self.nswin)] = nil
 	self.nswin = nil
 end
@@ -1309,61 +1310,37 @@ function window:mouse_pos()
 	--return objc.NSEvent:
 end
 
---rendering ------------------------------------------------------------------
+--dynamic bitmap mixin -------------------------------------------------------
+
+--a bitmap is acquired with bitmap(). the bitmap is recreated automatically
+--if _bitmap_size() has changed since the last time the bitmap was acquired.
+--_bitmap_paint() paints the bitmap on the current NSGraphicsContext.
+--override _bitmap_freeing() to hook something up for when the bitmap is freeed.
 
 ffi.cdef[[
 void* malloc (size_t size);
 void  free   (void*);
 ]]
 
-local View = objc.class('View', 'NSView')
+local dynbitmap = {}
 
-function View.drawRect(cpu)
-
-	--get arg1 from the ABI guts.
-	local self
-	if ffi.arch == 'x64' then
-		self = ffi.cast('id', cpu.RDI.p) --RDI = self
-	else
-		self = ffi.cast('id', cpu.ESP.dp[1].p) --ESP[1] = self
-	end
-
-	--let the user acquire the window's bitmap and draw on it.
-	self.nw_frontend:_backend_repaint()
-
-	--if bitmap acquired, paint it on the current graphics context.
-	self.nw_backend:_paint_bitmap()
-end
-
-function window:_set_content_view()
-	--create our custom view and set it as the content view.
-	local bounds = self.nswin:contentView():bounds()
-	self.nsview = View:alloc():initWithFrame(bounds)
-	self.nswin:setContentView(self.nsview)
-	self.nsview.nw_backend = self
-	self.nsview.nw_frontend = self.frontend
-end
-
-function window:bitmap()
-
-	local _, _, w, h = self.frontend:client_rect()
-
+function dynbitmap:bitmap()
+	local w, h = self:_bitmap_size()
 	--we can't create a zero-sized bitmap.
 	if w <= 0 or h <= 0 then
-		self:_free_bitmap()
+		self:_bitmap_free()
 		return
 	end
+	return self:_bitmap_get(w, h)
+end
 
-	return self:_get_bitmap(w, h)
+function dynbitmap:_bitmap_get(w, h)
+	return self:_bitmap_create(w, h)
 end
 
 local function stub() end
 
-function window:_get_bitmap(w, h)
-	return self:_create_bitmap(w, h)
-end
-
-function window:_create_bitmap(w, h)
+function dynbitmap:_bitmap_create(w, h)
 
 	local stride = w * 4
 	local size = stride * h
@@ -1374,21 +1351,26 @@ function window:_create_bitmap(w, h)
 	local bitmap = {
 		w = w,
 		h = h,
-		data = ffi.cast('uint32_t*', data), --set pixels with 0xAARRGGBB
+		data = data,
 		stride = stride,
 		size = size,
+		format = 'bgra8',
 	}
 
 	local colorspace = objc.CGColorSpaceCreateDeviceRGB()
 	local provider = objc.CGDataProviderCreateWithData(nil, data, size, nil)
+
 	local info = bit.bor(
 		ffi.abi'le' and
 			objc.kCGBitmapByteOrder32Little or
 			objc.kCGBitmapByteOrder32Big,      --native endianness
 		objc.kCGImageAlphaPremultipliedFirst) --ARGB32
-	local bounds = objc.NSMakeRect(0, 0, w, h)
 
-	function self:_paint_bitmap()
+	local bounds = ffi.new'CGRect'
+	bounds.size.width = w
+	bounds.size.height = h
+
+	function self:_bitmap_paint()
 
 		--CGImage expects the pixel buffer to be immutable, which is why
 		--we create a new one every time. bummer.
@@ -1404,16 +1386,18 @@ function window:_create_bitmap(w, h)
 			objc.kCGRenderingIntentDefault)
 
 		--get the current graphics context and draw our image on it.
-		local context = objc.NSGraphicsContext:currentContext():graphicsPort()
-		objc.CGContextDrawImage(context, bounds, image)
+		local context = objc.NSGraphicsContext:currentContext()
+		local graphicsport = context:graphicsPort()
+		context:setCompositingOperation(objc.NSCompositeCopy)
+		objc.CGContextDrawImage(graphicsport, bounds, image)
 
 		objc.CGImageRelease(image)
 	end
 
-	function self:_free_bitmap()
+	function self:_bitmap_free()
 
 		--trigger a free bitmap event.
-		self.frontend:_backend_free_bitmap(bitmap)
+		self:_bitmap_freeing(bitmap)
 
 		--free image args
 		objc.CGColorSpaceRelease(colorspace)
@@ -1425,16 +1409,16 @@ function window:_create_bitmap(w, h)
 		bitmap = nil
 
 		--restore stubs
-		self._paint_bitmap = stub
-		self._free_bitmap = stub
+		self._bitmap_paint = stub
+		self._bitmap_free = stub
 	end
 
-	function self:_get_bitmap(w1, h1)
+	function self:_bitmap_get(w1, h1)
 
 		--replace the bitmap if its size had changed.
 		if w1 ~= w or h1 ~= h then
-			self:_free_bitmap()
-			return self:_create_bitmap(w1, h1)
+			self:_bitmap_free()
+			return self:_bitmap_create(w1, h1)
 		end
 
 		return bitmap
@@ -1443,8 +1427,50 @@ function window:_create_bitmap(w, h)
 	return bitmap
 end
 
-window._paint_bitmap = stub
-window._free_bitmap = stub
+dynbitmap._bitmap_paint = stub
+dynbitmap._bitmap_free = stub
+dynbitmap._bitmap_freeing = stub
+dynbitmap._bitmap_size = stub
+
+--rendering ------------------------------------------------------------------
+
+local View = objc.class('View', 'NSView')
+
+glue.update(window, dynbitmap) --add the dynbitmap mixin
+
+function View.drawRect(cpu)
+
+	--get arg1 from the ABI guts.
+	local self
+	if ffi.arch == 'x64' then
+		self = ffi.cast('id', cpu.RDI.p) --RDI = self
+	else
+		self = ffi.cast('id', cpu.ESP.dp[1].p) --ESP[1] = self
+	end
+
+	--let the user acquire the window's bitmap and draw on it.
+	self.nw_frontend:_backend_repaint()
+
+	--paint the bitmap on the current graphics context.
+	self.nw_backend:_bitmap_paint()
+end
+
+function window:_set_content_view()
+	--create our custom view and set it as the content view.
+	local bounds = self.nswin:contentView():bounds()
+	self.nsview = View:alloc():initWithFrame(bounds)
+	self.nswin:setContentView(self.nsview)
+	self.nsview.nw_backend = self
+	self.nsview.nw_frontend = self.frontend
+end
+
+function window:_bitmap_freeing(bitmap)
+	self.frontend:_backend_free_bitmap(bitmap)
+end
+
+function window:_bitmap_size()
+	return select(3, self.frontend:client_rect())
+end
 
 function window:invalidate()
 	self.nswin:contentView():setNeedsDisplay(true)
@@ -1595,6 +1621,93 @@ end
 function window:popup(menu, x, y)
 	local p = objc.NSMakePoint(x, self:_flip_y(y))
 	menu.backend.nsmenu:popUpMenuPositioningItem_atLocation_inView(nil, p, self.nswin:contentView())
+end
+
+--notification icons ---------------------------------------------------------
+
+local notifyicon = {}
+app.notifyicon = notifyicon
+
+function notifyicon:new(app, frontend, opt)
+	self = glue.inherit({app = app, frontend = frontend}, notifyicon)
+
+	local length = opt and opt.length or self:_bitmap_size()
+
+	self.si = objc.NSStatusBar:systemStatusBar():statusItemWithLength(length)
+	self.si.backend = self
+	self.si.frontend = frontend
+
+	self.si:setHighlightMode(true)
+
+	if opt and opt.tooltip then self:set_tooltip(opt.tooltip) end
+	if opt and opt.menu then self:set_menu(opt.menu) end
+	if opt and opt.text then self:set_text(opt.text) end
+
+	return self
+end
+
+function notifyicon:free()
+	self:_bitmap_free()
+	objc.NSStatusBar:systemStatusBar():removeStatusItem(self.si)
+	self.si:release()
+	self.si = nil
+end
+
+glue.update(notifyicon, dynbitmap) --add the dynbitmap mixin
+
+function notifyicon:_bitmap_size()
+	local h = objc.NSStatusBar:systemStatusBar():thickness()
+	return h, h --return a square rectangle to emulate Windows behavior
+end
+
+function notifyicon:_bitmap_freeing(bitmap)
+	self.frontend:_backend_free_bitmap(bitmap)
+	self.si:setImage(nil)
+	self.nsimage:release()
+	self.nsimage = nil
+end
+
+function notifyicon:invalidate()
+	self.nsimage = self.nsimage or
+		objc.NSImage:alloc():initWithSize(objc.NSMakeSize(self:_bitmap_size()))
+	self.nsimage:lockFocus()
+	self:_bitmap_paint()
+	self.nsimage:unlockFocus()
+	--we have to set the image every time or the menu bar won't be updated.
+	self.si:setImage(self.nsimage)
+end
+
+function notifyicon:get_tooltip()
+	return objc.tolua(self.si:tooltip())
+end
+
+function notifyicon:set_tooltip(tooltip)
+	self.si:setToolTip(tooltip)
+end
+
+function notifyicon:get_menu()
+	return self.menu
+end
+
+function notifyicon:set_menu(menu)
+	self.menu = menu
+	self.si:setMenu(menu.backend.nsmenu)
+end
+
+function notifyicon:get_text() --OSX specific
+	return objc.tolua(self.si:title())
+end
+
+function notifyicon:set_text(text)  --OSX specific
+	self.si:setTitle(text)
+end
+
+function notifyicon:get_length() --OSX specific
+	return self.si:length()
+end
+
+function notifyicon:set_length(length)  --OSX specific
+	self.si:setLength(length)
 end
 
 --buttons --------------------------------------------------------------------

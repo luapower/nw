@@ -113,6 +113,20 @@ function object:_check()
 	assert(not self._dead, 'dead object')
 end
 
+--create a read/write property that is implemented via a getter and setter in the backend.
+function object:_property(name)
+	local getter = 'get_'..name
+	local setter = 'set_'..name
+	self[name] = function(self, on)
+		self:_check()
+		if on == nil then
+			return self.backend[getter](self.backend)
+		else
+			self.backend[setter](self.backend, on)
+		end
+	end
+end
+
 --events ---------------------------------------------------------------------
 
 --register an observer to be called for a specific event
@@ -182,6 +196,7 @@ function app:_new(nw, backend_class)
 	self = glue.inherit({nw = nw}, self)
 	self._running = false
 	self._windows = {} --{window1, ...}
+	self._notifyicons = {} --{icon = true}
 	self._autoquit = self.defaults.autoquit
 	self._ignore_numlock = self.defaults.ignore_numlock
 	self.backend = backend_class:new(self)
@@ -246,6 +261,8 @@ function app:_forcequit()
 	end
 
 	if self:window_count() == 0 then --no windows created while closing
+		--free notify icons otherwise they hang around (both in XP and in OSX).
+		self:_free_notifyicons()
 		self.backend:stop()
 	end
 
@@ -416,7 +433,6 @@ function window:_forceclose()
 end
 
 function window:close()
-	self:_check()
 	if self:_backend_closing() then
 		self:_forceclose()
 	end
@@ -730,14 +746,7 @@ end
 
 --z-order --------------------------------------------------------------------
 
-function window:topmost(topmost)
-	self:_check()
-	if topmost == nil then
-		return self.backend:get_topmost()
-	else
-		self.backend:set_topmost(topmost)
-	end
-end
+window:_property'topmost'
 
 function window:zorder(zorder, relto)
 	self:_check()
@@ -749,14 +758,7 @@ end
 
 --titlebar -------------------------------------------------------------------
 
-function window:title(title)
-	self:_check()
-	if title == nil then
-		return self.backend:get_title()
-	else
-		self.backend:set_title(title)
-	end
-end
+window:_property'title'
 
 --displays -------------------------------------------------------------------
 
@@ -1069,7 +1071,7 @@ end
 
 --menus ----------------------------------------------------------------------
 
-local menu = {}
+local menu = glue.update({}, object)
 
 function wrap_menu(backend, menutype)
 	if backend.frontend then
@@ -1178,21 +1180,68 @@ function menu:items(var)
 	return t
 end
 
-function menu:checked(index, checked)
-	if checked == nil then
-		return self.backend:get_checked(index)
-	else
-		self.backend:set_checked(index, checked)
+menu:_property'checked'
+menu:_property'enabled'
+
+--notification icons ---------------------------------------------------------
+
+local notifyicon = glue.update({}, object)
+
+function app:notifyicon(opt)
+	local icon = notifyicon:_new(self, self.backend.notifyicon, opt)
+	table.insert(self._notifyicons, icon)
+	return icon
+end
+
+function notifyicon:_new(app, backend_class, opt)
+	self = glue.inherit({app = app}, self)
+	self.backend = backend_class:new(app.backend, self, opt)
+	return self
+end
+
+function notifyicon:free()
+	if self._dead then return end
+	self.backend:free()
+	self._dead = true
+	table.remove(self.app._notifyicons, indexof(self, self.app._notifyicons))
+end
+
+function app:_free_notifyicons() --called on app:quit()
+	while #self._notifyicons > 0 do
+		self._notifyicons[#self._notifyicons]:free()
 	end
 end
 
-function menu:enabled(index, enabled)
-	if enabled == nil then
-		return self.backend:get_enabled(index)
-	else
-		self.backend:set_enabled(index, enabled)
+function app:notifyicon_count()
+	return #self._notifyicons
+end
+
+function app:notifyicons()
+	return glue.extend({}, self._notifyicons) --take a snapshot
+end
+
+function notifyicon:bitmap()
+	self:_check()
+	return self.backend:bitmap()
+end
+
+function notifyicon:invalidate()
+	return self.backend:invalidate()
+end
+
+function notifyicon:_backend_free_bitmap(bitmap)
+	self:_event('free_bitmap', bitmap)
+
+	--call a user-supplied bitmap destructor.
+	if bitmap.free then
+		bitmap:free()
 	end
 end
+
+notifyicon:_property'tooltip'
+notifyicon:_property'menu'
+notifyicon:_property'text' --OSX only
+notifyicon:_property'length' --OSX only
 
 --buttons --------------------------------------------------------------------
 

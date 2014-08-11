@@ -18,6 +18,9 @@ require'winapi.keyboard'
 require'winapi.rawinput'
 require'winapi.gdi'
 require'winapi.cursor'
+require'winapi.icon'
+require'winapi.notifyiconclass'
+require'winapi.gdi'
 
 local nw = {name = 'winapi'}
 
@@ -992,8 +995,8 @@ function app:double_click_time() --milliseconds
 end
 
 function app:double_click_target_area()
-	local w = winapi.GetSystemMetrics(winapi.SM_CXDOUBLECLK)
-	local h = winapi.GetSystemMetrics(winapi.SM_CYDOUBLECLK)
+	local w = winapi.GetSystemMetrics'SM_CXDOUBLECLK'
+	local h = winapi.GetSystemMetrics'SM_CYDOUBLECLK'
 	return w, h
 end
 
@@ -1186,8 +1189,8 @@ function window:bitmap()
 		return self._bitmap
 	end
 
-	--make an ARGB32 bitmap.
-	local info = winapi.types.BITMAPINFO()
+	--make an litle-endian-ARGB32 (i.e. bgra8) bitmap.
+	local info = BITMAPINFO()
 	info.bmiHeader.biSize = ffi.sizeof'BITMAPINFO'
 	info.bmiHeader.biWidth = w
 	info.bmiHeader.biHeight = -h
@@ -1202,9 +1205,10 @@ function window:bitmap()
 	self._bitmap = {
 		w = w,
 		h = h,
-		data = ffi.cast('uint32_t*', self._bmp_data), --set pixels with 0xAARRGGBB
+		data = self._bmp_data,
 		stride = w * 4,
 		size = w * h * 4,
+		format = 'bgra8',
 	}
 
 	--preallocate arguments for UpdateLayeredWindow().
@@ -1394,6 +1398,168 @@ end
 
 function window:popup(menu, x, y)
 	menu.backend.winmenu:popup(self.win, x, y)
+end
+
+--notification icons ---------------------------------------------------------
+
+local notifyicon = {}
+app.notifyicon = notifyicon
+
+local NotifyIcon = winapi.subclass({}, winapi.NotifyIcon)
+
+--get the singleton hidden window used to route mouse messages through.
+local notifywindow
+function notifyicon:_notify_window()
+	notifywindow = notifywindow or winapi.Window{visible = false}
+	return notifywindow
+end
+
+function notifyicon:new(app, frontend, opt)
+	self = glue.inherit({app = app, frontend = frontend}, notifyicon)
+
+	self.icon = NotifyIcon{window = self:_notify_window()}
+	self.icon.backend = self
+	self.icon.frontend = frontend
+
+	self:_get_icon_api()
+
+	return self
+end
+
+function notifyicon:free()
+	self.icon:free()
+	self.icon = nil
+end
+
+function NotifyIcon:on_rbutton_up()
+	--if a menu was assigned, pop it up on right-click.
+	local menu = self.backend.menu
+	if menu and not menu:dead() then
+		local win = self.backend:_notify_window()
+		local pos = win.cursor_pos
+		menu.backend.winmenu:popup(win, pos.x, pos.y)
+	end
+end
+
+--make an API composed of two functions: one that gives you a bitmap to draw into,
+--and another that creates a new icon everytime it is called with the contents of that bitmap.
+--the bitmap is reused, and recreated only if the icon size changed since last access.
+--the bitmap is in bgra8 format with premultiplied alpha.
+local function drawable_icon_api()
+
+	local w, h, bmp, data, maskbmp
+
+	local function free_bitmaps()
+		if not bmp then return end
+		winapi.DeleteObject(bmp)
+		winapi.DeleteObject(maskbmp)
+		w, h, bmp, data, maskbmp = nil
+	end
+
+	local bi = winapi.BITMAPV5HEADER()
+	local pbi = ffi.cast('BITMAPINFO*', bi)
+
+	local function recreate_bitmaps(w1, h1)
+		free_bitmaps()
+
+		w, h = w1, h1
+		bi.bV5Width  = w
+		bi.bV5Height = h
+
+		bi.bV5Planes = 1
+		bi.bV5BitCount = 32
+		bi.bV5Compression = winapi.BI_BITFIELDS
+		-- this mask specifies a supported 32 BPP alpha format for Windows XP.
+		bi.bV5RedMask   = 0x00FF0000
+		bi.bV5GreenMask = 0x0000FF00
+		bi.bV5BlueMask  = 0x000000FF
+		bi.bV5AlphaMask = 0xFF000000
+
+		-- Create a little-endian-ARGB32 (i.e. 'bgra8') bitmap.
+		local hdc = winapi.GetDC()
+		bmp, data = winapi.CreateDIBSection(hdc, pbi, winapi.DIB_RGB_COLORS)
+		winapi.ReleaseDC(nil, hdc)
+
+		-- Create an empty mask bitmap.
+		maskbmp = winapi.CreateBitmap(w, h, 1, 1)
+	end
+
+	local icon
+
+	local function free_icon()
+		if not icon then return end
+		winapi.DestroyIcon(icon)
+		icon = nil
+	end
+
+	local ii = winapi.ICONINFO()
+
+	local function recreate_icon()
+		free_icon()
+
+		ii.fIcon = true --icon, not cursor
+		ii.xHotspot = 0
+		ii.yHotspot = 0
+		ii.hbmMask = maskbmp
+		ii.hbmColor = bmp
+
+		icon = winapi.CreateIconIndirect(ii)
+	end
+
+	local function size()
+		local w = winapi.GetSystemMetrics'SM_CXSMICON'
+		return w, w
+	end
+
+	local bitmap
+
+	local function get_bitmap()
+		local w1, h1 = size()
+		if w1 ~= w or h1 ~= h then
+			recreate_bitmaps(w1, h1)
+			bitmap = {
+				w = w,
+				h = h,
+				data = data,
+				stride = w * 4,
+				size = w * h * 4,
+				format = 'bgra8',
+			}
+		end
+		return bitmap
+	end
+
+	local function get_icon()
+		if not bmp then return end
+		recreate_icon()
+		return icon
+	end
+
+	return get_bitmap, get_icon
+end
+
+function notifyicon:_get_icon_api()
+	self.bitmap, self._get_icon = drawable_icon_api()
+end
+
+function notifyicon:invalidate()
+	self.icon.icon = self._get_icon()
+end
+
+function notifyicon:get_tooltip()
+	return self.icon.tip
+end
+
+function notifyicon:set_tooltip(tooltip)
+	self.icon.tip = tooltip
+end
+
+function notifyicon:get_menu()
+	return self.menu
+end
+
+function notifyicon:set_menu(menu)
+	self.menu = menu
 end
 
 --buttons --------------------------------------------------------------------
