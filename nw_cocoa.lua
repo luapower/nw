@@ -78,19 +78,8 @@ function app:new(frontend)
 	--disable mouse coalescing so that mouse move events are not skipped.
 	objc.NSEvent:setMouseCoalescingEnabled(false)
 
-	--NOTE: the app's menu bar _and_ the app menu (the first menu item) must be created
-	--before the app is activated, otherwise the app menu title will be replaced with
-	--a little apple icon to your desperation!
-	local menubar = objc.NSMenu:new()
-	menubar:setAutoenablesItems(false)
-	self.nsapp:setMainMenu(menubar)
-	ffi.gc(menubar, nil)
-	local appmenu = objc.NSMenu:new()
-	local appmenuitem = objc.NSMenuItem:new()
-	appmenuitem:setSubmenu(appmenu)
-	ffi.gc(appmenu, nil)
-	menubar:addItem(appmenuitem)
-	ffi.gc(appmenuitem, nil)
+	--the menubar must be initialized _before_ the app is activated.
+	self:_init_menubar()
 
 	--activate the app before windows are created.
 	self:activate()
@@ -244,8 +233,8 @@ function window:new(app, frontend, t)
 		self:_set_maximized()
 	end
 
-	--set drawable content view
-	self:_set_content_view()
+	--init drawable content view
+	self:_init_content_view()
 
 	--set window state
 	self._visible = false
@@ -281,7 +270,7 @@ end
 
 function window:_close()
 	self.frontend:_backend_closed()
-	self:_bitmap_free()
+	self:_free_bitmap()
 	nswin_map[objc.nptr(self.nswin)] = nil
 	self.nswin = nil
 end
@@ -1310,37 +1299,19 @@ function window:mouse_pos()
 	--return objc.NSEvent:
 end
 
---dynamic bitmap mixin -------------------------------------------------------
-
---a bitmap is acquired with bitmap(). the bitmap is recreated automatically
---if _bitmap_size() has changed since the last time the bitmap was acquired.
---_bitmap_paint() paints the bitmap on the current NSGraphicsContext.
---override _bitmap_freeing() to hook something up for when the bitmap is freeed.
+--dynamic bitmaps ------------------------------------------------------------
 
 ffi.cdef[[
 void* malloc (size_t size);
 void  free   (void*);
 ]]
 
-local dynbitmap = {}
+--make a bitmap that can be painted on the current NSGraphicsContext.
+--to that effect, a paint() function and a free() function are provided along with the bitmap.
+local function make_bitmap(w, h)
 
-function dynbitmap:bitmap()
-	local w, h = self:_bitmap_size()
-	--we can't create a zero-sized bitmap.
-	if w <= 0 or h <= 0 then
-		self:_bitmap_free()
-		return
-	end
-	return self:_bitmap_get(w, h)
-end
-
-function dynbitmap:_bitmap_get(w, h)
-	return self:_bitmap_create(w, h)
-end
-
-local function stub() end
-
-function dynbitmap:_bitmap_create(w, h)
+	--can't create a zero-sized bitmap
+	if w <= 0 or h <= 0 then return end
 
 	local stride = w * 4
 	local size = stride * h
@@ -1370,7 +1341,7 @@ function dynbitmap:_bitmap_create(w, h)
 	bounds.size.width = w
 	bounds.size.height = h
 
-	function self:_bitmap_paint()
+	local function paint()
 
 		--CGImage expects the pixel buffer to be immutable, which is why
 		--we create a new one every time. bummer.
@@ -1394,10 +1365,12 @@ function dynbitmap:_bitmap_create(w, h)
 		objc.CGImageRelease(image)
 	end
 
-	function self:_bitmap_free()
+	local function free()
 
-		--trigger a free bitmap event.
-		self:_bitmap_freeing(bitmap)
+		--trigger a user-supplied destructor
+		if bitmap.free then
+			bitmap:free()
+		end
 
 		--free image args
 		objc.CGColorSpaceRelease(colorspace)
@@ -1407,38 +1380,53 @@ function dynbitmap:_bitmap_create(w, h)
 		ffi.C.free(data)
 		bitmap.data = nil
 		bitmap = nil
-
-		--restore stubs
-		self._bitmap_paint = stub
-		self._bitmap_free = stub
 	end
 
-	function self:_bitmap_get(w1, h1)
+	return bitmap, free, paint
+end
 
-		--replace the bitmap if its size had changed.
+--a dynamic bitmap is an API that creates a new bitmap everytime its size
+--changes. user supplies the :size() function, :get() gets the bitmap,
+--and :freeing(bitmap) is triggered before the bitmap is freed.
+local function dynbitmap(api)
+
+	api = api or {}
+
+	local w, h, bitmap, free, paint
+
+	function api:get()
+		local w1, h1 = api:size()
 		if w1 ~= w or h1 ~= h then
-			self:_bitmap_free()
-			return self:_bitmap_create(w1, h1)
+			self:free()
+			bitmap, free, paint = make_bitmap(w1, h1)
+			w, h = w1, h1
 		end
-
 		return bitmap
 	end
 
-	return bitmap
+	function api:free()
+		if free then
+			self:freeing(bitmap)
+			free()
+		end
+	end
+
+	function api:paint()
+		if paint then
+			paint()
+		end
+	end
+
+	return api
 end
 
-dynbitmap._bitmap_paint = stub
-dynbitmap._bitmap_free = stub
-dynbitmap._bitmap_freeing = stub
-dynbitmap._bitmap_size = stub
+--repaint views --------------------------------------------------------------
 
---rendering ------------------------------------------------------------------
+--a repaint view calls the Lua method nw_repaint() on drawRect().
 
-local View = objc.class('View', 'NSView')
+local RepaintView = objc.class('View', 'NSView')
 
-glue.update(window, dynbitmap) --add the dynbitmap mixin
-
-function View.drawRect(cpu)
+function RepaintView.drawRect(cpu)
 
 	--get arg1 from the ABI guts.
 	local self
@@ -1448,28 +1436,46 @@ function View.drawRect(cpu)
 		self = ffi.cast('id', cpu.ESP.dp[1].p) --ESP[1] = self
 	end
 
-	--let the user acquire the window's bitmap and draw on it.
-	self.nw_frontend:_backend_repaint()
-
-	--paint the bitmap on the current graphics context.
-	self.nw_backend:_bitmap_paint()
+	self:nw_repaint()
 end
 
-function window:_set_content_view()
+--rendering ------------------------------------------------------------------
+
+function window:_init_content_view()
+
+	--create the dynbitmap to paint on the content view.
+	self._dynbitmap = dynbitmap{
+		size = function()
+			return select(3, self.frontend:client_rect())
+		end,
+		freeing = function(_, bitmap)
+			self.frontend:_backend_free_bitmap(bitmap)
+		end,
+	}
+
 	--create our custom view and set it as the content view.
 	local bounds = self.nswin:contentView():bounds()
-	self.nsview = View:alloc():initWithFrame(bounds)
+
+	self.nsview = RepaintView:alloc():initWithFrame(bounds)
+
+	function self.nsview.nw_repaint()
+
+		--let the user request the bitmap and draw on it.
+		self.frontend:_backend_repaint()
+
+		--paint the bitmap on the current graphics context.
+		self._dynbitmap:paint()
+	end
+
 	self.nswin:setContentView(self.nsview)
-	self.nsview.nw_backend = self
-	self.nsview.nw_frontend = self.frontend
 end
 
-function window:_bitmap_freeing(bitmap)
-	self.frontend:_backend_free_bitmap(bitmap)
+function window:bitmap()
+	return self._dynbitmap:get()
 end
 
-function window:_bitmap_size()
-	return select(3, self.frontend:client_rect())
+function window:_free_bitmap()
+	self._dynbitmap:free()
 end
 
 function window:invalidate()
@@ -1510,19 +1516,26 @@ end
 local menu = {}
 nw._menu_class = menu
 
+function app:_init_menubar()
+	--NOTE: the app's menu bar _and_ the app menu (the first menu item) must be created
+	--before the app is activated, otherwise the app menu title will be replaced with
+	--a little apple icon to your desperation!
+	local menubar = objc.NSMenu:new()
+	menubar:setAutoenablesItems(false)
+	self.nsapp:setMainMenu(menubar)
+	ffi.gc(menubar, nil)
+	local appmenu = objc.NSMenu:new()
+	local appmenuitem = objc.NSMenuItem:new()
+	appmenuitem:setSubmenu(appmenu)
+	ffi.gc(appmenu, nil)
+	menubar:addItem(appmenuitem)
+	ffi.gc(appmenuitem, nil)
+end
+
 function app:menu()
 	local nsmenu = objc.NSMenu:new()
 	nsmenu:setAutoenablesItems(false)
 	return menu:_new(self, nsmenu)
-end
-
-function window:menubar()
-	if not self.app._menu then
-		local nsmenu = self.app.nsapp:mainMenu()
-		self.app._menu = menu:_new(self.app, nsmenu)
-		self.app._menu:remove(1) --remove the dummy app menu created on app startup
-	end
-	return self.app._menu
 end
 
 function menu:_new(app, nsmenu)
@@ -1618,6 +1631,16 @@ function menu:set_enabled(index, enabled)
 	self.nsmenu:itemAtIndex(index-1):setEnabled(enabled)
 end
 
+--in OSX, there's a single menu bar for the whole app.
+function app:menubar()
+	if not self._menu then
+		local nsmenu = self.nsapp:mainMenu()
+		self._menu = menu:_new(self, nsmenu)
+		self._menu:remove(1) --remove the dummy app menu created on app startup
+	end
+	return self._menu
+end
+
 function window:popup(menu, x, y)
 	local p = objc.NSMakePoint(x, self:_flip_y(y))
 	menu.backend.nsmenu:popUpMenuPositioningItem_atLocation_inView(nil, p, self.nswin:contentView())
@@ -1632,10 +1655,21 @@ function notifyicon:new(app, frontend, opt)
 	self = glue.inherit({app = app, frontend = frontend}, notifyicon)
 
 	local length = opt and opt.length or self:_bitmap_size()
-
 	self.si = objc.NSStatusBar:systemStatusBar():statusItemWithLength(length)
 	self.si.backend = self
 	self.si.frontend = frontend
+
+	self._dynbitmap = dynbitmap{
+		size = function()
+			return self:_bitmap_size()
+		end,
+		freeing = function(_, bitmap)
+			self.frontend:_backend_free_bitmap(bitmap)
+			self.si:setImage(nil)
+			self.nsimage:release()
+			self.nsimage = nil
+		end,
+	}
 
 	self.si:setHighlightMode(true)
 
@@ -1647,34 +1681,35 @@ function notifyicon:new(app, frontend, opt)
 end
 
 function notifyicon:free()
-	self:_bitmap_free()
+	self._dynbitmap:free()
 	objc.NSStatusBar:systemStatusBar():removeStatusItem(self.si)
 	self.si:release()
 	self.si = nil
 end
 
-glue.update(notifyicon, dynbitmap) --add the dynbitmap mixin
+function notifyicon:bitmap()
+	return self._dynbitmap:get()
+end
 
 function notifyicon:_bitmap_size()
 	local h = objc.NSStatusBar:systemStatusBar():thickness()
 	return h, h --return a square rectangle to emulate Windows behavior
 end
 
-function notifyicon:_bitmap_freeing(bitmap)
-	self.frontend:_backend_free_bitmap(bitmap)
-	self.si:setImage(nil)
-	self.nsimage:release()
-	self.nsimage = nil
+function notifyicon:invalidate()
+	self.frontend:_backend_repaint()
+	if not self.nsimage then
+		self.nsimage = objc.NSImage:alloc():initWithSize(objc.NSMakeSize(self:_bitmap_size()))
+	end
+	self.nsimage:lockFocus()
+	self._dynbitmap:paint()
+	self.nsimage:unlockFocus()
+	--we have to set the image every time or the icon won't be updated.
+	self.si:setImage(self.nsimage)
 end
 
-function notifyicon:invalidate()
-	self.nsimage = self.nsimage or
-		objc.NSImage:alloc():initWithSize(objc.NSMakeSize(self:_bitmap_size()))
-	self.nsimage:lockFocus()
-	self:_bitmap_paint()
-	self.nsimage:unlockFocus()
-	--we have to set the image every time or the menu bar won't be updated.
-	self.si:setImage(self.nsimage)
+function notifyicon:rect()
+	return flip_screen_rect(nil, unpack_nsrect(self.si:valueForKey('window'):frame()))
 end
 
 function notifyicon:get_tooltip()
@@ -1708,6 +1743,154 @@ end
 
 function notifyicon:set_length(length)  --OSX specific
 	self.si:setLength(length)
+end
+
+--window icon ----------------------------------------------------------------
+
+--TODO: self.nswin:standardWindowButton(objc.NSWindowDocumentIconButton) returns null
+--TODO: the window icon for OSX has a different purpose and there's only one, not two.
+
+function window:_icon_size()
+	self.nswin:standardWindowButton(objc.NSWindowDocumentIconButton):image():size()
+end
+
+function window:icon_bitmap()
+	if not self._icon_dynbitmap then
+		--create the dynbitmap to paint on the content view.
+		self._icon_dynbitmap = dynbitmap{
+			size = function()
+				return self:_icon_size()
+			end,
+			freeing = function(_, bitmap)
+				self.frontend:_backend_icon_free_bitmap(bitmap)
+				self.nswin:standardWindowButton(objc.NSWindowDocumentIconButton):setImage(nil)
+				self.nsiconimage:release()
+				self.nsiconimage = nil
+			end,
+		}
+	end
+	return self._icon_dynbitmap:get()
+end
+
+function window:invalidate_icon()
+	if not self._icon_dynbitmap then return end
+	if not self.nsiconimage then
+		self.nsiconimage = objc.NSImage:alloc():initWithSize(objc.NSMakeSize(self:_icon_size()))
+	end
+	self.nsiconimage:lockFocus()
+	self._icon_dynbitmap:paint()
+	self.nsiconimage:unlockFocus()
+	--we must set the image every time or the icon won't be updated.
+	self.nswin:standardWindowButton(objc.NSWindowDocumentIconButton):setImage(self.nsiconimage)
+end
+
+--dock icon ------------------------------------------------------------------
+
+function app:_dockicon_size()
+	local sz = self.nsapp:dockTile():size()
+	return sz.width, sz.height
+end
+
+function app:dockicon_bitmap()
+	if not self._dockicon_dynbitmap then
+		--create the dynbitmap to paint on the content view.
+		self._dockicon_dynbitmap = dynbitmap{
+			size = function()
+				return self:_dockicon_size()
+			end,
+			freeing = function(_, bitmap)
+				self.frontend:_backend_dockicon_free_bitmap(bitmap)
+			end,
+		}
+	end
+	return self._dockicon_dynbitmap:get()
+end
+
+function app:dockicon_invalidate()
+	if not self.dkview then
+		--create our custom view and set it as the content view.
+		self.dkview = RepaintView:alloc():init()
+
+		function self.dkview.nw_repaint()
+
+			--let the user request the bitmap and draw on it.
+			self.frontend:_backend_dockicon_repaint()
+
+			--paint the bitmap on the current graphics context.
+			if self._dockicon_dynbitmap then
+				self._dockicon_dynbitmap:paint()
+			end
+		end
+
+		self.nsapp:dockTile():setContentView(self.dkview)
+	end
+	self.nsapp:dockTile():display()
+end
+
+function app:dockicon_free()
+	if self._dockicon_dynbitmap then
+		self._dockicon_dynbitmap:free()
+		self._dockicon_dynbitmap = nil
+	end
+	if self.dkview then
+		self.nsapp:dockTile():setContentView(nil)
+		self.dkview:release()
+		self.dkview = nil
+	end
+end
+
+--file chooser ---------------------------------------------------------------
+
+function app:opendialog(opt)
+	local dlg = objc.NSOpenPanel:openPanel()
+
+	if opt.title then
+		dlg:setTitle(opt.title)
+	end
+	dlg:setCanChooseFiles(true)
+	dlg:setCanChooseDirectories(false) --because Windows can't
+	if opt.filetypes then
+		dlg:setAllowedFileTypes(opt.filetypes)
+		dlg:setAllowsOtherFileTypes(not opt.filetypes)
+	end
+	if opt.multiselect then
+		dlg:setAllowsMultipleSelection(true)
+	end
+
+	if dlg:runModal() == objc.NSOKButton then
+		local files = dlg:URLs()
+		local t = {}
+		for i = 0, files:count()-1 do
+			t[#t+1] = objc.tolua(files:objectAtIndex(i):path())
+		end
+		dlg:release()
+		return t
+	end
+	dlg:release()
+end
+
+function app:savedialog(opt)
+	local dlg = objc.NSSavePanel:savePanel()
+
+	if opt.title then
+		dlg:setTitle(opt.title)
+	end
+	if opt.filetypes then
+		dlg:setAllowedFileTypes(opt.filetypes)
+		dlg:setAllowsOtherFileTypes(not opt.filetypes)
+	end
+	if opt.path then
+		dlg:setDirectoryURL(objc.NSURL:fileURLWithPath(opt.path))
+	end
+	if opt.filename then
+		dlg:setNameFieldStringValue(opt.filename)
+	end
+
+	if dlg:runModal() == objc.NSOKButton then
+		dlg:release()
+		return objc.tolua(dlg:URL():path())
+	end
+	dlg:release()
 end
 
 --buttons --------------------------------------------------------------------

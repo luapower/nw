@@ -11,6 +11,8 @@ local nw = {}
 
 --helpers --------------------------------------------------------------------
 
+local assert = glue.assert --assert with string.format
+
 local function indexof(dv, t)
 	for i,v in ipairs(t) do
 		if v == dv then return i end
@@ -26,8 +28,11 @@ nw.backends = {
 }
 
 function nw:init(bkname)
-	if bkname and self.backend and self.backend.name ~= bkname then
-		error('already initialized to '..self.backend.name)
+	if self.backend then
+		if bkname then
+			assert(self.backend.name == bkname, 'already initialized to %s', self.backend.name)
+		end
+		return
 	end
 	bkname = bkname or assert(self.backends[ffi.os], 'unsupported OS')
 	self.backend = require(bkname)
@@ -187,18 +192,13 @@ function nw:app()
 	return self._app
 end
 
-app.defaults = {
-	autoquit = true, --quit after the last window closes
-	ignore_numlock = false, --ignore the state of the numlock key on keyboard events
-}
-
 function app:_new(nw, backend_class)
 	self = glue.inherit({nw = nw}, self)
 	self._running = false
 	self._windows = {} --{window1, ...}
 	self._notifyicons = {} --{icon = true}
-	self._autoquit = self.defaults.autoquit
-	self._ignore_numlock = self.defaults.ignore_numlock
+	self._autoquit = true --quit after the last window closes
+	self._ignore_numlock = false --ignore the state of the numlock key on keyboard events
 	self.backend = backend_class:new(self)
 	return self
 end
@@ -263,6 +263,7 @@ function app:_forcequit()
 	if self:window_count() == 0 then --no windows created while closing
 		--free notify icons otherwise they hang around (both in XP and in OSX).
 		self:_free_notifyicons()
+		self:_free_dockicon()
 		self.backend:stop()
 	end
 
@@ -336,7 +337,7 @@ end
 
 local window = glue.update({}, object)
 
-window.defaults = {
+local defaults = {
 	--state
 	visible = true,
 	minimized = false,
@@ -361,21 +362,15 @@ function app:window(t)
 end
 
 local bool_frame = {[false] = 'none', [true] = 'normal'}
+local frame_opt = glue.index{'normal', 'none', 'none-transparent'}
 
 function window:_new(app, backend_class, opt)
-	opt = glue.update({}, self.defaults, opt)
+	opt = glue.update({}, defaults, {})
 
 	assert(opt.w, 'width missing')
 	assert(opt.h, 'height missing')
 
 	opt.frame = bool_frame[opt.frame] or opt.frame
-
-	--sanitize booleans so that backends don't have to.
-	for k,v in pairs(self.defaults) do
-		if type(v) == 'boolean' then
-			opt[k] = not not opt[k]
-		end
-	end
 
 	self = glue.inherit({app = app}, self)
 
@@ -970,12 +965,13 @@ end
 --rendering ------------------------------------------------------------------
 
 function window:bitmap()
+	self:_check()
 	return self.backend:bitmap()
 end
 
 function window:invalidate()
 	self:_check()
-	self.backend:invalidate()
+	return self.backend:invalidate()
 end
 
 function window:_backend_repaint()
@@ -983,12 +979,7 @@ function window:_backend_repaint()
 end
 
 function window:_backend_free_bitmap(bitmap)
-	self:_event'free_bitmap'
-
-	--call a user-supplied bitmap destructor.
-	if bitmap.free then
-		bitmap:free()
-	end
+	self:_event('free_bitmap', bitmap)
 end
 
 --views ----------------------------------------------------------------------
@@ -1086,6 +1077,10 @@ function app:menu(menu)
 	return wrap_menu(self.backend:menu(), 'menu')
 end
 
+function app:menubar()
+	return wrap_menu(self.backend:menubar(), 'menubar')
+end
+
 function window:menubar()
 	return wrap_menu(self.backend:menubar(), 'menubar')
 end
@@ -1180,8 +1175,21 @@ function menu:items(var)
 	return t
 end
 
-menu:_property'checked'
-menu:_property'enabled'
+function menu:checked(i, checked)
+	if checked == nil then
+		return self.backend:get_checked(i)
+	else
+		self.backend:set_checked(i, checked)
+	end
+end
+
+function menu:enabled(i, enabled)
+	if enabled == nil then
+		return self.backend:get_enabled(i)
+	else
+		self.backend:set_enabled(i, enabled)
+	end
+end
 
 --notification icons ---------------------------------------------------------
 
@@ -1229,13 +1237,17 @@ function notifyicon:invalidate()
 	return self.backend:invalidate()
 end
 
+function notifyicon:_backend_repaint()
+	self:_event'repaint'
+end
+
 function notifyicon:_backend_free_bitmap(bitmap)
 	self:_event('free_bitmap', bitmap)
+end
 
-	--call a user-supplied bitmap destructor.
-	if bitmap.free then
-		bitmap:free()
-	end
+function window:rect()
+	self:_check()
+	return self.backend:rect()
 end
 
 notifyicon:_property'tooltip'
@@ -1243,12 +1255,124 @@ notifyicon:_property'menu'
 notifyicon:_property'text' --OSX only
 notifyicon:_property'length' --OSX only
 
---buttons --------------------------------------------------------------------
+--window icon ----------------------------------------------------------------
 
-function window:button(...)
-	return self.backend:button(...)
+local winicon = glue.update({}, object)
+
+local function whicharg(which)
+	assert(which == nil or which == 'small' or which == 'big')
+	return which == 'small' and 'small' or 'big'
 end
 
+function window:icon(which)
+	local which = whicharg(which)
+	self._icons = self._icons or {}
+	if not self._icons[which] then
+		self._icons[which] = winicon:_new(self, which)
+	end
+	return self._icons[which]
+end
+
+function winicon:_new(window, which)
+	self = glue.inherit({}, winicon)
+	self.window = window
+	self.which = which
+	return self
+end
+
+function winicon:bitmap()
+	return self.window.backend:icon_bitmap(self.which)
+end
+
+function winicon:invalidate()
+	return self.window.backend:invalidate_icon(self.which)
+end
+
+function window:_backend_repaint_icon(which)
+	which = whicharg(which)
+	self._icons[which]:_event('repaint')
+end
+
+--dock icon ------------------------------------------------------------------
+
+local dockicon = glue.update({}, object)
+
+function app:dockicon()
+	if not self._dockicon then
+		self._dockicon = dockicon:_new(self)
+	end
+	return self._dockicon
+end
+
+function dockicon:_new(app)
+	return glue.inherit({app = app}, self)
+end
+
+function dockicon:bitmap()
+	return self.app.backend:dockicon_bitmap()
+end
+
+function dockicon:invalidate()
+	self.app.backend:dockicon_invalidate()
+end
+
+function app:_free_dockicon()
+	if not self.backend.dockicon_free then return end --only on OSX
+	self.backend:dockicon_free()
+end
+
+function app:_backend_dockicon_repaint()
+	self._dockicon:_event'repaint'
+end
+
+function app:_backend_dockicon_free_bitmap(bitmap)
+	self._dockicon:_event('free_bitmap', bitmap)
+end
+
+--file chooser ---------------------------------------------------------------
+
+--TODO: make default filetypes = {'*'} and add '*' filetype to indicate "all others".
+
+local defaults = {
+	title = nil,
+	filetypes = nil, --{'png', 'txt', ...}; first is default
+	multiselect = false,
+}
+
+function app:opendialog(opt)
+	opt = glue.update({}, defaults, opt)
+	assert(not opt.filetypes or #opt.filetypes > 0, 'filetypes cannot be an empty list')
+	local paths = self.backend:opendialog(opt)
+	if not paths then return end
+	return opt.multiselect and paths or paths[1]
+end
+
+local defaults = {
+	title = nil,
+	filetypes = nil, --{'png', 'txt', ...}; first is default
+	filename = nil,
+	path = nil,
+}
+
+function app:savedialog(opt)
+	opt = glue.update({}, defaults, opt)
+	assert(not opt.filetypes or #opt.filetypes > 0, 'filetypes cannot be an empty list')
+	return self.backend:savedialog(opt)
+end
+
+--buttons --------------------------------------------------------------------
+
+local button = glue.update({}, object)
+
+function window:button(...)
+	return button:_new(self, self.backend.button, ...)
+end
+
+function button:_new(window, backend_class, ...)
+	self = glue.inherit({window = window}, self)
+	self.backend = backend_class:new(...)
+	return self
+end
 
 if not ... then require'nw_test' end
 

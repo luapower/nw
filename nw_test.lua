@@ -1258,54 +1258,70 @@ add('input', function()
 	app:run()
 end)
 
---views ----------------------------------------------------------------------
+--bitmap helpers -------------------------------------------------------------
 
-local cairo = require'cairo'
-local gl
-
-if ffi.os == 'Windows' then
-	gl = require'winapi.gl11'
-elseif ffi.os == 'OSX' then
-	gl = require'objc'
-	gl.load'OpenGL'
+--premultiply alpha for (r, g, b, a) in 0..1 range
+local function premul(r, g, b, a)
+	return r * a, g * a, b * a, a
 end
 
-local r = 30
-local function cube(w)
-	r = r + 1
-	gl.glPushMatrix()
-	gl.glTranslated(0,0,-4)
-	gl.glScaled(w, w, 1)
-	gl.glRotated(r,1,r,r)
-	gl.glTranslated(0,0,2)
-	local function face(c)
-		gl.glBegin(gl.GL_QUADS)
-		gl.glColor4d(c,0,0,.5)
-		gl.glVertex3d(-1, -1, -1)
-		gl.glColor4d(0,c,0,.5)
-		gl.glVertex3d(1, -1, -1)
-		gl.glColor4d(0,0,c,.5)
-		gl.glVertex3d(1, 1, -1)
-		gl.glColor4d(c,0,c,.5)
-		gl.glVertex3d(-1, 1, -1)
-		gl.glEnd()
+--premultiplied (r, g, b, a) -> bgra8
+local function bgra8(r, g, b, a)
+	a = bit.band(a * 255, 255)
+	r = bit.band(r * 255, 255)
+	g = bit.band(g * 255, 255)
+	b = bit.band(b * 255, 255)
+	return bit.bor(bit.lshift(a, 24), bit.lshift(r, 16), bit.lshift(g, 8), b)
+end
+
+--fill a bitmap with a constant color.
+local function bmp_pixel(bmp, r, g, b, a)
+	local data = ffi.cast('int32_t*', bmp.data)
+	local c = bgra8(premul(r, g, b, a))
+	for y=0,bmp.h-1 do
+		for x=0,bmp.w-1 do
+			data[y * bmp.w + x] = c
+		end
 	end
-	gl.glTranslated(0,0,-2)
-	face(1)
-	gl.glTranslated(0,0,2)
-	face(1)
-	gl.glTranslated(0,0,-2)
-	gl.glRotated(-90,0,1,0)
-	face(1)
-	gl.glTranslated(0,0,2)
-	face(1)
-	gl.glRotated(-90,1,0,0)
-	gl.glTranslated(0,2,0)
-	face(1)
-	gl.glTranslated(0,0,2)
-	face(1)
-	gl.glPopMatrix()
 end
+
+--fill a bitmap with a constant color.
+local function fill_bmp(bmp, r, g, b, a)
+	local data = ffi.cast('int32_t*', bmp.data)
+	local c = bgra8(premul(r, g, b, a))
+	for y=0,bmp.h-1 do
+		for x=0,bmp.w-1 do
+			data[y * bmp.w + x] = c
+		end
+	end
+end
+
+local function lerp(v0, v1, t)
+	return v0 + t*(v1-v0)
+end
+
+--fill a bitmap with a gradient color.
+local function gradient_bmp(bmp, r1, g1, b1, a1, r2, g2, b2, a2)
+	local data = ffi.cast('int32_t*', bmp.data)
+	for y=0,bmp.h-1 do
+		local t = y/(bmp.h-1)
+		local r = lerp(r1, r2, t)
+		local g = lerp(g1, g2, t)
+		local b = lerp(b1, b2, t)
+		local a = lerp(a1, a2, t)
+		for x=0,bmp.w-1 do
+			data[y * bmp.w + x] = bgra8(premul(r, g, b, a))
+		end
+	end
+end
+
+local i = 1
+local function animate_bmp(bmp)
+	i = (i + 1/30) % 1
+	gradient_bmp(bmp, 1, 0, 0, i, 0, 0, 1, i)
+end
+
+--window bitmap --------------------------------------------------------------
 
 add('bitmap', function()
 	local win = app:window{w = 500, h = 300, frame = 'none-transparent'}
@@ -1417,6 +1433,55 @@ add('bitmap', function()
 	win:invalidate()
 	app:run()
 end)
+
+--views ----------------------------------------------------------------------
+
+local cairo = require'cairo'
+local gl
+
+if ffi.os == 'Windows' then
+	gl = require'winapi.gl11'
+elseif ffi.os == 'OSX' then
+	gl = require'objc'
+	gl.load'OpenGL'
+end
+
+local r = 30
+local function cube(w)
+	r = r + 1
+	gl.glPushMatrix()
+	gl.glTranslated(0,0,-4)
+	gl.glScaled(w, w, 1)
+	gl.glRotated(r,1,r,r)
+	gl.glTranslated(0,0,2)
+	local function face(c)
+		gl.glBegin(gl.GL_QUADS)
+		gl.glColor4d(c,0,0,.5)
+		gl.glVertex3d(-1, -1, -1)
+		gl.glColor4d(0,c,0,.5)
+		gl.glVertex3d(1, -1, -1)
+		gl.glColor4d(0,0,c,.5)
+		gl.glVertex3d(1, 1, -1)
+		gl.glColor4d(c,0,c,.5)
+		gl.glVertex3d(-1, 1, -1)
+		gl.glEnd()
+	end
+	gl.glTranslated(0,0,-2)
+	face(1)
+	gl.glTranslated(0,0,2)
+	face(1)
+	gl.glTranslated(0,0,-2)
+	gl.glRotated(-90,0,1,0)
+	face(1)
+	gl.glTranslated(0,0,2)
+	face(1)
+	gl.glRotated(-90,1,0,0)
+	gl.glTranslated(0,2,0)
+	face(1)
+	gl.glTranslated(0,0,2)
+	face(1)
+	gl.glPopMatrix()
+end
 
 add('view-cairo', function()
 	local win = app:window{w = 500, h = 300}--, frame = 'none-transparent'}
@@ -1543,7 +1608,7 @@ add('menu', function()
 
 	local function setmenu()
 		local win = app:window(winpos{w = 500, h = 300})
-		local winmenu = win:menu()
+		local winmenu = nw:os'Windows' and win:menubar() or app:menubar()
 		local menu1 = app:menu()
 		menu1:add('Option1\tCtrl+G', function() print'Option1' end)
 		menu1:add('Option2', function() print'Option2' end)
@@ -1555,7 +1620,7 @@ add('menu', function()
 		assert(menu1:checked(3))
 		menu1:checked(3, false)
 		assert(not menu1:checked(3))
-		assert(menu1:enabled(3))
+		--assert(menu1:enabled(3))
 		menu1:enabled(3, false)
 		assert(not menu1:enabled(3))
 		winmenu:add('Menu1', menu1)
@@ -1594,8 +1659,6 @@ end)
 --notification icons ---------------------------------------------------------
 
 add('notify', function()
-	--local win = app:window(winpos())
-
 	local icon = app:notifyicon{text = 'hello', length = 80}
 
 	local menu = app:menu()
@@ -1605,44 +1668,131 @@ add('notify', function()
 	icon:tooltip'Hey imma tooltip'
 	icon:menu(menu)
 
-	local function premul(r, g, b, a)
-		return r * a, g * a, b * a, a
-	end
+	print(icon:rect())
 
-	local function bgra8(r, g, b, a)
-		a = bit.band(a * 255, 255)
-		r = bit.band(r * 255, 255)
-		g = bit.band(g * 255, 255)
-		b = bit.band(b * 255, 255)
-		return bit.bor(bit.lshift(a, 24), bit.lshift(r, 16), bit.lshift(g, 8), b)
-	end
+	--make one icon that increases alpha from 0% to 100% once per second.
+	--do it inside repaint().
 
-	--paint it all blue with increasing alpha.
 	local i = 1
-	app:runevery(1/60, function()
+	function icon:repaint()
+		i = (i + 1/30) % 1
 		local bmp = icon:bitmap()
-		local data = ffi.cast('uint32_t*', bmp.data)
-		i = (i + 1/60) % 1
-		local c = bgra8(premul(0, 0, 1, i))
-		for y=0,bmp.h-1 do
-			for x=0,bmp.w-1 do
-				data[y * bmp.w + x] = bit.band('0xffffffff', c)
-			end
-		end
+		fill_bmp(bmp, 1, 0, 0, i)
+	end
+
+	app:runevery(1/30, function()
 		icon:invalidate()
 	end)
 
-	app:runafter(30, function()
+	--make a second icon that's yellow.
+	--do it outside repaint().
+
+	local icon2 = app:notifyicon()
+	local bmp = icon2:bitmap()
+	fill_bmp(bmp, 1, 1, 0, 1)
+	icon2:invalidate()
+
+	app:runafter(3, function()
 		app:quit()
 	end)
 
 	app:run()
 end)
 
+--window icon (windows only) -------------------------------------------------
+
+add('window-icon', function()
+	local win = app:window(winpos{w = 500, h = 300, visible = false})
+
+	--make the alt-tab icon yellow. do it in repaint().
+	local bigicon = win:icon'big'
+	function bigicon:repaint()
+		local bmp = self:bitmap()
+		fill_bmp(bmp, 1, 1, 0, 1)
+	end
+	bigicon:invalidate()
+
+	--make the taskbar icon red. do it outside repaint().
+	--note: if the small icon is not set explicitly, the normal icon will be
+	--scaled down and used instead.
+	local smallicon = win:icon'small'
+	local bmp = smallicon:bitmap()
+	fill_bmp(bmp, 1, 0, 0, 1)
+	smallicon:invalidate()
+
+	win:show()
+
+	app:run()
+end)
+
+--dock icon (osx only) -------------------------------------------------------
+
+add('dock-icon', function()
+	local rec = recorder()
+	local icon = app:dockicon()
+
+	function icon:repaint()
+		animate_bmp(icon:bitmap())
+	end
+
+	function icon:free_bitmap(bitmap)
+		print(bitmap.w, bitmap.h)
+		rec'free_bitmap'
+	end
+
+	app:runevery(1/30, function()
+		icon:invalidate()
+	end)
+
+	app:runafter(5, function()
+		app:quit()
+	end)
+
+	app:run()
+	rec{'free_bitmap'}
+end)
+
+--file dialogs ---------------------------------------------------------------
+
+add('dialog-open-default', function()
+	print(app:opendialog())
+end)
+
+add('dialog-open-custom', function()
+	--custom title, custom file types, default file type, multiselect.
+	local paths = app:opendialog{
+		title = 'What do you mean "open him up"?',
+		filetypes = {'png', 'jpeg'}, --only if files = true
+		multiselect = true,
+	}
+	require'pp'(paths)
+end)
+
+add('dialog-save-default', function()
+	print(app:savedialog())
+end)
+
+add('dialog-save-custom', function()
+	--custom title, custom file types, default file type.
+	local path = nw:os'OSX' and '~/' or nw:os'Windows' and os.getenv'HOMEDRIVE' .. os.getenv'HOMEPATH'
+	local path = app:savedialog{
+		title = 'Save time!',
+		filetypes = {'png', 'jpeg'},
+		filename = 'example',
+		path = path,
+	}
+	print(path)
+end)
+
+--filetypes option can't be an empty list.
+add('dialog-notypes', function()
+	assert(not pcall(function() app:opendialog{filetypes = {}} end))
+	assert(not pcall(function() app:savedialog{filetypes = {}} end))
+end)
+
 --run tests ------------------------------------------------------------------
 
 local name = ...
-name = 'notify'
 if not name then
 	print(string.format('Usage: %s name | prefix*', arg[0]))
 	print'Available tests:'

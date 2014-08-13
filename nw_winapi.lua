@@ -7,20 +7,12 @@ local bit = require'bit'
 local glue = require'glue'
 local box2d = require'box2d'
 local winapi = require'winapi'
-require'winapi.time'
 require'winapi.spi'
 require'winapi.sysinfo'
 require'winapi.systemmetrics'
-require'winapi.monitor'
 require'winapi.windowclass'
-require'winapi.mouse'
-require'winapi.keyboard'
-require'winapi.rawinput'
 require'winapi.gdi'
-require'winapi.cursor'
 require'winapi.icon'
-require'winapi.notifyiconclass'
-require'winapi.gdi'
 
 local nw = {name = 'winapi'}
 
@@ -80,6 +72,8 @@ function app:stop()
 end
 
 --time -----------------------------------------------------------------------
+
+require'winapi.time'
 
 function app:time()
 	return winapi.QueryPerformanceCounter().QuadPart
@@ -166,6 +160,9 @@ function window:new(app, frontend, t)
 	self.win.backend = self
 	self.win.app = app
 
+	--set up icon API
+	self:_setup_icon_api()
+
 	--register window
 	win_map[self.win] = self.frontend
 
@@ -188,6 +185,7 @@ end
 function Window:on_destroy()
 	self.frontend:_backend_closed()
 	self.backend:_free_bitmap()
+	self.backend:_free_icon_api()
 	win_map[self] = nil
 end
 
@@ -610,6 +608,8 @@ end
 
 --displays -------------------------------------------------------------------
 
+require'winapi.monitor'
+
 function app:_display(monitor)
 	local ok, info = pcall(winapi.GetMonitorInfo, monitor)
 	if not ok then return end
@@ -652,6 +652,8 @@ end
 
 --cursors --------------------------------------------------------------------
 
+require'winapi.cursor'
+
 local cursors = {
 	--pointers
 	arrow = winapi.IDC_ARROW,
@@ -688,6 +690,9 @@ function Window:on_set_cursor(_, ht)
 end
 
 --keyboard -------------------------------------------------------------------
+
+require'winapi.keyboard'
+require'winapi.rawinput'
 
 local keynames = { --vkey code -> vkey name
 
@@ -989,6 +994,8 @@ function Window:on_raw_input(raw)
 end
 
 --mouse ----------------------------------------------------------------------
+
+require'winapi.mouse'
 
 function app:double_click_time() --milliseconds
 	return winapi.GetDoubleClickTime()
@@ -1325,15 +1332,6 @@ function app:menu()
 	return menu:_new(winapi.Menu())
 end
 
-function window:menubar()
-	if not self._menu then
-		local menubar = winapi.MenuBar()
-		self.win.menu = menubar
-		self._menu = menu:_new(menubar)
-	end
-	return self._menu
-end
-
 function menu:_new(winmenu)
 	local self = glue.inherit({winmenu = winmenu}, menu)
 	winmenu.nw_backend = self
@@ -1365,7 +1363,7 @@ function menu:add(index, args)
 end
 
 function menu:set(index, args)
-	self.winmenu.items:set(index, menuitem(args, self.winmenu.type))
+	self.winmenu.items:set(index, menuitem(args))
 end
 
 function menu:get(index)
@@ -1396,11 +1394,23 @@ function menu:set_enabled(index, enabled)
 	self.winmenu.items:setenabled(index, enabled)
 end
 
+--in Windows, each window has its own menu bar.
+function window:menubar()
+	if not self._menu then
+		local menubar = winapi.MenuBar()
+		self.win.menu = menubar
+		self._menu = menu:_new(menubar)
+	end
+	return self._menu
+end
+
 function window:popup(menu, x, y)
 	menu.backend.winmenu:popup(self.win, x, y)
 end
 
 --notification icons ---------------------------------------------------------
+
+require'winapi.notifyiconclass'
 
 local notifyicon = {}
 app.notifyicon = notifyicon
@@ -1417,18 +1427,19 @@ end
 function notifyicon:new(app, frontend, opt)
 	self = glue.inherit({app = app, frontend = frontend}, notifyicon)
 
-	self.icon = NotifyIcon{window = self:_notify_window()}
-	self.icon.backend = self
-	self.icon.frontend = frontend
+	self.ni = NotifyIcon{window = self:_notify_window()}
+	self.ni.backend = self
+	self.ni.frontend = frontend
 
-	self:_get_icon_api()
+	self:_setup_icon_api()
 
 	return self
 end
 
 function notifyicon:free()
-	self.icon:free()
-	self.icon = nil
+	self.ni:free()
+	self:_free_icon_api()
+	self.ni = nil
 end
 
 function NotifyIcon:on_rbutton_up()
@@ -1441,11 +1452,12 @@ function NotifyIcon:on_rbutton_up()
 	end
 end
 
---make an API composed of two functions: one that gives you a bitmap to draw into,
---and another that creates a new icon everytime it is called with the contents of that bitmap.
---the bitmap is reused, and recreated only if the icon size changed since last access.
---the bitmap is in bgra8 format with premultiplied alpha.
-local function drawable_icon_api()
+--make an API composed of three functions: one that gives you a bgra8 bitmap
+--to draw into, another that creates a new icon everytime it is called with
+--the contents of that bitmap, and a third one to free the icon and bitmap.
+--the bitmap is recreated only if the icon size changed since last access.
+--the bitmap is in bgra8 format, premultiplied alpha.
+local function drawable_icon_api(which)
 
 	local w, h, bmp, data, maskbmp
 
@@ -1507,8 +1519,9 @@ local function drawable_icon_api()
 	end
 
 	local function size()
-		local w = winapi.GetSystemMetrics'SM_CXSMICON'
-		return w, w
+		local w = winapi.GetSystemMetrics(which == 'small' and 'SM_CXSMICON' or 'SM_CXICON')
+		local h = winapi.GetSystemMetrics(which == 'small' and 'SM_CYSMICON' or 'SM_CYICON')
+		return w, h
 	end
 
 	local bitmap
@@ -1531,27 +1544,43 @@ local function drawable_icon_api()
 
 	local function get_icon()
 		if not bmp then return end
+
+		--counter-hack: in windows, an all-around zero-alpha image is shown as black.
+		--we set the second pixel's alpha to a non-zero value to prevent this.
+		local data = ffi.cast('int8_t*', data)
+		for i = 3, w * h - 1, 4 do
+			if data[i] ~= 0 then goto skip end
+		end
+		data[7] = 1 --write a low alpha value to the second pixel so it looks invisible.
+		::skip::
+
 		recreate_icon()
 		return icon
 	end
 
-	return get_bitmap, get_icon
+	local function free_all()
+		free_bitmaps()
+		free_icon()
+	end
+
+	return get_bitmap, get_icon, free_all
 end
 
-function notifyicon:_get_icon_api()
-	self.bitmap, self._get_icon = drawable_icon_api()
+function notifyicon:_setup_icon_api()
+	self.bitmap, self._get_icon, self._free_icon_api = drawable_icon_api()
 end
 
 function notifyicon:invalidate()
-	self.icon.icon = self._get_icon()
+	self.frontend:_backend_repaint()
+	self.ni.icon = self:_get_icon()
 end
 
 function notifyicon:get_tooltip()
-	return self.icon.tip
+	return self.ni.tip
 end
 
 function notifyicon:set_tooltip(tooltip)
-	self.icon.tip = tooltip
+	self.ni.tip = tooltip
 end
 
 function notifyicon:get_menu()
@@ -1560,6 +1589,116 @@ end
 
 function notifyicon:set_menu(menu)
 	self.menu = menu
+end
+
+function notifyicon:rect()
+	return 0, 0, 0, 0 --TODO
+end
+
+--window icon ----------------------------------------------------------------
+
+local function whicharg(which)
+	assert(which == nil or which == 'small' or which == 'big')
+	return which == 'small' and 'small' or 'big'
+end
+
+function window:_add_icon_api(which)
+	which = whicharg(which)
+	local get_bitmap, get_icon, free_all = drawable_icon_api(which)
+	self._icon_api[which] = {get_bitmap = get_bitmap, get_icon = get_icon, free_all = free_all}
+end
+
+function window:_setup_icon_api()
+	self._icon_api = {}
+	self:_add_icon_api'big'
+	self:_add_icon_api'small'
+end
+
+function window:_call_icon_api(which, name, ...)
+	return self._icon_api[which][name](...)
+end
+
+function window:_free_icon_api()
+	self.win.icon = nil --must release the old ones first so we can free them.
+	self.win.small_icon = nil --must release the old ones first so we can free them.
+	self:_call_icon_api('big', 'free_all')
+	self:_call_icon_api('small', 'free_all')
+end
+
+function window:icon_bitmap(which)
+	which = whicharg(which)
+	return self:_call_icon_api(which, 'get_bitmap')
+end
+
+function window:invalidate_icon(which)
+	--TODO: both methods below work equally bad. The taskbar icon is not updated :(
+	which = whicharg(which)
+	self.frontend:_backend_repaint_icon(which)
+	if false then
+		winapi.SendMessage(self.win.hwnd, 'WM_SETICON',
+			which == 'small' and winapi.ICON_SMALL or winapi.ICON_BIG,
+			self:_call_icon_api(which, 'get_icon'))
+	else
+		local name = which == 'small' and 'small_icon' or 'icon'
+		self.win[name] = nil --must release the old one first so we can free it.
+		self.win[name] = self:_call_icon_api(which, 'get_icon')
+	end
+end
+
+--file chooser ---------------------------------------------------------------
+
+require'winapi.filedialogs'
+
+--given a list of file types eg. {'gif', ...} make a list of filters
+--to pass to open/save dialog functions.
+--we can't allow wildcards and custom text because OSX doesn't (so english only).
+local function make_filters(filetypes)
+	if not filetypes then
+		--like in OSX, no filetypes means all filetypes.
+		return {'All Files', '*.*'}
+	end
+	local filter = {}
+	for i,ext in ipairs(filetypes) do
+		table.insert(filter, ext:upper() .. ' Files')
+		table.insert(filter, '*.' .. ext:lower())
+	end
+	return filter
+end
+
+function app:opendialog(opt)
+	local filter = make_filters(opt.filetypes)
+
+	local flags = opt.multiselect
+		and bit.bor(winapi.OFN_ALLOWMULTISELECT, winapi.OFN_EXPLORER) or 0
+
+	local ok, info = winapi.GetOpenFileName{
+		title = opt.title,
+		filter = filter,
+		filter_index = 1, --first in list is default, like OSX
+		flags = flags,
+	}
+
+	if not ok then return end
+	return winapi.GetOpenFileNamePaths(info)
+end
+
+function app:savedialog(opt)
+	local filter = make_filters(opt.filetypes)
+
+	local ok, info = winapi.GetSaveFileName{
+		title = opt.title,
+		filter = filter,
+		--default is first in list (not optional in OSX)
+		filter_index = 1,
+		--append filetype automatically (not optional in OSX)
+		default_ext = opt.filetypes and opt.filetypes[1],
+		filepath = opt.filename,
+		initial_dir = opt.path,
+		flags = 'OFN_OVERWRITEPROMPT', --like in OSX
+	}
+
+	if not ok then return end
+	return info.filepath
 end
 
 --buttons --------------------------------------------------------------------
