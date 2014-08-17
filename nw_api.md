@@ -61,7 +61,7 @@ position				win:frame_rect(x, y, w, h)			win:frame_rect() -> x, y, w, h \		win:r
 
 displays															app:displays() -> {disp1, ...} \		app:displays_changed()
 																	app:display_count() -> n \
-																	app:main_display() -> disp \
+																	app:active_display() -> disp \
 																	win:display() -> disp \
 																	disp:rect() -> x, y, w, h \
 																	disp:client_rect() -> x, y, w, h

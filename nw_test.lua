@@ -928,6 +928,37 @@ add('pos-init', function()
 	print'ok'
 end)
 
+--test if x,y,w,h mixed with cx,cy,cw,ch works.
+--this is an eye-test.
+add('pos-init-mixed', function()
+	app:window{cx = 200, cy = 200, cw = 200, ch = 200}
+	app:window{x = 200, cy = 200, w = 200, ch = 200}
+	app:window{cx = 200, y = 200, cw = 200, h = 200}
+	app:window{x = 200, y = 200, w = 200, h = 200}
+	app:run()
+end)
+
+--check that missing x or y works (i.e. the window is centered on its dispaly).
+add('pos-init-center', function()
+	--TODO
+	local win = app:window{cx = 200, cy = 200, cw = 200, ch = 200}
+	local win = app:window{x = 200, cy = 200, w = 200, ch = 200}
+	local win = app:window{cx = 200, y = 200, cw = 200, h = 200}
+	app:run()
+end)
+
+--TODO: do constraints affect maximized size as well? should we add a minsize/maxsize for that too?
+
+--interactive test. resize the windows to see the constraints in effect.
+add('pos-minmax-size', function()
+	app:window{title = 'min=200,200; max=400,400 (init)', w = 100, h = 100, minw = 200, minh = 200, maxw = 400, maxh = 400}
+	local win = app:window{title = 'min=200,200; max=400,400 (set)', w = 100, h = 100}
+	win:minsize(200, 200)
+	win:maxsize(400, 400)
+	app:window{title = 'minh=200; maxw=400', w = 100, h = 100, minh = 200, maxw = 400}
+	app:run()
+end)
+
 --normal_rect() -> x, y, w, h works.
 --normal_rect(x, y, w, h) works.
 add('pos-normal-rect', function()
@@ -1007,6 +1038,7 @@ end)
 add('pos-conversions', function()
 	local win = app:window{x = 100, y = 100, w = 100, h = 100, visible = false}
 	local x, y, w, h = win:to_screen(100, 100, 100, 100)
+	print(x, y, w, h)
 	assert(x >= 200 and x <= 250)
 	assert(y >= 200 and y <= 250)
 	assert(w == 100)
@@ -1016,6 +1048,66 @@ add('pos-conversions', function()
 	assert(y == 100)
 	assert(w == 100)
 	assert(h == 100)
+	print'ok'
+end)
+
+add('pos-client-to-frame', function()
+	local cx, cy, cw, ch = 100, 200, 300, 400
+
+	local x, y, w, h = app:client_to_frame('normal', cx, cy, cw, ch)
+	assert(x <= cx)
+	assert(y <= cy)
+	assert(w >= cw)
+	assert(h >= ch)
+
+	local x, y, w, h = app:client_to_frame('none', cx, cy, cw, ch)
+	assert(x == cx)
+	assert(y == cy)
+	assert(w == cw)
+	assert(h == ch)
+
+	--the minimum frame rect for a zero-sized client rect is not entirely correct.
+	--in practice there's a minimum width on the titlebar but we don't get that.
+	local x, y, w, h = app:client_to_frame('normal', 0, 0, 0, 0)
+	print('min. frame rect:   ', x, y, w, h)
+
+	--if no frame, frame rect and client rect match, even at zero size.
+	local x, y, w, h = app:client_to_frame('none', 0, 0, 0, 0)
+	assert(x == 0)
+	assert(y == 0)
+	assert(w == 0)
+	assert(h == 0)
+
+	print'ok'
+end)
+
+add('pos-frame-to-client', function()
+	local x, y, w, h = 100, 200, 300, 400
+
+	local cx, cy, cw, ch = app:frame_to_client('normal', x, y, w, h)
+	assert(x <= cx)
+	assert(y <= cy)
+	assert(w >= cw)
+	assert(h >= ch)
+
+	local cx, cy, cw, ch = app:frame_to_client('none', x, y, w, h)
+	assert(x == cx)
+	assert(y == cy)
+	assert(w == cw)
+	assert(h == ch)
+
+	--the minimum client rect for a zero-sized frame rect is zero-sized (not negative).
+	local cx, cy, cw, ch = app:frame_to_client('normal', 0, 0, 0, 0)
+	assert(cw == 0)
+	assert(ch == 0)
+
+	--if no frame, frame rect and client rect match, even at zero size.
+	local cx, cy, cw, ch = app:frame_to_client('none', 0, 0, 0, 0)
+	assert(cx == 0)
+	assert(cy == 0)
+	assert(cw == 0)
+	assert(ch == 0)
+
 	print'ok'
 end)
 
@@ -1094,26 +1186,29 @@ local function test_display(display)
 	assert(ch <= h)
 end
 
---there's at least one display and its values are sane
+--there's at least one display and its values are sane.
+--first display is the main display with (x, y) at (0, 0).
 add('display-list', function()
 	local n = 0
 	for i,display in ipairs(app:displays()) do
 		n = n + 1
 		print(string.format('# display %d', i))
 		test_display(display)
+		if i == 1 then
+			--main screen is first, and at (0, 0)
+			local x, y = display:rect()
+			assert(x == 0)
+			assert(y == 0)
+		end
 	end
 	assert(n > 0) --there must be at least 1 display
-	--assert(n == app:display_count())
+	assert(n == app:display_count())
 end)
 
---main display is at (0, 0)
-add('display-main', function()
-	local display = app:main_display()
+--active display returns a valid display.
+add('display-active', function()
+	local display = app:active_display()
 	test_display(display)
-	local x, y, w, h = display:rect()
-	--main screen is at (0, 0)
-	assert(x == 0)
-	assert(y == 0)
 end)
 
 --edge snapping --------------------------------------------------------------
@@ -1774,7 +1869,7 @@ end)
 
 add('dialog-save-custom', function()
 	--custom title, custom file types, default file type.
-	local path = nw:os'OSX' and '~/' or nw:os'Windows' and os.getenv'HOMEDRIVE' .. os.getenv'HOMEPATH'
+	local path = nw:os'OSX' and '/' or nw:os'Windows' and 'C:\\'
 	local path = app:savedialog{
 		title = 'Save time!',
 		filetypes = {'png', 'jpeg'},
@@ -1788,6 +1883,63 @@ end)
 add('dialog-notypes', function()
 	assert(not pcall(function() app:opendialog{filetypes = {}} end))
 	assert(not pcall(function() app:savedialog{filetypes = {}} end))
+end)
+
+--clipboard ------------------------------------------------------------------
+
+add('clipboard-text', function()
+	local s = 'I am The Ocean'
+	app:setclipboard(s)
+	assert(#app:clipboard() == 1)
+	assert(app:clipboard()[1] == 'text')
+	assert(app:clipboard'text' == s)
+	assert(not app:clipboard'files')
+end)
+
+add('clipboard-files', function()
+	local files =
+		nw:os'OSX' and {'/home', '/na-file1', '/na-dir2/'} or
+		nw:os'Windows' and {'C:\\Windows', 'Q:\\na-file1', 'O:\\na-dir2\\'}
+	app:setclipboard(files, 'files')
+	assert(#app:clipboard() == 1)
+	assert(app:clipboard()[1] == 'files')
+	assert(#app:clipboard('files') == #files)
+	assert(app:clipboard('files')[1] == files[1])
+	assert(app:clipboard('files')[2] == files[2])
+	assert(not app:clipboard'text')
+end)
+
+add('clipboard-bitmap', function()
+	--app:setclipboard(bitmap, 'bitmap')
+end)
+
+add('clipboard-inspect', function()
+
+	for i,name in ipairs(app:clipboard()) do
+		print(name)
+		require'pp'(app:clipboard(name))
+	end
+
+	local bmp = app:clipboard'bitmap'
+	if bmp then
+		local bitmap = require'bitmap'
+		local margin = 100
+		local win = app:window{cw = bmp.w + 2*margin, ch = bmp.h + 2*margin}
+		local x, y = margin, margin
+		function win:repaint()
+			local wbmp = win:bitmap()
+			fill_bmp(wbmp, 1, 1, 1, 0.5)
+			local x, y, w, h = bitmap.fit(wbmp, x, y, bmp.w, bmp.h)
+			local src = bitmap.sub(bmp, 0, 0, w, h)
+			local dst = bitmap.sub(wbmp, x, y, w, h)
+			if src and dst then
+				bitmap.paint(src, dst)
+			end
+		end
+		win:invalidate()
+		app:run()
+	end
+
 end)
 
 --run tests ------------------------------------------------------------------

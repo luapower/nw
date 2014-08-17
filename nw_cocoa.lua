@@ -31,13 +31,13 @@ local function override_rect(x, y, w, h, x1, y1, w1, h1)
 	return x1 or x, y1 or y, w1 or w, h1 or h
 end
 
-local function main_screen_h()
-	return objc.NSScreen:mainScreen():frame().size.height
+local function primary_screen_h()
+	return objc.NSScreen:screens():objectAtIndex(0):frame().size.height
 end
 
 --convert rect from bottom-up relative-to-main-screen space to top-down relative-to-main-screen space
 local function flip_screen_rect(main_h, x, y, w, h)
-	main_h = main_h or main_screen_h()
+	main_h = main_h or primary_screen_h()
 	return x, main_h - h - y, w, h
 end
 
@@ -156,7 +156,7 @@ local nswin_map = {} --nswin->window
 
 local Window = objc.class('Window', 'NSWindow <NSWindowDelegate>')
 
---NOTE: windows are created hidden by default.
+--NOTE: windows are created hidden.
 
 function window:new(app, frontend, t)
 	self = glue.inherit({app = app, frontend = frontend}, self)
@@ -231,6 +231,14 @@ function window:new(app, frontend, t)
 
 	if t.maximized then
 		self:_set_maximized()
+	end
+
+	--set constraints
+	if t.minw or t.minh then
+		self:set_minsize(t.minw, t.minh)
+	end
+	if t.maxw or t.maxh then
+		self:set_maxsize(t.maxw, t.maxh)
 	end
 
 	--init drawable content view
@@ -588,6 +596,64 @@ function window:get_client_rect()
 	return unpack_nsrect(self.nswin:contentView():bounds())
 end
 
+function window:_flip_y(y)
+	return self.nswin:contentView():frame().size.height - y --flip y around contentView's height
+end
+
+function window:to_screen(x, y) --OSX 10.7+
+	y = self:_flip_y(y)
+	x, y = flip_screen_rect(nil, unpack_nsrect(self.nswin:convertRectToScreen(objc.NSMakeRect(x, y, 0, 0))))
+	return x, y
+end
+
+function window:to_client(x, y) --OSX 10.7+
+	y = primary_screen_h() - y
+	x, y = unpack_nsrect(self.nswin:convertRectFromScreen(objc.NSMakeRect(x, y, 0, 0)))
+	return x, self:_flip_y(y)
+end
+
+local function stylemask(frame)
+	return frame == 'normal' and objc.NSTitledWindowMask or objc.NSBorderlessWindowMask
+end
+
+function app:client_to_frame(frame, x, y, w, h)
+	local style = stylemask(frame)
+	local psh = primary_screen_h()
+	local rect = objc.NSMakeRect(flip_screen_rect(psh, x, y, w, h))
+	local rect = objc.NSWindow:frameRectForContentRect_styleMask(rect, style)
+	return flip_screen_rect(psh, unpack_nsrect(rect))
+end
+
+function app:frame_to_client(frame, x, y, w, h)
+	local style = stylemask(frame)
+	local psh = primary_screen_h()
+	local rect = objc.NSMakeRect(flip_screen_rect(psh, x, y, w, h))
+	local rect = objc.NSWindow:contentRectForFrameRect_styleMask(rect, style)
+	return flip_screen_rect(psh, unpack_nsrect(rect))
+end
+
+function window:get_minsize()
+	local sz = self.nswin:minSize()
+	return sz.width, sz.height
+end
+
+function window:set_minsize(w, h)
+	w = w or -1/0
+	h = h or -1/0
+	self.nswin:setMinSize(objc.NSMakeSize(w, h))
+	local w0, h0 = select(3, self:normal_rect())
+
+end
+
+function window:get_maxsize()
+	local sz = self.nswin:maxSize()
+	return sz.width, sz.height
+end
+
+function window:set_maxsize(w, h)
+	self.nswin:setMaxSize(objc.NSMakeSize(w or 1/0, h or 1/0))
+end
+
 function window:magnets()
 	local t = {} --{{x=, y=, w=, h=}, ...}
 
@@ -772,8 +838,8 @@ function Window.windowWillResize_toSize(cpu)
 	else
 		--ESP[1] = self, ESP[2] = selector, ESP[3] = sender, ESP[4] = NSSize.x, ESP[5] = NSSize.y
 		local self = ffi.cast('id', cpu.ESP.dp[1].p)
-		w = cpu.ESP.dp[4].f
-		h = cpu.ESP.dp[5].f
+		local w = cpu.ESP.dp[4].f
+		local h = cpu.ESP.dp[5].f
 		w, h = self:nw_resizing(w, h)
 		--return values <= 8 bytes in EAX:EDX
 		cpu.EAX.f = w
@@ -849,7 +915,7 @@ function app:displays()
 	return displays
 end
 
-function app:main_display()
+function app:active_display()
 	local screen = objc.NSScreen:mainScreen()
 	return self:_display(nil, screen)
 end
@@ -1201,10 +1267,6 @@ function app:double_click_target_area()
 	return 4, 4 --like in windows
 end
 
-function window:_flip_y(y)
-	return self.nswin:contentView():frame().size.height - y --flip y around contentView's height
-end
-
 function Window:setmouse(event)
 	local m = self.frontend._mouse
 	local pos = event:locationInWindow()
@@ -1331,11 +1393,8 @@ local function make_bitmap(w, h)
 	local colorspace = objc.CGColorSpaceCreateDeviceRGB()
 	local provider = objc.CGDataProviderCreateWithData(nil, data, size, nil)
 
-	local info = bit.bor(
-		ffi.abi'le' and
-			objc.kCGBitmapByteOrder32Little or
-			objc.kCGBitmapByteOrder32Big,      --native endianness
-		objc.kCGImageAlphaPremultipliedFirst) --ARGB32
+	--little-endian alpha-first, i.e. bgra8
+	local info = bit.bor(objc.kCGBitmapByteOrder32Little, objc.kCGImageAlphaPremultipliedFirst)
 
 	local bounds = ffi.new'CGRect'
 	bounds.size.width = w
@@ -1891,6 +1950,129 @@ function app:savedialog(opt)
 		return objc.tolua(dlg:URL():path())
 	end
 	dlg:release()
+end
+
+--clipboard ------------------------------------------------------------------
+
+--make a NSImage from a bgra8 bitmap.
+function bitmap_to_nsimage(bitmap)
+
+	assert(bitmap.format == 'bgra8', 'invalid bitmap format')
+
+	local colorspace = objc.CGColorSpaceCreateDeviceRGB()
+	local provider = objc.CGDataProviderCreateWithData(nil, bitmap.data, bitmap.size, nil)
+
+	--little-endian alpha-first, i.e. bgra8
+	local info = bit.bor(objc.kCGBitmapByteOrder32Little, objc.kCGImageAlphaPremultipliedFirst)
+
+	local cgimage = objc.CGImageCreate(bitmap.w, bitmap.h,
+		8,  --bpc
+		32, --bpp
+		bitmap.stride,
+		colorspace,
+		info,
+		provider,
+		nil, --no decode
+		false, --no interpolation
+		objc.kCGRenderingIntentDefault)
+
+	local nsimage = objc.NSImage:alloc():initWithCGImage_size(cgimage, objc.NSZeroSize)
+
+	objc.CGImageRelease(image)
+	objc.CGColorSpaceRelease(colorspace)
+	objc.CGDataProviderRelease(provider)
+
+	return nsimage
+end
+
+--make a rgba8 bitmap from a NSImage.
+function nsimage_to_bitmap(nsimage)
+
+	local sz = nsimage:size()
+	local w, h = sz.width, sz.height
+	local stride = w * 4
+	local size = stride * h
+
+	local data = ffi.C.malloc(size)
+	assert(data ~= nil)
+
+	local bitmap = {
+		w = w,
+		h = h,
+		stride = stride,
+		size = size,
+		data = data,
+		format = 'bgra8',
+	}
+
+	local info = bit.bor(objc.kCGBitmapByteOrder32Little, objc.kCGImageAlphaPremultipliedFirst)
+	local colorspace = objc.CGColorSpaceCreateDeviceRGB()
+	local cgcontext = objc.CGBitmapContextCreate(data, w, h, 8, stride, colorspace, info)
+	local nscontext = objc.NSGraphicsContext:graphicsContextWithGraphicsPort_flipped(cgcontext, false)
+	objc.NSGraphicsContext:setCurrentContext(nscontext)
+	nsimage:drawInRect(objc.NSMakeRect(0, 0, w, h))
+	objc.NSGraphicsContext:setCurrentContext(nil)
+	nscontext:release()
+	objc.CGContextRelease(cgcontext)
+	objc.CGColorSpaceRelease(colorspace)
+
+	return bitmap
+end
+
+local type_map = {
+	text = objc.tolua(objc.NSStringPboardType),
+	files = objc.tolua(objc.NSFilenamesPboardType),
+	bitmap = objc.tolua(objc.NSTIFFPboardType),
+}
+
+local rev_type_map = glue.index(type_map)
+
+function app:clipboard_formats()
+	local pasteboard = objc.NSPasteboard:generalPasteboard()
+	local t = {}
+	for i,elem in objc.ipairs(pasteboard:types()) do
+		--print(i, objc.tolua(elem))
+		t[#t+1] = rev_type_map[objc.tolua(elem)]
+	end
+	return t
+end
+
+function app:get_clipboard(format)
+	local pasteboard = objc.NSPasteboard:generalPasteboard()
+	if format == 'text' then
+		local data = pasteboard:dataForType(objc.NSStringPboardType)
+		return data and objc.tolua(objc.NSString:alloc():initWithUTF8String(data:bytes()))
+	elseif format == 'files' then
+		local data = pasteboard:propertyListForType(objc.NSFilenamesPboardType)
+		return data and objc.tolua(data)
+	elseif format == 'bitmap' then
+		local image = objc.NSImage:alloc():initWithPasteboard(pasteboard)
+		if not image then return end
+		return nsimage_to_bitmap(image)
+	end
+end
+
+function app:set_clipboard(items)
+	local pasteboard = objc.NSPasteboard:generalPasteboard()
+
+	--clear the clipboard
+	pasteboard:clearContents()
+	if not items then return true end
+
+	for i,item in ipairs(items) do
+		local data, format = item.data, item.format
+		if format == 'text' then
+			local nsdata = objc.NSData:dataWithBytes_length(data, #data + 1)
+			return pasteboard:setData_forType(nsdata, objc.NSStringPboardType)
+		elseif format == 'files' then
+			return pasteboard:setPropertyList_forType(objc.toobj(data), objc.NSFilenamesPboardType)
+		elseif format == 'bitmap' then
+			local image = bitmap_to_nsimage(data)
+			return pasteboard:setPropertyList_forType(image, objc.NSTIFFPboardType)
+		else
+			assert(false)
+		end
+	end
 end
 
 --buttons --------------------------------------------------------------------

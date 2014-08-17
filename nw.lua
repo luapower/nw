@@ -19,6 +19,10 @@ local function indexof(dv, t)
 	end
 end
 
+local function clamp(x, min, max)
+	return math.min(math.max(x, min), max)
+end
+
 --backends -------------------------------------------------------------------
 
 --default backends for each OS
@@ -34,8 +38,9 @@ function nw:init(bkname)
 		end
 		return
 	end
-	bkname = bkname or assert(self.backends[ffi.os], 'unsupported OS')
+	bkname = bkname or assert(self.backends[ffi.os], 'unsupported OS %s', ffi.os)
 	self.backend = require(bkname)
+	assert(self:os(self.backend.min_os), 'unsupported OS %s < %s', self:os(), self.backend.min_os)
 	self.backend.frontend = self
 end
 
@@ -364,27 +369,47 @@ end
 local bool_frame = {[false] = 'none', [true] = 'normal'}
 local frame_opt = glue.index{'normal', 'none', 'none-transparent'}
 
+local function checkframe(frame)
+	frame = bool_frame[frame] or frame
+	assert(frame_opt[frame], 'invalid frame')
+	return frame
+end
+
 function window:_new(app, backend_class, opt)
-	opt = glue.update({}, defaults, {})
+	opt = glue.update({}, defaults, opt)
+	opt.frame = checkframe(opt.frame)
 
-	assert(opt.w, 'width missing')
-	assert(opt.h, 'height missing')
+	--if missing some frame coords but given some client coords, convert client
+	--coords to frame coords, and replace missing frame coords with the result.
+	if not opt.x or not opt.y or not opt.w or not opt.h and (opt.cx or opt.cy or opt.cw or opt.ch) then
+		local x1, y1, w1, h1 = app:client_to_frame(opt.frame, opt.cx or 0, opt.cy or 0, opt.cw or 0, opt.ch or 0)
+		opt.x = opt.x or (opt.cx and x1)
+		opt.y = opt.y or (opt.cy and y1)
+		opt.w = opt.w or (opt.cw and w1)
+		opt.h = opt.h or (opt.ch and h1)
+	end
 
-	opt.frame = bool_frame[opt.frame] or opt.frame
+	--with and height must be given, either of client area or of frame.
+	assert(opt.w or 'w or cw missing')
+	assert(opt.h or 'h or ch missing')
+
+	--constrain initial sizes (OSX won't do it for us)
+	opt.w = clamp(opt.w, opt.minw or -1/0, opt.maxw or 1/0)
+	opt.h = clamp(opt.h, opt.minh or -1/0, opt.maxh or 1/0)
+
+	--if missing x or y, center the window horizontally and/or vertically to --- which display??????
+	if not opt.x or not opt.y then
+		local bx, by, bw, bh = app:active_display():client_rect() --TODO: active_display is wrong here!!
+		local x, y = box2d.align(opt.w, opt.h, 'center', 'center', bx, by, bw, bh)
+		opt.x = opt.x or x
+		opt.y = opt.y or y
+	end
 
 	self = glue.inherit({app = app}, self)
 
 	self._mouse = {}
 	self._down = {}
 	self._views = {}
-
-	--if missing x and/or y, center the window horizontally and/or vertically.
-	if not opt.x or not opt.y then
-		local bx, by, bw, bh = self.app:main_display():client_rect()
-		local x, y = box2d.align(opt.w, opt.h, 'center', 'center', bx, by, bw, bh)
-		opt.x = opt.x or x
-		opt.y = opt.y or y
-	end
 
 	self.backend = backend_class:new(app.backend, self, opt)
 
@@ -402,8 +427,8 @@ function window:_new(app, backend_class, opt)
 	self.app:_window_created(self)
 	self:_event'created'
 
-	--windows are created hidden by the backends so that we can set them up
-	--properly before showing them, so that events can work.
+	--windows are created hidden so that we can set them up properly
+	--before showing them, so that events can work when showing the window.
 	if opt.visible then
 		self:show()
 	end
@@ -645,14 +670,57 @@ function window:client_rect() --returns x, y, w, h
 	return self.backend:get_client_rect()
 end
 
-function window:to_screen(...)
-	self:_check()
-	return self.backend:to_screen(...)
+local function point_or_rect(x, y, w, h)
+	if not w and not h then
+		return x, y
+	else
+		assert(w, 'width missing')
+		assert(h, 'height missing')
+		return x, y, w, h
+	end
 end
 
-function window:to_client(...)
+function window:to_screen(x, y, w, h)
 	self:_check()
-	return self.backend:to_client(...)
+	x, y = self.backend:to_screen(x, y)
+	return point_or_rect(x, y, w, h)
+end
+
+function window:to_client(x, y, w, h)
+	self:_check()
+	x, y = self.backend:to_client(x, y)
+	return point_or_rect(x, y, w, h)
+end
+
+--frame rect for a frame type and client rectangle in screen coordinates.
+function app:client_to_frame(frame, x, y, w, h)
+	frame = checkframe(frame)
+	return self.backend:client_to_frame(frame, x, y, w, h)
+end
+
+--client rect in screen coordinates for a frame type and frame rectangle.
+function app:frame_to_client(frame, x, y, w, h)
+	frame = checkframe(frame)
+	local cx, cy, cw, ch = self.backend:frame_to_client(frame, x, y, w, h)
+	cw = math.max(0, cw)
+	ch = math.max(0, ch)
+	return cx, cy, cw, ch
+end
+
+function window:minsize(w, h)
+	if not w and not h then
+		return self.backend:get_minsize()
+	else
+		self.backend:set_minsize(w, h)
+	end
+end
+
+function window:maxsize(w, h)
+	if not w and not h then
+		return self.backend:get_maxsize()
+	else
+		self.backend:set_maxsize(w, h)
+	end
 end
 
 function window:_backend_start_resize(how)
@@ -779,8 +847,9 @@ function app:display_count()
 	return self.backend:display_count()
 end
 
-function app:main_display()
-	return self.backend:main_display()
+--the display containing the window with the keyboard focus.
+function app:active_display()
+	return self.backend:active_display()
 end
 
 function app:_backend_displays_changed()
@@ -1358,6 +1427,34 @@ function app:savedialog(opt)
 	opt = glue.update({}, defaults, opt)
 	assert(not opt.filetypes or #opt.filetypes > 0, 'filetypes cannot be an empty list')
 	return self.backend:savedialog(opt)
+end
+
+--clipboard ------------------------------------------------------------------
+
+function app:clipboard(format)
+	if not format then
+		return self.backend:clipboard_formats()
+	else
+		return self.backend:get_clipboard(format)
+	end
+end
+
+function app:setclipboard(data, format)
+	local t
+	if data == false then --clear clipboard
+		assert(format == nil)
+	elseif format == 'text' or (format == nil and type(data) == 'string') then
+		t = {{format = 'text', data = data}}
+	elseif format == 'files' and type(data) == 'table' then
+		t = {{format = 'files', data = data}}
+	elseif format == 'bitmap' or (format == nil and type(data) == 'table' and data.stride) then
+		t = {{format = 'bitmap', data = data}}
+	elseif format == nil and type(data) == 'table' and not data.stride then
+		t = data
+	else
+		error'invalid argument'
+	end
+	return self.backend:set_clipboard(t)
 end
 
 --buttons --------------------------------------------------------------------

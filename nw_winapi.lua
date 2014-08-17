@@ -37,6 +37,8 @@ function nw:os(ver)
 		vinfo.wServicePackMajor, vinfo.wServicePackMinor)
 end
 
+nw.min_os = 'Windows 5.1' --Windows XP+
+
 --app object -----------------------------------------------------------------
 
 local app = {}
@@ -125,6 +127,10 @@ function window:new(app, frontend, t)
 		y = t.y,
 		w = t.w,
 		h = t.h,
+		min_w = t.minw,
+		min_h = t.minh,
+		max_w = t.maxw,
+		max_h = t.maxh,
 		visible = false,
 		state = t.maximized and 'maximized',
 		--frame
@@ -466,14 +472,52 @@ function window:get_client_rect()
 	return unpack_rect(self.win.client_rect)
 end
 
-function window:to_screen(x, y, ...)
+function window:to_screen(x, y)
 	local p = self.win:map_point(nil, x, y)
-	return p.x, p.y, ...
+	return p.x, p.y
 end
 
-function window:to_client(x, y, ...)
+function window:to_client(x, y)
 	local p = winapi.Windows:map_point(self.win, x, y)
-	return p.x, p.y, ...
+	return p.x, p.y
+end
+
+local function frame_args(frame)
+	local framed = frame == 'normal'
+	local layered = frame == 'none-transparent'
+	return {
+		border = framed,
+		frame = framed,
+		window_edge = framed,
+		layered = layered,
+	}
+end
+
+function app:client_to_frame(frame, cx, cy, cw, ch)
+	return unpack_rect(winapi.Windows:client_to_frame(frame_args(frame), pack_rect(nil, cx, cy, cw, ch)))
+end
+
+function app:frame_to_client(frame, x, y, w, h)
+	local x1, y1, w1, h1 = self:client_to_frame(frame, 0, 0, 0, 0)
+	return x - x1, y - y1, w - w1 - x1, h - h1 - y1
+end
+
+function window:get_minsize()
+	return self.win.min_w, self.win.min_h
+end
+
+function window:set_minsize(w, h)
+	self.win.min_w = w
+	self.win.min_h = h
+end
+
+function window:get_maxsize()
+	return self.win.max_w, self.win.max_h
+end
+
+function window:set_maxsize(w, h)
+	self.win.max_w = w
+	self.win.max_h = h
 end
 
 function window:magnets()
@@ -634,8 +678,16 @@ function app:displays()
 	return displays
 end
 
-function app:main_display()
-	return self:_display(winapi.MonitorFromPoint(nil, 'MONITOR_DEFAULTTOPRIMARY'))
+function app:active_display()
+	local hwnd = winapi.GetForegroundWindow()
+	if hwnd then
+		return self:_display(winapi.MonitorFromWindow(hwnd, 'MONITOR_DEFAULTTONEAREST'))
+	else
+		--in case there's no foreground window, fallback to the display
+		--where the mouse pointer is. if there's no mouse, then fallback to the primary display.
+		local p = winapi.GetCursorPos()
+		return self:_display(winapi.MonitorFromPoint(p, 'MONITOR_DEFAULTTOPRIMARY'))
+	end
 end
 
 function app:display_count()
@@ -1691,6 +1743,9 @@ function app:savedialog(opt)
 		--default is first in list (not optional in OSX)
 		filter_index = 1,
 		--append filetype automatically (not optional in OSX)
+		--if user types in a file extension, the filetype will still be appended
+		--but only if it's not in the list of accepted filetypes.
+		--fortunately, this matches OSX behavior exactly.
 		default_ext = opt.filetypes and opt.filetypes[1],
 		filepath = opt.filename,
 		initial_dir = opt.path,
@@ -1699,6 +1754,78 @@ function app:savedialog(opt)
 
 	if not ok then return end
 	return info.filepath
+end
+
+--clipboard ------------------------------------------------------------------
+
+require'winapi.clipboard'
+require'winapi.shellapi'
+
+function app:clipboard_empty(format)
+	return winapi.CountClipboardFormats() == 0
+end
+
+local formats = {
+	[winapi.CF_UNICODETEXT] = 'text',
+	[winapi.CF_HDROP] = 'files',
+	[winapi.CF_DIB] = 'bitmap',
+	[winapi.CF_DIBV5] = 'bitmap',
+	[winapi.CF_BITMAP] = 'bitmap',
+}
+
+function app:clipboard_formats()
+	if not winapi.OpenClipboard() then
+		return
+	end
+	return glue.fcall(function()
+		local names = winapi.GetClipboardFormatNames()
+		local t,dupes = {},{}
+		for i=1,#names do
+			local format = formats[names[i]]
+			if format and not dupes[format] then
+				dupes[format] = true
+				t[#t+1] = format
+			end
+		end
+		return t
+	end, winapi.CloseClipboard)
+end
+
+function app:get_clipboard(format)
+	if not winapi.OpenClipboard() then
+		return
+	end
+	return glue.fcall(function()
+		if format == 'text' then
+			return winapi.GetClipboardText()
+		elseif format == 'files' then
+			return winapi.GetClipboardFiles()
+		elseif format == 'bitmap' then
+			winapi.GetClipboardDataBuffer(format, function(buf, sz)
+				--TODO
+			end)
+		end
+	end, winapi.CloseClipboard)
+end
+
+function app:set_clipboard(t)
+	if not winapi.OpenClipboard() then
+		return false
+	end
+	glue.fcall(function()
+		winapi.EmptyClipboard()
+		for i,t in ipairs(t) do
+			local data, format = t.data, t.format
+			if format == 'text' then
+				winapi.SetClipboardText(data)
+			elseif format == 'files' then
+				winapi.SetClipboardFiles(data)
+			elseif format == 'bitmap' then
+				--TODO
+			end
+		end
+	end, winapi.CloseClipboard)
+	return true
 end
 
 --buttons --------------------------------------------------------------------
