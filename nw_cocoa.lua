@@ -229,16 +229,17 @@ function window:new(app, frontend, t)
 		rect, opts, self.nswin:contentView(), nil)
 	self.nswin:contentView():addTrackingArea(area)
 
-	if t.maximized then
-		self:_set_maximized()
-	end
-
 	--set constraints
 	if t.minw or t.minh then
 		self:set_minsize(t.minw, t.minh)
 	end
 	if t.maxw or t.maxh then
 		self:set_maxsize(t.maxw, t.maxh)
+	end
+
+	--set maximized after setting constraints.
+	if t.maximized then
+		self:_set_maximized()
 	end
 
 	--init drawable content view
@@ -567,14 +568,7 @@ function Window:windowDidExitFullScreen()
 	self.frontend:_backend_exited_fullscreen()
 end
 
---positioning ----------------------------------------------------------------
-
---NOTE: no event is triggered while moving a window. frame() is not updated either.
---NOTE: there's no API to get the corner or side that window is dragged by when resized.
-
-function window:get_frame_rect()
-	return flip_screen_rect(nil, unpack_nsrect(self.nswin:frame()))
-end
+--positioning/rectangles -----------------------------------------------------
 
 function window:get_normal_rect(x, y, w, h)
 	if self._borderless and self._maximized then
@@ -589,12 +583,27 @@ function window:set_normal_rect(x, y, w, h)
 		self._restore_rect = {x, y, w, h}
 	else
 		self.nswin:setFrame_display(objc.NSMakeRect(flip_screen_rect(nil, x, y, w, h)), true)
+		self:_apply_constraints()
 	end
 end
 
-function window:get_client_rect()
-	return unpack_nsrect(self.nswin:contentView():bounds())
+function window:get_frame_rect()
+	return flip_screen_rect(nil, unpack_nsrect(self.nswin:frame()))
 end
+
+function window:set_frame_rect(x, y, w, h)
+	self:set_normal_rect(x, y, w, h)
+	if self:visible() and self:minimized() then
+		self:restore()
+	end
+end
+
+function window:get_size()
+	local sz = self.nswin:contentView():bounds().size
+	return sz.width, sz.height
+end
+
+--positioning/conversions ----------------------------------------------------
 
 function window:_flip_y(y)
 	return self.nswin:contentView():frame().size.height - y --flip y around contentView's height
@@ -632,27 +641,49 @@ function app:frame_to_client(frame, x, y, w, h)
 	return flip_screen_rect(psh, unpack_nsrect(rect))
 end
 
+--positioning/constraints ----------------------------------------------------
+
+local function clean(x)
+	return x ~= 0 and x or nil
+end
 function window:get_minsize()
-	local sz = self.nswin:minSize()
-	return sz.width, sz.height
+	local sz = self.nswin:contentMinSize()
+	return clean(sz.width), clean(sz.height)
+end
+
+--clamp, with upper limit more important than lower limit.
+local function clamp(x, min, max)
+	return math.min(math.max(x, min or -math.huge), max or math.huge)
+end
+
+function window:_apply_constraints()
+	local minw, minh = self:get_minsize()
+	local maxw, maxh = self:get_maxsize()
+	local sz = self.nswin:contentView():bounds().size
+	sz.width = clamp(sz.width, minw, maxw)
+	sz.height = clamp(sz.height, minh, maxh)
+	self.nswin:setContentSize(sz)
 end
 
 function window:set_minsize(w, h)
-	w = w or -1/0
-	h = h or -1/0
-	self.nswin:setMinSize(objc.NSMakeSize(w, h))
-	local w0, h0 = select(3, self:normal_rect())
-
+	self.nswin:setContentMinSize(objc.NSMakeSize(w or 0, h or 0))
+	self:_apply_constraints()
 end
 
+local function clean(x)
+	return x ~= math.huge and x or nil
+end
 function window:get_maxsize()
-	local sz = self.nswin:maxSize()
-	return sz.width, sz.height
+	local sz = self.nswin:contentMaxSize()
+	return clean(sz.width), clean(sz.height)
 end
 
 function window:set_maxsize(w, h)
-	self.nswin:setMaxSize(objc.NSMakeSize(w or 1/0, h or 1/0))
+	self.nswin:setContentMaxSize(objc.NSMakeSize(w or math.huge, h or math.huge))
+	self:_apply_constraints()
 end
+
+--positioning/magnets --------------------------------------------------------
 
 function window:magnets()
 	local t = {} --{{x=, y=, w=, h=}, ...}
@@ -686,6 +717,8 @@ function window:magnets()
 	return t
 end
 
+--positioning/resizing -------------------------------------------------------
+
 function Window:nw_clientarea_hit(event)
 	local mp = event:locationInWindow()
 	local rc = self:contentView():bounds()
@@ -711,6 +744,10 @@ function Window:nw_titlebar_buttons_hit(event)
 		end
 	end
 end
+
+--NOTE: there's no API to get the corner or side that a window is dragged by
+--when resized, so we have to detect that manually based on mouse position.
+--Getting that corner/side is needed for proper window snapping.
 
 local function resize_area_hit(mx, my, w, h)
 	local co = 15 --corner offset
@@ -743,6 +780,11 @@ end
 function window:set_edgesnapping(snapping)
 	self.nswin:setMovable(not snapping)
 end
+
+--NOTE: no event is triggered while moving a window and frame_rect() is not
+--updated either. for these reasons we take control over moving the window.
+--A negative side effect of this approach is that the window is unmovable
+--if/while the app blocks on the main thread. So never block the GUI thread.
 
 function Window:sendEvent(event)
 	if self.frontend:edgesnapping() then
@@ -1505,7 +1547,7 @@ function window:_init_content_view()
 	--create the dynbitmap to paint on the content view.
 	self._dynbitmap = dynbitmap{
 		size = function()
-			return select(3, self.frontend:client_rect())
+			return self.frontend:size()
 		end,
 		freeing = function(_, bitmap)
 			self.frontend:_backend_free_bitmap(bitmap)

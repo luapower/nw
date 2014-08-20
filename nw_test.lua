@@ -911,7 +911,7 @@ end)
 
 --test that initial coordinates and size are set correctly.
 --test that frame_rect() works in normal state.
---test that client_rect() works and gives sane values.
+--test that size() works and gives sane values.
 add('pos-init', function()
 	local x0, y0, w0, h0 = 51, 52, 201, 202
 	local win = app:window{x = x0, y = y0, w = w0, h = h0}
@@ -920,9 +920,7 @@ add('pos-init', function()
 	assert(y == y0)
 	assert(w == w0)
 	assert(h == h0)
-	local x, y, w, h = win:client_rect()
-	assert(x == 0)
-	assert(y == 0)
+	local w, h = win:size()
 	assert(w >= w0 - 50 and w <= w0)
 	assert(h >= h0 - 50 and h <= h0)
 	print'ok'
@@ -939,7 +937,7 @@ add('pos-init-mixed', function()
 end)
 
 --check that missing x or y works (i.e. the window is centered on its dispaly).
-add('pos-init-center', function()
+add('pos-init-align', function()
 	--TODO
 	local win = app:window{cx = 200, cy = 200, cw = 200, ch = 200}
 	local win = app:window{x = 200, cy = 200, w = 200, ch = 200}
@@ -947,16 +945,150 @@ add('pos-init-center', function()
 	app:run()
 end)
 
---TODO: do constraints affect maximized size as well? should we add a minsize/maxsize for that too?
+--resize the windows to see the constraints in effect.
+add('pos-minmax', function()
 
---interactive test. resize the windows to see the constraints in effect.
-add('pos-minmax-size', function()
-	app:window{title = 'min=200,200; max=400,400 (init)', w = 100, h = 100, minw = 200, minh = 200, maxw = 400, maxh = 400}
-	local win = app:window{title = 'min=200,200; max=400,400 (set)', w = 100, h = 100}
+	--check that initial constraints are set and the window size respects them.
+	local win = app:window{w = 800, h = 800, minw = 200, minh = 200, maxw = 400, maxh = 400}
+
+	local minw, minh = win:minsize()
+	assert(minw == 200)
+	assert(minh == 200)
+
+	local maxw, maxh = win:maxsize()
+	assert(maxw == 400)
+	assert(maxh == 400)
+
+	local w, h = win:size()
+	assert(w == 400)
+	assert(h == 400)
+
+	win:close()
+
+	--check that minsize() is set and that it resizes the window.
+	local win = app:window{w = 100, h = 100}
+
+	local rec = recorder()
+	function win:resizing() rec'error' end
+	function win:resized() rec'resized' end
+
 	win:minsize(200, 200)
+
+	rec{'resized'}
+
+	local minw, minh = win:minsize()
+	assert(minw == 200)
+	assert(minh == 200)
+
+	local w, h = win:size()
+	assert(w == 200)
+	assert(h == 200)
+
+	win:close()
+
+	--check that maxsize() is set and that it resizes the window.
+	local win = app:window{w = 800, h = 800}
+
+	local rec = recorder()
+	function win:resizing() rec'error' end
+	function win:resized() rec'resized' end
+
 	win:maxsize(400, 400)
-	app:window{title = 'minh=200; maxw=400', w = 100, h = 100, minh = 200, maxw = 400}
-	app:run()
+
+	rec{'resized'}
+
+	local maxw, maxh = win:maxsize()
+	assert(maxw == 400)
+	assert(maxh == 400)
+
+	local w, h = win:size()
+	assert(w == 400)
+	assert(h == 400)
+
+	win:close()
+
+	--check that initial partial constraints work too.
+	local win = app:window{w = 800, h = 100, maxw = 400, minh = 200}
+
+	local minw, minh = win:minsize()
+	assert(minw == nil)
+	assert(minh == 200)
+
+	local maxw, maxh = win:maxsize()
+	assert(maxw == 400)
+	assert(maxh == nil)
+
+	local w, h = win:size()
+	assert(w == 400)
+	assert(h == 200)
+
+	win:close()
+
+	--check that runtime partial constraints work too.
+	local win = app:window{w = 100, h = 800}
+
+	win:minsize(200, nil)
+	local minw, minh = win:minsize()
+	assert(minw == 200)
+	assert(minh == nil)
+
+	win:maxsize(nil, 400)
+	local maxw, maxh = win:maxsize()
+	assert(maxw == nil)
+	assert(maxh == 400)
+
+	local w, h = win:size()
+	assert(w == 200)
+	assert(h == 400)
+
+	win:close()
+
+	--frame_rect() is constrained too.
+	local win = app:window{w = 100, h = 100, minw = 200, maxw = 500, minh = 200, maxh = 500}
+
+	win:frame_rect(nil, nil, 100, 100)
+	local w, h = win:size()
+	assert(w == 200)
+	assert(h == 200)
+
+	win:frame_rect(nil, nil, 600, 600)
+	local w, h = win:size()
+	assert(w == 500)
+	assert(h == 500)
+
+	win:close()
+
+	--maximized state is constrained too (runtime).
+	local win = app:window{w = 100, h = 100, minw = 200, minh = 200, maxw = 500, maxh = 500}
+	win:maximize()
+
+	local maxw, maxh = win:size()
+	assert(maxw == 500)
+	assert(maxh == 500)
+
+	--maximized() responds true even when constrained.
+	assert(win:maximized())
+
+	win:close()
+
+	--maximized state is constrained too (init).
+	local win = app:window{w = 100, h = 100, minw = 200, minh = 200, maxw = 500, maxh = 500, maximized = true}
+
+	local maxw, maxh = win:size()
+	assert(maxw == 500)
+	assert(maxh == 500)
+
+	--maximized() responds true even when constrained.
+	assert(win:maximized())
+
+	win:close()
+
+	--TODO: setting maxsize while maximized works (resizes the window and resize events are sent).
+
+	--TODO: maxsize takes precedence over minsize.
+
+	--TODO: setting minsize/maxize inside resizing() event works.
+
 end)
 
 --normal_rect() -> x, y, w, h works.
@@ -988,15 +1120,16 @@ add('pos-set-frame-rect', function()
 	app:run()
 end)
 
---check frame_rect() and client_rect() values in minimized state.
+--check frame_rect() and size() values in minimized state.
 add('pos-frame-rect-minimized', function()
 	local function test(visible, minimized, maximized)
 		local win = app:window{x = 100, y = 100, w = 500, h = 300,
 			maximized = maximized, minimized = minimized, visible = visible}
 		print((visible and 'v' or '')..(minimized and 'm' or '')..(maximized and 'M' or ''))
 		assert(not win:frame_rect())
-		local x, y, w, h = win:client_rect()
-		assert(x == 0 and y == 0 and w == 0 and h == 0)
+		local w, h = win:size()
+		assert(w == 0)
+		assert(h == 0)
 	end
 	test(true, true, true)
 	test(true, true, false)

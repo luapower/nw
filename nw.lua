@@ -19,10 +19,6 @@ local function indexof(dv, t)
 	end
 end
 
-local function clamp(x, min, max)
-	return math.min(math.max(x, min), max)
-end
-
 --backends -------------------------------------------------------------------
 
 --default backends for each OS
@@ -110,8 +106,8 @@ local object = {}
 --		end)
 function object:override(name, func)
 	local inherited = self[name]
-	self[name] = function(...)
-		return func(inherited, ...)
+	self[name] = function(self, ...)
+		return func(self, inherited, ...)
 	end
 end
 
@@ -224,6 +220,7 @@ function app:running()
 end
 
 function app:stop()
+	if not self._running then return end --ignore while not running
 	if self._stopping then return end --ignore repeated attempts
 	self._stopping = true
 	self.backend:stop()
@@ -269,7 +266,7 @@ function app:_forcequit()
 		--free notify icons otherwise they hang around (both in XP and in OSX).
 		self:_free_notifyicons()
 		self:_free_dockicon()
-		self.backend:stop()
+		self:stop()
 	end
 
 	self._quitting = nil
@@ -389,13 +386,9 @@ function window:_new(app, backend_class, opt)
 		opt.h = opt.h or (opt.ch and h1)
 	end
 
-	--with and height must be given, either of client area or of frame.
+	--with and height must be given, either of the client area or of the frame.
 	assert(opt.w or 'w or cw missing')
 	assert(opt.h or 'h or ch missing')
-
-	--constrain initial sizes (OSX won't do it for us)
-	opt.w = clamp(opt.w, opt.minw or -1/0, opt.maxw or 1/0)
-	opt.h = clamp(opt.h, opt.minh or -1/0, opt.maxh or 1/0)
 
 	--if missing x or y, center the window horizontally and/or vertically to --- which display??????
 	if not opt.x or not opt.y then
@@ -427,8 +420,7 @@ function window:_new(app, backend_class, opt)
 	self.app:_window_created(self)
 	self:_event'created'
 
-	--windows are created hidden so that we can set them up properly
-	--before showing them, so that events can work when showing the window.
+	--windows are created hidden to allow proper setup before events start.
 	if opt.visible then
 		self:show()
 	end
@@ -640,13 +632,12 @@ local function override_rect(x, y, w, h, x1, y1, w1, h1)
 	return x1 or x, y1 or y, w1 or w, h1 or h
 end
 
-function window:frame_rect(x, y, w, h) --returns x, y, w, h
+function window:frame_rect(x1, y1, w1, h1) --returns x, y, w, h
 	self:_check()
-	if x or y or w or h then
-		self:normal_rect(x, y, w, h)
-		if self:visible() then
-			self:shownormal()
-		end
+	if x1 or y1 or w1 or h1 then
+		if self:fullscreen() then return end --ignore because OSX can't do it
+		local x, y, w, h = self.backend:get_frame_rect()
+		self.backend:set_frame_rect(override_rect(x, y, w, h, x1, y1, w1, h1))
 	elseif not self:minimized() then
 		return self.backend:get_frame_rect()
 	end
@@ -655,6 +646,7 @@ end
 function window:normal_rect(x1, y1, w1, h1)
 	self:_check()
 	if x1 or y1 or w1 or h1 then
+		if self:fullscreen() then return end --ignore because OSX can't do it
 		local x, y, w, h = self.backend:get_normal_rect()
 		self.backend:set_normal_rect(override_rect(x, y, w, h, x1, y1, w1, h1))
 	else
@@ -662,12 +654,12 @@ function window:normal_rect(x1, y1, w1, h1)
 	end
 end
 
-function window:client_rect() --returns x, y, w, h
+function window:size() --returns w, h
 	self:_check()
 	if self:minimized() then
-		return 0, 0, 0, 0
+		return 0, 0
 	end
-	return self.backend:get_client_rect()
+	return self.backend:get_size()
 end
 
 local function point_or_rect(x, y, w, h)
@@ -711,6 +703,9 @@ function window:minsize(w, h)
 	if not w and not h then
 		return self.backend:get_minsize()
 	else
+		local maxw, maxh = self:maxsize()
+		if w and maxw then w = math.min(w, maxw) end --avoid undefined behavior
+		if h and maxh then h = math.min(h, maxh) end
 		self.backend:set_minsize(w, h)
 	end
 end
@@ -719,6 +714,9 @@ function window:maxsize(w, h)
 	if not w and not h then
 		return self.backend:get_maxsize()
 	else
+		local minw, minh = self:minsize()
+		if w and minw then w = math.max(w, minw) end --avoid undefined behavior
+		if h and minh then h = math.max(h, minh) end
 		self.backend:set_maxsize(w, h)
 	end
 end

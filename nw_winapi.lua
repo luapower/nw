@@ -127,12 +127,12 @@ function window:new(app, frontend, t)
 		y = t.y,
 		w = t.w,
 		h = t.h,
-		min_w = t.minw,
-		min_h = t.minh,
-		max_w = t.maxw,
-		max_h = t.maxh,
+		min_cw = t.minw,
+		min_ch = t.minh,
+		max_cw = t.maxw,
+		max_ch = t.maxh,
 		visible = false,
-		state = t.maximized and 'maximized',
+		maximized = t.maximized,
 		--frame
 		title = t.title,
 		border = framed,
@@ -165,6 +165,9 @@ function window:new(app, frontend, t)
 	self.win.frontend = frontend
 	self.win.backend = self
 	self.win.app = app
+
+	--force a resize to apply constraints.
+	self.win:resize(self.win.w, self.win.h)
 
 	--set up icon API
 	self:_setup_icon_api()
@@ -445,11 +448,7 @@ function window:exit_fullscreen(to_maximized)
 	self:invalidate()
 end
 
---positioning ----------------------------------------------------------------
-
-function window:get_frame_rect()
-	return unpack_rect(self.win.screen_rect)
-end
+--positioning/rectangles -----------------------------------------------------
 
 function window:get_normal_rect()
 	if self._fullscreen then
@@ -468,9 +467,23 @@ function window:set_normal_rect(x, y, w, h)
 	end
 end
 
-function window:get_client_rect()
-	return unpack_rect(self.win.client_rect)
+function window:get_frame_rect()
+	return unpack_rect(self.win.screen_rect)
 end
+
+function window:set_frame_rect(x, y, w, h)
+	self:set_normal_rect(x, y, w, h)
+	if self:visible() then
+		self:shownormal()
+	end
+end
+
+function window:get_size()
+	local r = self.win.client_rect
+	return r.w, r.h
+end
+
+--positioning/conversions ----------------------------------------------------
 
 function window:to_screen(x, y)
 	local p = self.win:map_point(nil, x, y)
@@ -493,32 +506,39 @@ local function frame_args(frame)
 	}
 end
 
-function app:client_to_frame(frame, cx, cy, cw, ch)
-	return unpack_rect(winapi.Windows:client_to_frame(frame_args(frame), pack_rect(nil, cx, cy, cw, ch)))
+function app:client_to_frame(frame, x, y, w, h)
+	return unpack_rect(winapi.Window:client_to_frame(frame_args(frame),
+		pack_rect(nil, x, y, w, h)))
 end
 
 function app:frame_to_client(frame, x, y, w, h)
-	local x1, y1, w1, h1 = self:client_to_frame(frame, 0, 0, 0, 0)
-	return x - x1, y - y1, w - w1 - x1, h - h1 - y1
+	return unpack_rect(winapi.Window:frame_to_client(frame_args(frame),
+		pack_rect(nil, x, y, w, h)))
 end
 
+--positioning/constraints ----------------------------------------------------
+
 function window:get_minsize()
-	return self.win.min_w, self.win.min_h
+	return self.win.min_cw, self.win.min_ch
 end
 
 function window:set_minsize(w, h)
-	self.win.min_w = w
-	self.win.min_h = h
+	self.win.min_cw = w
+	self.win.min_ch = h
+	self.win:resize(self.win.w, self.win.h)
 end
 
 function window:get_maxsize()
-	return self.win.max_w, self.win.max_h
+	return self.win.max_cw, self.win.max_ch
 end
 
 function window:set_maxsize(w, h)
-	self.win.max_w = w
-	self.win.max_h = h
+	self.win.max_cw = w
+	self.win.max_ch = h
+	self.win:resize(self.win.w, self.win.h)
 end
+
+--positioning/magnets --------------------------------------------------------
 
 function window:magnets()
 	local t = {} --{{x, y, w, h}, ...}
@@ -531,6 +551,8 @@ function window:magnets()
 	end
 	return t
 end
+
+--positioning/resizing -------------------------------------------------------
 
 function Window:on_begin_sizemove()
 	--when moving the window, we want its position relative to
@@ -599,9 +621,8 @@ function Window:on_resized(flag)
 
 		--frameless windows maximize to the entire screen, covering the taskbar. fix that.
 		if not self.frame then
-			local t = self.backend:display()
 			self.nw_maximizing = true --on_resized() barrier
-			self:move(t:client_rect())
+			self:move(self.backend:display():client_rect())
 			self.nw_maximizing = false
 		end
 
@@ -1219,7 +1240,7 @@ end
 function window:bitmap()
 
 	--get needed width and height.
-	local _, _, w, h = self.frontend:client_rect()
+	local w, h = self.frontend:size()
 
 	--can't make a zero-sized bitmap and there's no API to clear the screen.
 	--clearing the bitmap simulates a zero-sized bitmap on screen.
@@ -1304,7 +1325,8 @@ function window:_paint_bitmap(dest_hdc)
 end
 
 --update a WS_EX_LAYERED window with the bitmap.
---the bitmap must have client_rect size, otherwise Windows resizes the window to fit the bitmap.
+--the bitmap must have window's client rectangle size, otherwise Windows
+--resizes the _window_ to fit the bitmap.
 function window:_update_layered()
 	if not self._bitmap then return end
 	local r = self.win.screen_rect
@@ -1322,10 +1344,6 @@ function window:invalidate()
 	else
 		self.win:invalidate()
 	end
-end
-
-local function clamp(x, a, b)
-	return math.min(math.max(x, a), b)
 end
 
 --clear the bitmap's pixels and update the layered window.
