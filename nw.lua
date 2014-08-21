@@ -164,10 +164,17 @@ function object:_fire(event, ...)
 	end
 end
 
---handle and fire a non-query event
+--handle and fire a non-query event.
 function object:_event(event, ...)
 	self:_handle(event, ...)
 	self:_fire(event, ...)
+end
+
+--handle and fire a query event.
+function object:_query(event)
+	local allow = self:_handle(event) ~= false
+	self:_fire(event, allow)
+	return allow
 end
 
 --enable or disable events. returns the old state.
@@ -240,8 +247,7 @@ end
 function app:_canquit()
 	self._quitting = true --quit() barrier
 
-	local allow = self:_handle'quitting' ~= false
-	self:_fire('quitting', allow)
+	local allow = self:_query'quitting'
 
 	for i,win in ipairs(self:windows()) do
 		if not win:dead() and not win:parent() then
@@ -373,8 +379,13 @@ local function checkframe(frame)
 end
 
 function window:_new(app, backend_class, opt)
+
+	--check/normalize args.
 	opt = glue.update({}, defaults, opt)
 	opt.frame = checkframe(opt.frame)
+
+	--frameless windows are not resizeable.
+	opt.resizeable = opt.frame == 'normal' and opt.resizeable ~= false
 
 	--if missing some frame coords but given some client coords, convert client
 	--coords to frame coords, and replace missing frame coords with the result.
@@ -434,8 +445,7 @@ function window:_canclose()
 	if self._closing then return false end --reject while closing (from quit() and user quit)
 
 	self._closing = true --_backend_closing() and _canclose() barrier
-	local allow = self:_handle'closing' ~= false
-	self:_fire('closing', allow)
+	local allow = self:_query'closing'
 	self._closing = nil
 	return allow
 end
@@ -518,7 +528,32 @@ function window:_backend_deactivated()
 	self:_event'deactivated'
 end
 
---state ----------------------------------------------------------------------
+--state/app visibility (OSX only) --------------------------------------------
+
+function app:hidden()
+	if not self.nw:os'OSX' then return end
+	return self.backend:hidden()
+end
+
+function app:unhide()
+	if not self.nw:os'OSX' then return end
+	return self.backend:unhide()
+end
+
+function app:hide()
+	if not self.nw:os'OSX' then return end
+	return self.backend:hide()
+end
+
+function app:_backend_did_unhide()
+	self:_event'did_unhide'
+end
+
+function app:_backend_did_hide()
+	self:_event'did_hide'
+end
+
+--state/visibility -----------------------------------------------------------
 
 function window:visible()
 	self:_check()
@@ -530,18 +565,12 @@ function window:show()
 	self.backend:show()
 end
 
-function window:_backend_shown()
-	self:_event('state_changed', 'show')
-end
-
-function window:_backend_hidden()
-	self:_event('state_changed', 'hide')
-end
-
 function window:hide()
 	self:_check()
 	self.backend:hide()
 end
+
+--state/minimizing -----------------------------------------------------------
 
 function window:minimized()
 	self:_check()
@@ -554,13 +583,7 @@ function window:minimize()
 	self.backend:minimize()
 end
 
-function window:_backend_minimized()
-	self:_event('state_changed', 'minimize')
-end
-
-function window:_backend_unminimized()
-	self:_event('state_changed', 'unminimize')
-end
+--state/maximizing -----------------------------------------------------------
 
 function window:maximized()
 	self:_check()
@@ -573,13 +596,7 @@ function window:maximize()
 	self.backend:maximize()
 end
 
-function window:_backend_maximized()
-	self:_event('state_changed', 'maximize')
-end
-
-function window:_backend_unmaximized()
-	self:_event('state_changed', 'unmaximize')
-end
+--state/restoring ------------------------------------------------------------
 
 function window:restore()
 	self:_check()
@@ -596,6 +613,14 @@ function window:shownormal()
 	self.backend:shownormal()
 end
 
+--state/state changed ---------------------------------------------------------
+
+function window:_backend_changed()
+	self:_event'changed'
+end
+
+--state/fullscreen -----------------------------------------------------------
+
 function window:fullscreen(fullscreen)
 	self:_check()
 	if fullscreen == nil then
@@ -609,13 +634,15 @@ function window:fullscreen(fullscreen)
 	end
 end
 
-function window:_backend_entered_fullscreen()
-	self:_event('state_changed', 'enter_fullscreen')
+function window:_backend_entering_fullscreen()
+	return self:_query'entering_fullscreen'
 end
 
-function window:_backend_exited_fullscreen()
-	self:_event('state_changed', 'exit_fullscreen')
+function window:_backend_exiting_fullscreen()
+	return self:_query'exiting_fullscreen'
 end
+
+--state/synthesis ------------------------------------------------------------
 
 function window:state()
 	return
@@ -626,7 +653,7 @@ function window:state()
 		or 'normal'
 end
 
---positioning ----------------------------------------------------------------
+--positioning/frame rect -----------------------------------------------------
 
 local function override_rect(x, y, w, h, x1, y1, w1, h1)
 	return x1 or x, y1 or y, w1 or w, h1 or h
@@ -654,6 +681,8 @@ function window:normal_rect(x1, y1, w1, h1)
 	end
 end
 
+--positioning/client rect ----------------------------------------------------
+
 function window:size() --returns w, h
 	self:_check()
 	if self:minimized() then
@@ -661,6 +690,30 @@ function window:size() --returns w, h
 	end
 	return self.backend:get_size()
 end
+
+function window:minsize(w, h)
+	if not w and not h then
+		return self.backend:get_minsize()
+	else
+		local maxw, maxh = self:maxsize()
+		if w and maxw then w = math.min(w, maxw) end --avoid undefined behavior
+		if h and maxh then h = math.min(h, maxh) end
+		self.backend:set_minsize(w, h)
+	end
+end
+
+function window:maxsize(w, h)
+	if not w and not h then
+		return self.backend:get_maxsize()
+	else
+		local minw, minh = self:minsize()
+		if w and minw then w = math.max(w, minw) end --avoid undefined behavior
+		if h and minh then h = math.max(h, minh) end
+		self.backend:set_maxsize(w, h)
+	end
+end
+
+--positioning/conversions ----------------------------------------------------
 
 local function point_or_rect(x, y, w, h)
 	if not w and not h then
@@ -699,27 +752,7 @@ function app:frame_to_client(frame, x, y, w, h)
 	return cx, cy, cw, ch
 end
 
-function window:minsize(w, h)
-	if not w and not h then
-		return self.backend:get_minsize()
-	else
-		local maxw, maxh = self:maxsize()
-		if w and maxw then w = math.min(w, maxw) end --avoid undefined behavior
-		if h and maxh then h = math.min(h, maxh) end
-		self.backend:set_minsize(w, h)
-	end
-end
-
-function window:maxsize(w, h)
-	if not w and not h then
-		return self.backend:get_maxsize()
-	else
-		local minw, minh = self:minsize()
-		if w and minw then w = math.max(w, minw) end --avoid undefined behavior
-		if h and minh then h = math.max(h, minh) end
-		self.backend:set_maxsize(w, h)
-	end
-end
+--positioning/resizing -------------------------------------------------------
 
 function window:_backend_start_resize(how)
 	self._magnets = nil
@@ -856,6 +889,7 @@ end
 
 function window:display()
 	self:_check()
+	if not self:visible() then return end --because OSX can't do it
 	return self.backend:display()
 end
 

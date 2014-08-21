@@ -133,13 +133,14 @@ local function process(func)
 		end)
 		local function step(...)
 			local seconds = proc(...)
-			if not seconds then return end
+			if not seconds then
+				app:quit()
+				return
+			end
 			app:runafter(seconds, step)
 		end
-		step(...)
-		if app:window_count() > 0 then
-			app:run()
-		end
+		app:runafter(0, step)
+		app:run()
 	end
 end
 
@@ -531,7 +532,7 @@ add('close-while-closing', function()
 	rec{'closing'}
 end)
 
---window activaton -----------------------------------------------------------
+--window & app activaton -----------------------------------------------------
 
 --1. the OS activates the app when the first window is created.
 --2. the app activation event comes before the win activation event.
@@ -717,193 +718,218 @@ add('activation-window-activate-hidden', function()
 	rec{}
 end)
 
+--app visibility (OSX only) --------------------------------------------------
+
+add('app-hide', process(function()
+	local rec = recorder()
+	function app:did_hide() rec'hide' end
+	function app:did_unhide() rec'unhide' end
+	assert(not app:hidden())
+	app:hide()
+	sleep(0.1)
+	assert(app:hidden())
+	app:unhide()
+	sleep(0.1)
+	assert(not app:hidden())
+	rec{'hide', 'unhide'}
+end))
+
 --window states --------------------------------------------------------------
 
 --check various state transitions.
 --each entry in the table describes one test:
---		{initial-flags, command-list, flagcheck, command-list, flag-check, events}.
+--		{command-list, flagcheck, command-list, flag-check}.
 --these tests take some time, better disable window animations in the OS before running them.
 --NOTE: fullscreen animations on OSX (the most annoying of all) cannot be disabled.
 for i,test in ipairs({
 
 	--transitions fron normal
-	{{}, {}, 'v', {'show'}, 'v', {}},
-	{{}, {}, 'v', {'hide'}, '', {'hide'}},
-	{{}, {}, 'v', {'maximize'}, 'vM', {'maximize'}},
-	{{}, {}, 'v', {'minimize'}, 'vm', {'minimize'}},
-	{{}, {}, 'v', {'restore'}, 'v', {}},
-	{{}, {}, 'v', {'shownormal'}, 'v', {}},
+	{{}, 'v', {'show'}, 'v'},
+	{{}, 'v', {'hide'}, ''},
+	{{}, 'v', {'maximize'}, 'vM'},
+	{{}, 'v', {'minimize'}, 'vm'},
+	{{}, 'v', {'restore'}, 'v'},
+	{{}, 'v', {'shownormal'}, 'v'},
 	--transitions fron hidden
-	{{}, {'hide'}, '', {'show'}, 'v', {'hide', 'show'}},
-	{{}, {'hide'}, '', {'hide'}, '', {'hide'}},
-	{{}, {'hide'}, '', {'maximize'}, 'vM', {'hide', 'show', 'maximize'}},
-	{{}, {'hide'}, '', {'minimize'}, 'vm', {'hide', 'show', 'minimize'}},
-	{{}, {'hide'}, '', {'restore'}, 'v', {'hide', 'show'}},
-	{{}, {'hide'}, '', {'shownormal'}, 'v', {'hide', 'show'}},
+	{{'hide'}, '', {'show'}, 'v'},
+	{{'hide'}, '', {'hide'}, ''},
+	{{'hide'}, '', {'maximize'}, 'vM'},
+	{{'hide'}, '', {'minimize'}, 'vm'},
+	{{'hide'}, '', {'restore'}, 'v'},
+	{{'hide'}, '', {'shownormal'}, 'v'},
 	--transitions fron minimized
-	{{}, {'minimize'}, 'vm', {'show'}, 'vm', {'minimize'}},
-	{{}, {'minimize'}, 'vm', {'hide'}, 'm', {'minimize', 'hide'}},
-	{{}, {'minimize'}, 'vm', {'maximize'}, 'vM', {'minimize', 'unminimize', 'maximize'}},
-	{{}, {'minimize'}, 'vm', {'minimize'}, 'vm', {'minimize'}},
-	{{}, {'minimize'}, 'vm', {'restore'}, 'v', {'minimize', 'unminimize'}},
-	{{}, {'minimize'}, 'vm', {'shownormal'}, 'v', {'minimize', 'unminimize'}},
+	{{'minimize'}, 'vm', {'show'}, 'vm'},
+	{{'minimize'}, 'vm', {'hide'}, 'm'},
+	{{'minimize'}, 'vm', {'maximize'}, 'vM'},
+	{{'minimize'}, 'vm', {'minimize'}, 'vm'},
+	{{'minimize'}, 'vm', {'restore'}, 'v'},
+	{{'minimize'}, 'vm', {'shownormal'}, 'v'},
 	--transitions from maximized
-	{{}, {'maximize'}, 'vM', {'show'}, 'vM', {'maximize'}},
-	{{}, {'maximize'}, 'vM', {'hide'}, 'M', {'maximize', 'hide'}},
-	{{}, {'maximize'}, 'vM', {'maximize'}, 'vM', {'maximize'}},
-	{{}, {'maximize'}, 'vM', {'minimize'}, 'vmM', {'maximize', 'minimize'}},
-	{{}, {'maximize'}, 'vM', {'restore'}, 'v', {'maximize', 'unmaximize'}},
-	{{}, {'maximize'}, 'vM', {'shownormal'}, 'v', {'maximize', 'unmaximize'}},
+	{{'maximize'}, 'vM', {'show'}, 'vM'},
+	{{'maximize'}, 'vM', {'hide'}, 'M'},
+	{{'maximize'}, 'vM', {'maximize'}, 'vM'},
+	{{'maximize'}, 'vM', {'minimize'}, 'vmM'},
+	{{'maximize'}, 'vM', {'restore'}, 'v'},
+	{{'maximize'}, 'vM', {'shownormal'}, 'v'},
 	--transitions from hidden minimized
-	{{}, {'minimize', 'hide'}, 'm', {'show'}, 'vm', {'minimize', 'hide', 'show'}},
-	{{}, {'minimize', 'hide'}, 'm', {'hide'}, 'm', {'minimize', 'hide'}},
-	{{}, {'minimize', 'hide'}, 'm', {'maximize'}, 'vM', {'minimize', 'hide', 'show', 'unminimize', 'maximize'}},
-	{{}, {'minimize', 'hide'}, 'm', {'minimize'}, 'vm', {'minimize', 'hide', 'show'}},
-	{{}, {'minimize', 'hide'}, 'm', {'restore'}, 'v', {'minimize', 'hide', 'show', 'unminimize'}},
-	{{}, {'minimize', 'hide'}, 'm', {'shownormal'}, 'v', {'minimize', 'hide', 'show', 'unminimize'}},
+	{{'minimize', 'hide'}, 'm', {'show'}, 'vm'},
+	{{'minimize', 'hide'}, 'm', {'hide'}, 'm'},
+	{{'minimize', 'hide'}, 'm', {'maximize'}, 'vM'},
+	{{'minimize', 'hide'}, 'm', {'minimize'}, 'vm'},
+	{{'minimize', 'hide'}, 'm', {'restore'}, 'v'},
+	{{'minimize', 'hide'}, 'm', {'shownormal'}, 'v'},
 	--transitions from hidden maximized
-	{{}, {'maximize', 'hide'}, 'M', {'show'}, 'vM', {'maximize', 'hide', 'show'}},
-	{{}, {'maximize', 'hide'}, 'M', {'hide'}, 'M', {'maximize', 'hide'}},
-	{{}, {'maximize', 'hide'}, 'M', {'maximize'}, 'vM', {'maximize', 'hide', 'show'}},
-	{{}, {'maximize', 'hide'}, 'M', {'minimize'}, 'vmM', {'maximize', 'hide', 'show', 'minimize'}},
-	{{}, {'maximize', 'hide'}, 'M', {'restore'}, 'v', {'maximize', 'hide', 'show', 'unmaximize'}},
-	{{}, {'maximize', 'hide'}, 'M', {'shownormal'}, 'v', {'maximize', 'hide', 'show', 'unmaximize'}},
+	{{'maximize', 'hide'}, 'M', {'show'}, 'vM'},
+	{{'maximize', 'hide'}, 'M', {'hide'}, 'M'},
+	{{'maximize', 'hide'}, 'M', {'maximize'}, 'vM'},
+	{{'maximize', 'hide'}, 'M', {'minimize'}, 'vmM'},
+	{{'maximize', 'hide'}, 'M', {'restore'}, 'v'},
+	{{'maximize', 'hide'}, 'M', {'shownormal'}, 'v'},
 	--transitions from minimized maximized
-	{{}, {'maximize', 'minimize'}, 'vmM', {'show'}, 'vmM', {'maximize', 'minimize'}},
-	{{}, {'maximize', 'minimize'}, 'vmM', {'hide'}, 'mM', {'maximize', 'minimize', 'hide'}},
-	{{}, {'maximize', 'minimize'}, 'vmM', {'maximize'}, 'vM', {'maximize', 'minimize', 'unminimize'}},
-	{{}, {'maximize', 'minimize'}, 'vmM', {'minimize'}, 'vmM', {'maximize', 'minimize'}},
-	{{}, {'maximize', 'minimize'}, 'vmM', {'restore'}, 'vM', {'maximize', 'minimize', 'unminimize'}},
-	{{}, {'maximize', 'minimize'}, 'vmM', {'shownormal'}, 'v', {'maximize', 'minimize', 'unminimize', 'unmaximize'}},
+	{{'maximize', 'minimize'}, 'vmM', {'show'}, 'vmM'},
+	{{'maximize', 'minimize'}, 'vmM', {'hide'}, 'mM'},
+	{{'maximize', 'minimize'}, 'vmM', {'maximize'}, 'vM'},
+	{{'maximize', 'minimize'}, 'vmM', {'minimize'}, 'vmM'},
+	{{'maximize', 'minimize'}, 'vmM', {'restore'}, 'vM'},
+	{{'maximize', 'minimize'}, 'vmM', {'shownormal'}, 'v'},
 	--transitions from hidden minimized maximized
-	{{}, {'maximize', 'minimize', 'hide'}, 'mM', {'show'}, 'vmM', {'maximize', 'minimize', 'hide', 'show'}},
-	{{}, {'maximize', 'minimize', 'hide'}, 'mM', {'hide'}, 'mM', {'maximize', 'minimize', 'hide'}},
-	{{}, {'maximize', 'minimize', 'hide'}, 'mM', {'maximize'}, 'vM', {'maximize', 'minimize', 'hide', 'show', 'unminimize'}},
-	{{}, {'maximize', 'minimize', 'hide'}, 'mM', {'minimize'}, 'vmM', {'maximize', 'minimize', 'hide', 'show'}},
-	{{}, {'maximize', 'minimize', 'hide'}, 'mM', {'restore'}, 'vM', {'maximize', 'minimize', 'hide', 'show', 'unminimize'}},
-	{{}, {'maximize', 'minimize', 'hide'}, 'mM', {'shownormal'}, 'v', {'maximize', 'minimize', 'hide', 'show', 'unminimize', 'unmaximize'}},
+	{{'maximize', 'minimize', 'hide'}, 'mM', {'show'}, 'vmM'},
+	{{'maximize', 'minimize', 'hide'}, 'mM', {'hide'}, 'mM'},
+	{{'maximize', 'minimize', 'hide'}, 'mM', {'maximize'}, 'vM'},
+	{{'maximize', 'minimize', 'hide'}, 'mM', {'minimize'}, 'vmM'},
+	{{'maximize', 'minimize', 'hide'}, 'mM', {'restore'}, 'vM'},
+	{{'maximize', 'minimize', 'hide'}, 'mM', {'shownormal'}, 'v'},
 
 	--transitions from fullscreen
-	{{}, {'enter_fullscreen'}, 'vF', {'show'}, 'vF', {'enter_fullscreen'}},
-	{{}, {'enter_fullscreen'}, 'vF', {'hide'}, 'F', {'enter_fullscreen', 'hide'}},
-	{{}, {'enter_fullscreen'}, 'vF', {'maximize'}, 'vF', {'enter_fullscreen'}},
-	{{}, {'enter_fullscreen'}, 'vF', {'minimize'}, 'vF', {'enter_fullscreen'}},
-	{{}, {'enter_fullscreen'}, 'vF', {'restore'}, 'v', {'enter_fullscreen', 'exit_fullscreen'}},
-	{{}, {'enter_fullscreen'}, 'vF', {'shownormal'}, 'vF', {'enter_fullscreen'}},
+	{{'enter_fullscreen'}, 'vF', {'show'}, 'vF'},
+	{{'enter_fullscreen'}, 'vF', {'hide'}, 'F'},
+	{{'enter_fullscreen'}, 'vF', {'maximize'}, 'vF'},
+	{{'enter_fullscreen'}, 'vF', {'minimize'}, 'vF'},
+	{{'enter_fullscreen'}, 'vF', {'restore'}, 'v'},
+	{{'enter_fullscreen'}, 'vF', {'shownormal'}, 'vF'},
 	--transitions from hidden fullscreen
-	{{}, {'enter_fullscreen', 'hide'}, 'F', {'show'}, 'vF', {'enter_fullscreen', 'hide', 'show'}},
-	{{}, {'enter_fullscreen', 'hide'}, 'F', {'hide'}, 'F', {'enter_fullscreen', 'hide'}},
-	{{}, {'enter_fullscreen', 'hide'}, 'F', {'maximize'}, 'F', {'enter_fullscreen', 'hide'}},
-	{{}, {'enter_fullscreen', 'hide'}, 'F', {'minimize'}, 'F', {'enter_fullscreen', 'hide'}},
-	{{}, {'enter_fullscreen', 'hide'}, 'F', {'restore'}, 'v', {'enter_fullscreen', 'hide', 'show', 'exit_fullscreen'}},
-	{{}, {'enter_fullscreen', 'hide'}, 'F', {'shownormal'}, 'F', {'enter_fullscreen', 'hide'}},
+	{{'enter_fullscreen', 'hide'}, 'F', {'show'}, 'vF'},
+	{{'enter_fullscreen', 'hide'}, 'F', {'hide'}, 'F'},
+	{{'enter_fullscreen', 'hide'}, 'F', {'maximize'}, 'F'},
+	{{'enter_fullscreen', 'hide'}, 'F', {'minimize'}, 'F'},
+	{{'enter_fullscreen', 'hide'}, 'F', {'restore'}, 'v'},
+	{{'enter_fullscreen', 'hide'}, 'F', {'shownormal'}, 'F'},
 	--transitions from maximized fullscreen
-	{{}, {'maximize', 'enter_fullscreen'}, 'vMF', {'show'}, 'vMF', {'maximize', 'enter_fullscreen'}},
-	{{}, {'maximize', 'enter_fullscreen'}, 'vMF', {'hide'}, 'MF', {'maximize', 'enter_fullscreen', 'hide'}},
-	{{}, {'maximize', 'enter_fullscreen'}, 'vMF', {'maximize'}, 'vMF', {'maximize', 'enter_fullscreen'}},
-	{{}, {'maximize', 'enter_fullscreen'}, 'vMF', {'minimize'}, 'vMF', {'maximize', 'enter_fullscreen'}},
-	{{}, {'maximize', 'enter_fullscreen'}, 'vMF', {'restore'}, 'vM', {'maximize', 'enter_fullscreen', 'exit_fullscreen'}},
-	{{}, {'maximize', 'enter_fullscreen'}, 'vMF', {'shownormal'}, 'vMF', {'maximize', 'enter_fullscreen'}},
+	{{'maximize', 'enter_fullscreen'}, 'vMF', {'show'}, 'vMF'},
+	{{'maximize', 'enter_fullscreen'}, 'vMF', {'hide'}, 'MF'},
+	{{'maximize', 'enter_fullscreen'}, 'vMF', {'maximize'}, 'vMF'},
+	{{'maximize', 'enter_fullscreen'}, 'vMF', {'minimize'}, 'vMF'},
+	{{'maximize', 'enter_fullscreen'}, 'vMF', {'restore'}, 'vM'},
+	{{'maximize', 'enter_fullscreen'}, 'vMF', {'shownormal'}, 'vMF'},
 	--transitions from hidden maximized fullscreen
-	{{}, {'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'show'}, 'vMF', {'maximize', 'enter_fullscreen', 'hide'}},
-	{{}, {'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'hide'}, 'MF', {'maximize', 'enter_fullscreen', 'hide'}},
-	{{}, {'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'maximize'}, 'MF', {'maximize', 'enter_fullscreen', 'hide'}},
-	{{}, {'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'minimize'}, 'MF', {'maximize', 'enter_fullscreen', 'hide'}},
-	{{}, {'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'restore'}, 'vM', {'maximize', 'enter_fullscreen', 'hide', 'show', 'exit_fullscreen'}},
-	{{}, {'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'shownormal'}, 'MF', {'maximize', 'enter_fullscreen', 'hide'}},
+	{{'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'show'}, 'vMF'},
+	{{'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'hide'}, 'MF'},
+	{{'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'maximize'}, 'MF'},
+	{{'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'minimize'}, 'MF'},
+	{{'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'restore'}, 'vM'},
+	{{'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'shownormal'}, 'MF'},
 	--transitions to enter fullscreen
-	{{}, {}, 'v', {'enter_fullscreen'}, 'vF', {'enter_fullscreen'}},
-	{{}, {'hide'}, '', {'enter_fullscreen'}, 'vF', {'hide', 'show', 'enter_fullscreen'}},
-	{{}, {'minimize'}, 'vm', {'enter_fullscreen'}, 'vF', {'minimize', 'unminimize', 'enter_fullscreen'}},
-	{{}, {'maximize'}, 'vM', {'enter_fullscreen'}, 'vMF', {'maximize', 'enter_fullscreen'}},
-	{{}, {'minimize', 'hide'}, 'm', {'enter_fullscreen'}, 'vF', {'minimize', 'hide', 'show', 'unminimize', 'enter_fullscreen'}},
-	{{}, {'maximize', 'minimize'}, 'vmM', {'enter_fullscreen'}, 'vMF', {'maximize', 'minimize', 'unminimize', 'enter_fullscreen'}},
-	{{}, {'maximize', 'minimize', 'hide'}, 'mM', {'enter_fullscreen'}, 'vMF', {'maximize', 'minimize', 'hide', 'show', 'unminimize', 'enter_fullscreen'}},
-	{{}, {'enter_fullscreen'}, 'vF', {'enter_fullscreen'}, 'vF', {'enter_fullscreen'}},
-	{{}, {'enter_fullscreen', 'hide'}, 'F', {'enter_fullscreen'}, 'F', {'enter_fullscreen', 'hide'}},
-	{{}, {'maximize', 'enter_fullscreen'}, 'vMF', {'enter_fullscreen'}, 'vMF', {'maximize', 'enter_fullscreen'}},
-	{{}, {'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'enter_fullscreen'}, 'MF', {'maximize', 'enter_fullscreen', 'hide'}},
+	{{}, 'v', {'enter_fullscreen'}, 'vF'},
+	{{'hide'}, '', {'enter_fullscreen'}, 'vF'},
+	{{'minimize'}, 'vm', {'enter_fullscreen'}, 'vF'},
+	{{'maximize'}, 'vM', {'enter_fullscreen'}, 'vMF'},
+	{{'minimize', 'hide'}, 'm', {'enter_fullscreen'}, 'vF'},
+	{{'maximize', 'minimize'}, 'vmM', {'enter_fullscreen'}, 'vMF'},
+	{{'maximize', 'minimize', 'hide'}, 'mM', {'enter_fullscreen'}, 'vMF'},
+	{{'enter_fullscreen'}, 'vF', {'enter_fullscreen'}, 'vF'},
+	{{'enter_fullscreen', 'hide'}, 'F', {'enter_fullscreen'}, 'F'},
+	{{'maximize', 'enter_fullscreen'}, 'vMF', {'enter_fullscreen'}, 'vMF'},
+	{{'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'enter_fullscreen'}, 'MF'},
 	--transitions to exit fullscreen
-	{{}, {}, 'v', {'exit_fullscreen'}, 'v', {}},
-	{{}, {'hide'}, '', {'exit_fullscreen'}, '', {}},
-	{{}, {'minimize'}, 'vm', {'exit_fullscreen'}, 'vm', {}},
-	{{}, {'maximize'}, 'vM', {'exit_fullscreen'}, 'vM', {}},
-	{{}, {'minimize', 'hide'}, 'm', {'exit_fullscreen'}, 'm', {}},
-	{{}, {'maximize', 'minimize'}, 'vmM', {'exit_fullscreen'}, 'vmM', {}},
-	{{}, {'maximize', 'minimize', 'hide'}, 'mM', {'exit_fullscreen'}, 'mM', {}},
-	{{}, {'enter_fullscreen'}, 'vF', {'exit_fullscreen'}, 'v', {'enter_fullscreen', 'exit_fullscreen'}},
-	{{}, {'enter_fullscreen', 'hide'}, 'F', {'exit_fullscreen'}, 'v', {'enter_fullscreen', 'hide', 'show', 'exit_fullscreen'}},
-	{{}, {'maximize', 'enter_fullscreen'}, 'vMF', {'exit_fullscreen'}, 'vM', 'maximize', 'enter_fullscreen', 'exit_fullscreen'},
-	{{}, {'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'exit_fullscreen'}, 'vM', 'maximize', 'enter_fullscreen', 'hide', 'show', 'exit_fullscreen'},
+	{{}, 'v', {'exit_fullscreen'}, 'v'},
+	{{'hide'}, '', {'exit_fullscreen'}, ''},
+	{{'minimize'}, 'vm', {'exit_fullscreen'}, 'vm'},
+	{{'maximize'}, 'vM', {'exit_fullscreen'}, 'vM'},
+	{{'minimize', 'hide'}, 'm', {'exit_fullscreen'}, 'm'},
+	{{'maximize', 'minimize'}, 'vmM', {'exit_fullscreen'}, 'vmM'},
+	{{'maximize', 'minimize', 'hide'}, 'mM', {'exit_fullscreen'}, 'mM'},
+	{{'enter_fullscreen'}, 'vF', {'exit_fullscreen'}, 'v'},
+	{{'enter_fullscreen', 'hide'}, 'F', {'exit_fullscreen'}, 'v'},
+	{{'maximize', 'enter_fullscreen'}, 'vMF', {'exit_fullscreen'}, 'vM'},
+	{{'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'exit_fullscreen'}, 'vM'},
 
 }) do
-	local init_flags, commands1, check1, commands2, check2, state_events = unpack(test)
+	local commands1, check1, commands2, check2 = unpack(test)
 
-	local t = {}
-	t[#t+1] = init_flags.visible == false and 'hidden' or nil
-	t[#t+1] = init_flags.maximized and 'maximized' or nil
-	glue.extend(t, commands1, commands2)
-	local test_name = table.concat(t, '-')
+	local function make_test(init_flags)
+		--compose test name.
+		local t = {}
+		t[#t+1] = init_flags.visible == false and 'hidden' or nil
+		t[#t+1] = init_flags.maximized and 'maximized' or nil
+		glue.extend(t, commands1, commands2)
+		glue.append(t, init_flags.frame == 'none' and 'noframe' or nil)
+		local test_name = table.concat(t, '-')
 
-	add('state-'..test_name, process(function()
+		add('state-'..test_name, process(function()
 
-		app:autoquit(false)
-		local win = app:window(winpos(init_flags))
-		local rec = recorder()
+			app:autoquit(false)
+			local win = app:window(winpos(init_flags))
+			local rec = recorder()
 
-		function win:event(e, ...)
-			if e == 'state_changed' then
-				--TODO: check flags: visible, maximized, minimized, fullscreen
-				rec(...)
+			local function flags_string()
+				return
+					(win:visible() and 'v' or '')..
+					(win:minimized() and 'm' or '')..
+					(win:maximized() and 'M' or '')..
+					(win:fullscreen() and 'F' or '')
 			end
-		end
 
-		local function run_commands(commands, expected_flags)
-
-			--run a list of commands without args on a window object.
-			for i, command in ipairs(commands) do
-				print('> '..command)
-				local fs = ffi.os == 'OSX' and win:fullscreen() or command == 'enter_fullscreen'
-				if command == 'enter_fullscreen' then
-					win:fullscreen(true)
-				elseif command == 'exit_fullscreen' then
-					win:fullscreen(false)
-				else
-					win[command](win)
+			function win:event(e, ...)
+				if e == 'changed' then
+					print('> '..e, flags_string())
 				end
-				if fs then
-					sleep(1.5)
+			end
+
+			local function run_commands(commands, expected_flags)
+
+				--run a list of commands without args on a window object.
+				for i, command in ipairs(commands) do
+
+					print(command, flags_string())
+
+					local fs = nw:os'OSX' and (win:fullscreen() or command == 'enter_fullscreen')
+					if command == 'enter_fullscreen' then
+						win:fullscreen(true)
+					elseif command == 'exit_fullscreen' then
+						win:fullscreen(false)
+					else
+						win[command](win)
+					end
+					if fs then
+						sleep(1.5)
+					end
+					--sleep(1)
 				end
-				sleep(1)
+
+				--check current state flags against a flag combination string.
+				local actual_flags = flags_string()
+				if actual_flags ~= expected_flags then
+					error(actual_flags .. ', expected ' .. expected_flags)
+				end
 			end
 
-			--check current state flags against a flag combination string.
-			local actual_flags =
-				(win:visible() and 'v' or '')..
-				(win:minimized() and 'm' or '')..
-				(win:maximized() and 'M' or '')..
-				(win:fullscreen() and 'F' or '')
+			run_commands(commands1, check1)
+			run_commands(commands2, check2)
 
-			if actual_flags ~= expected_flags then
-				error(actual_flags .. ', expected ' .. expected_flags)
-			end
-		end
+			local was_fs = win:fullscreen() and nw:os'OSX'
+			print('close', flags_string())
+			win:close()
+			if was_fs then sleep(1.5) end
+		end))
+	end
 
-		run_commands(commands1, check1)
-		run_commands(commands2, check2)
-
-		local was_fs = win:fullscreen() and ffi.os == 'OSX'
-		win:close()
-		if was_fs then sleep(1.5) end
-		app:quit()
-
-		rec(state_events or {})
-	end))
+	make_test{}
+	make_test{frame = 'none'}
 end
 
 add('test', function()
 	local win = app:window(winpos{})
-	--
+	print(win.backend.nswin)
 	app:run()
 end)
 
@@ -934,6 +960,36 @@ add('pos-init-mixed', function()
 	app:window{cx = 200, y = 200, cw = 200, h = 200}
 	app:window{x = 200, y = 200, w = 200, h = 200}
 	app:run()
+end)
+
+--create a window off-screen. move a window off-screen.
+--NOTE: Windows can create windows off-screen but can't move them off-screen.
+--NOTE: OSX can only create/move frameless windows off-screen.
+--These differences were not leveled out.
+add('pos-out', function()
+
+	local win = app:window(winpos{x = -5000, y = -5000})
+	print(win:frame_rect())
+	win:close()
+
+	local win = app:window(winpos())
+	win:frame_rect(-5000, -5000)
+	print(win:frame_rect())
+	win:close()
+
+	--frame = 'none' and initial off-screen position is the only way that works
+	--on both Windows and OSX.
+	local win = app:window(winpos{x = -5000, y = -5000, frame = 'none'})
+	local x, y = win:frame_rect()
+	assert(x == -5000)
+	assert(y == -5000)
+	print(win:frame_rect())
+	win:close()
+
+	local win = app:window(winpos{frame = 'none'})
+	win:frame_rect(-5000, -5000)
+	print(win:frame_rect())
+	win:close()
 end)
 
 --check that missing x or y works (i.e. the window is centered on its dispaly).
@@ -1342,6 +1398,30 @@ end)
 add('display-active', function()
 	local display = app:active_display()
 	test_display(display)
+end)
+
+--display is nil on a hidden window.
+add('display-hidden', function()
+
+	local win = app:window(winpos{visible = false})
+	assert(not win:display())
+	win:close()
+
+	local win = app:window(winpos{})
+	win:hide()
+	assert(not win:display())
+	win:close()
+end)
+
+--display is nil on an off-screen window.
+add('display-out', function()
+	local win = app:window(winpos{x = -5000, y = -5000, frame = 'none'})
+	local x, y = win:frame_rect()
+	assert(x == -5000)
+	assert(y == -5000)
+	assert(not win:display())
+	win:close()
+	print'ok'
 end)
 
 --edge snapping --------------------------------------------------------------

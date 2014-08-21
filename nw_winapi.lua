@@ -144,7 +144,7 @@ function window:new(app, frontend, t)
 		minimize_button = t.minimizable,
 		maximize_button = t.maximizable,
 		noclose = not t.closeable,
-		sizeable = framed and t.resizeable,
+		sizeable = t.resizeable,
 		receive_double_clicks = false, --we do our own double-clicking
 	}
 
@@ -166,9 +166,6 @@ function window:new(app, frontend, t)
 	self.win.backend = self
 	self.win.app = app
 
-	--force a resize to apply constraints.
-	self.win:resize(self.win.w, self.win.h)
-
 	--set up icon API
 	self:_setup_icon_api()
 
@@ -187,7 +184,7 @@ end
 
 function Window:on_close()
 	if not self._forceclose and not self.frontend:_backend_closing() then
-		return 0
+		return false
 	end
 end
 
@@ -309,7 +306,7 @@ function Window:on_deactivate_app() --triggered after on_deactivate().
 	self.app:_deactivated()
 end
 
---state ----------------------------------------------------------------------
+--state/visibility -----------------------------------------------------------
 
 function window:visible()
 	return self.win.visible
@@ -323,30 +320,7 @@ function window:hide()
 	self.win:hide()
 end
 
---[[
-function Window:on_show(show)
-	--NOTE: not sent when maximized from hidden, use on_pos_changed() for that.
-	if show then
-		self.frontend:_backend_shown()
-	else
-		self.frontend:_backend_hidden()
-	end
-end
-]]
-
-function Window:on_pos_changing(winpos)
-	self.nw_visible = self.visible
-	--print('changing', self.nw_visible)
-end
-
-function Window:on_pos_changed(winpos)
-	--print('changed', self.nw_visible, winpos.flagbits.SWP_SHOWWINDOW, winpos.flagbits.SWP_HIDEWINDOW)
-	if winpos.flagbits.SWP_SHOWWINDOW and not self.nw_visible then
-		self.frontend:_backend_shown()
-	elseif winpos.flagbits.SWP_HIDEWINDOW and self.nw_visible then
-		self.frontend:_backend_hidden()
-	end
-end
+--state/minimizing -----------------------------------------------------------
 
 function window:minimized()
 	return self.win.minimized
@@ -355,6 +329,8 @@ end
 function window:minimize()
 	self.win:minimize()
 end
+
+--state/maximizing -----------------------------------------------------------
 
 function window:maximized()
 	if self._fullscreen then
@@ -369,6 +345,8 @@ function window:maximize()
 	self.win:maximize()
 end
 
+--state/restoring ------------------------------------------------------------
+
 function window:restore()
 	self.win:restore()
 end
@@ -377,11 +355,23 @@ function window:shownormal()
 	self.win:shownormal()
 end
 
+--state/changed event --------------------------------------------------------
+
+function Window:on_pos_changed(winpos)
+	self.frontend:_backend_changed()
+end
+
+--state/fullscreen -----------------------------------------------------------
+
 function window:fullscreen()
 	return self._fullscreen
 end
 
 function window:enter_fullscreen(to_minimized)
+
+	if not self.frontend:_backend_entering_fullscreen() then
+		return
+	end
 
 	self._fs = {
 		maximized = self:maximized(),
@@ -404,7 +394,8 @@ function window:enter_fullscreen(to_minimized)
 	self.win.frame = false
 	self.win.border = false
 	self.win.sizeable = false
-	self.win.normal_rect = pack_rect(nil, self:display():rect())
+	local display = self:display() or self.app:active_display()
+	self.win.normal_rect = pack_rect(nil, display:rect()) --TODO: when is this nil ??
 
 	if to_minimized then
 		self.win.restore_to_maximized = false
@@ -418,11 +409,16 @@ function window:enter_fullscreen(to_minimized)
 	--restore events, and trigger a single resize event and a repaint.
 	self._norepaint = false
 	self.frontend:events(events)
-	self.frontend:_backend_resized'enter_fullscreen'
+	self.frontend:_backend_resized()
+	self.frontend:_backend_changed()
 	self:invalidate()
 end
 
 function window:exit_fullscreen(to_maximized)
+
+	if not self.frontend:_backend_exiting_fullscreen() then
+		return
+	end
 
 	--disable events while we're changing the frame and size.
 	local events = self.frontend:events(false)
@@ -444,11 +440,19 @@ function window:exit_fullscreen(to_maximized)
 	--restore events, and trigger a single resize event and a repaint.
 	self._norepaint = false
 	self.frontend:events(events)
-	self.frontend:_backend_resized'exit_fullscreen'
+	self.frontend:_backend_resized()
+	self.frontend:_backend_changed()
 	self:invalidate()
 end
 
---positioning/rectangles -----------------------------------------------------
+function window:on_minimizing()
+	--refuse to minimize a fullscreen window to emulate OSX behavior.
+	if self._fullscreen then
+		return false
+	end
+end
+
+--positioning/frame rect -----------------------------------------------------
 
 function window:get_normal_rect()
 	if self._fullscreen then
@@ -463,7 +467,7 @@ function window:set_normal_rect(x, y, w, h)
 		self._fs.normal_rect = pack_rect(nil, x, y, w, h)
 	else
 		self.win.normal_rect = pack_rect(nil, x, y, w, h)
-		self.frontend:_backend_resized'set'
+		self.frontend:_backend_resized()
 	end
 end
 
@@ -478,9 +482,31 @@ function window:set_frame_rect(x, y, w, h)
 	end
 end
 
+--positioning/client rect ----------------------------------------------------
+
 function window:get_size()
 	local r = self.win.client_rect
 	return r.w, r.h
+end
+
+function window:get_minsize()
+	return self.win.min_cw, self.win.min_ch
+end
+
+function window:set_minsize(w, h)
+	self.win.min_cw = w
+	self.win.min_ch = h
+	self.win:resize(self.win.w, self.win.h)
+end
+
+function window:get_maxsize()
+	return self.win.max_cw, self.win.max_ch
+end
+
+function window:set_maxsize(w, h)
+	self.win.max_cw = w
+	self.win.max_ch = h
+	self.win:resize(self.win.w, self.win.h)
 end
 
 --positioning/conversions ----------------------------------------------------
@@ -516,29 +542,7 @@ function app:frame_to_client(frame, x, y, w, h)
 		pack_rect(nil, x, y, w, h)))
 end
 
---positioning/constraints ----------------------------------------------------
-
-function window:get_minsize()
-	return self.win.min_cw, self.win.min_ch
-end
-
-function window:set_minsize(w, h)
-	self.win.min_cw = w
-	self.win.min_ch = h
-	self.win:resize(self.win.w, self.win.h)
-end
-
-function window:get_maxsize()
-	return self.win.max_cw, self.win.max_ch
-end
-
-function window:set_maxsize(w, h)
-	self.win.max_cw = w
-	self.win.max_ch = h
-	self.win:resize(self.win.w, self.win.h)
-end
-
---positioning/magnets --------------------------------------------------------
+--positioning/resizing -------------------------------------------------------
 
 function window:magnets()
 	local t = {} --{{x, y, w, h}, ...}
@@ -551,8 +555,6 @@ function window:magnets()
 	end
 	return t
 end
-
---positioning/resizing -------------------------------------------------------
 
 function Window:on_begin_sizemove()
 	--when moving the window, we want its position relative to
@@ -568,14 +570,14 @@ end
 
 function Window:on_end_sizemove()
 	self.nw_start_resize = false
-	local how = self.nw_end_sizemove_how
-	self.nw_end_sizemove_how = nil
+	local how = self.nw_sizemove_how
+	self.nw_sizemove_how = nil
 	self.frontend:_backend_end_resize(how)
 end
 
-function Window:frame_changing(how, rect)
+function Window:nw_frame_changing(how, rect)
 
-	self.nw_end_sizemove_how = how
+	self.nw_sizemove_how = how
 
 	--trigger the deferred start_resize event, once.
 	if self.nw_start_resize then
@@ -596,24 +598,26 @@ function Window:frame_changing(how, rect)
 end
 
 function Window:on_moving(rect)
-	self:frame_changing('move', rect)
+	self:nw_frame_changing('move', rect)
 	return true --signal that the position was modified
 end
 
 function Window:on_resizing(how, rect)
-	self:frame_changing(how, rect)
+	self:nw_frame_changing(how, rect)
 end
 
 function Window:on_moved()
-	self.frontend:_backend_resized'move'
+	self.frontend:_backend_resized()
 end
 
 function Window:on_resized(flag)
 
+	--early event, ignore.
+	if not self.frontend then return end
+
 	if flag == 'minimized' then
 
-		self.frontend:_backend_resized'minimize'
-		self.frontend:_backend_minimized()
+		self.frontend:_backend_resized()
 
 	elseif flag == 'maximized' then
 
@@ -627,19 +631,12 @@ function Window:on_resized(flag)
 		end
 
 		self.backend:invalidate()
-		self.frontend:_backend_resized'maximize'
-		self.frontend:_backend_maximized()
+		self.frontend:_backend_resized()
 
 	elseif flag == 'restored' then --also triggered on show
 
 		self.backend:invalidate()
-		self.frontend:_backend_resized'resize'
-
-		if self.minimized then
-			self.frontend:_backend_unmaximized()
-		else
-			self.frontend:_backend_unminimized()
-		end
+		self.frontend:_backend_resized()
 	end
 end
 
@@ -1001,7 +998,7 @@ Window.on_syskey_down_char = Window.on_key_down_char
 --take control of the ALT and F10 keys
 function Window:on_menu_key(char_code)
 	if char_code == 0 then
-		return 0
+		return false
 	end
 end
 
