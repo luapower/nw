@@ -712,8 +712,9 @@ function app:display_count()
 	return winapi.GetSystemMetrics'SM_CMONITORS'
 end
 
+--NOTE: using MONITOR_DEFAULTTONULL to emulate OSX behavior for off-screen windows.
 function window:display()
-	return self.app:_display(self.win.monitor)
+	return self.app:_display(self.win:get_monitor'MONITOR_DEFAULTTONULL')
 end
 
 function Window:on_display_change(x, y, bpp)
