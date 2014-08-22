@@ -63,7 +63,7 @@ end
 --message loop ---------------------------------------------------------------
 
 function app:run()
-	self:_activate_started()
+	self:_init_activate()
 	winapi.MessageLoop(function(msg)
 		--print(winapi.findname('WM_', msg.message))
 	end)
@@ -197,7 +197,27 @@ end
 
 --activation -----------------------------------------------------------------
 
+function app:_init_activate()
+	self._started = true
+	--check for deferred app activation event
+	if self._activate then
+		self._activate = nil
+		if self.frontend:window_count() > 0 then
+			self:_activated()
+		end
+	end
+	--check for deferred window activation event
+	if self._activate_window then
+		local win = self._activate_window
+		self._activate_window = nil
+		if not win.frontend:dead() then
+			win:_activated()
+		end
+	end
+end
+
 function app:_activated()
+
 	if not self._started then
 		--defer app activation if the app is not started, to emulate OSX behavior.
 		self._activate = true
@@ -214,25 +234,6 @@ function app:_deactivated()
 	elseif self._active then --ignore duplicate events.
 		self._active = false
 		self.frontend:_backend_deactivated()
-	end
-end
-
-function app:_activate_started()
-	self._started = true
-	--check for deferred app activation event
-	if self._activate then
-		self._activate = nil
-		if self.frontend:window_count() > 0 then
-			self:_activated()
-		end
-	end
-	--check for deferred window activation event
-	if self._activate_window then
-		local win = self._activate_window
-		self._activate_window = nil
-		if not win.frontend:dead() then
-			win:_activated()
-		end
 	end
 end
 
@@ -712,9 +713,10 @@ function app:display_count()
 	return winapi.GetSystemMetrics'SM_CMONITORS'
 end
 
---NOTE: using MONITOR_DEFAULTTONULL to emulate OSX behavior for off-screen windows.
+--NOTE: the default flag for self.win.monitor is MONITOR_DEFAULTTONULL,
+--which is what we need to emulate OSX behavior for off-screen windows.
 function window:display()
-	return self.app:_display(self.win:get_monitor'MONITOR_DEFAULTTONULL')
+	return self.app:_display(self.win.monitor)
 end
 
 function Window:on_display_change(x, y, bpp)

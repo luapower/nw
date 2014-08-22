@@ -928,8 +928,48 @@ for i,test in ipairs({
 end
 
 add('test', function()
-	local win = app:window(winpos{})
-	print(win.backend.nswin)
+	app:runafter(0, function()
+	local win = app:window(winpos())
+	win:minimize()
+	--win:hide()
+	require'pp'(win:display())
+	win:normal_rect(-1000, -2000, 400, 300)
+	print(win:frame_rect())
+	print(win:normal_rect())
+	--win:restore()
+
+	--[[
+	local objc = require'objc'
+	app:runafter(0, function()
+
+		local style = bit.bor(
+			objc.NSTitledWindowMask,
+			t.closeable and objc.NSClosableWindowMask or 0,
+			t.minimizable and objc.NSMiniaturizableWindowMask or 0,
+			t.resizeable and objc.NSResizableWindowMask or 0)
+
+		local nswin = objc.NSWindow:alloc():initWithContentRect_styleMask_backing_defer(
+							objc.NSMakeRect(100, 100, 500, 300), style, objc.NSBackingStoreBuffered, false)
+
+		nswin:setReleasedWhenClosed(false)
+		nswin:miniaturize(nswin)
+		app:runafter(1, function()
+			app:runafter(1, function()
+				nswin:close()
+				app:runafter(1, function()
+					--nswin:orderOut(nswin)
+					--nswin:zoom(nswin)
+					print(nswin:screen())
+					nswin:makeKeyAndOrderFront(nswin)
+					app:runafter(1, function()
+						--nswin:setIgnoresMouseEvents(false)
+					end)
+				end)
+			end)
+		end)
+	end)
+	]]
+	end)
 	app:run()
 end)
 
@@ -964,7 +1004,9 @@ end)
 
 --create a window off-screen. move a window off-screen.
 --NOTE: Windows can create windows off-screen but can't move them off-screen.
---NOTE: OSX can only create/move frameless windows off-screen.
+--NOTE: OSX can create/move windows off-screen when hidden, but it repositions
+--them on the next show().
+--NOTE: OSX can always create/move frameless windows off-screen.
 --These differences were not leveled out.
 add('pos-out', function()
 
@@ -972,13 +1014,20 @@ add('pos-out', function()
 	print(win:frame_rect())
 	win:close()
 
-	local win = app:window(winpos())
+	local win = app:window(winpos{visible = true})
 	win:frame_rect(-5000, -5000)
 	print(win:frame_rect())
 	win:close()
 
-	--frame = 'none' and initial off-screen position is the only way that works
-	--on both Windows and OSX.
+	local win = app:window(winpos{visible = false})
+	win:frame_rect(-5000, -5000)
+	print(win:frame_rect())
+	print(win:frame_rect())
+	win:close()
+
+	--frame = 'none' and initial off-screen position is the only way to
+	--get cross-platform off-screen windows so that we can show that display()
+	--is nil for them.
 	local win = app:window(winpos{x = -5000, y = -5000, frame = 'none'})
 	local x, y = win:frame_rect()
 	assert(x == -5000)
@@ -1400,17 +1449,19 @@ add('display-active', function()
 	test_display(display)
 end)
 
---display is nil on a hidden window.
+--display is available on a hidden (but with on-screen coordinates) window.
 add('display-hidden', function()
 
 	local win = app:window(winpos{visible = false})
-	assert(not win:display())
+	assert(win:display())
 	win:close()
 
 	local win = app:window(winpos{})
 	win:hide()
-	assert(not win:display())
+	assert(win:display())
 	win:close()
+
+	print'ok'
 end)
 
 --display is nil on an off-screen window.

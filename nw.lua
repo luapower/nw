@@ -516,7 +516,7 @@ end
 
 function window:active()
 	self:_check()
-	if not self:visible() then return end --ignore if hidden.
+	if not self:visible() then return false end --false if hidden
 	return self.backend:active()
 end
 
@@ -531,7 +531,7 @@ end
 --state/app visibility (OSX only) --------------------------------------------
 
 function app:hidden()
-	if not self.nw:os'OSX' then return end
+	if not self.nw:os'OSX' then return false end
 	return self.backend:hidden()
 end
 
@@ -662,7 +662,7 @@ end
 function window:frame_rect(x1, y1, w1, h1) --returns x, y, w, h
 	self:_check()
 	if x1 or y1 or w1 or h1 then
-		if self:fullscreen() then return end --ignore because OSX can't do it
+		if self:fullscreen() then return nil end --ignore because OSX can't do it
 		local x, y, w, h = self.backend:get_frame_rect()
 		self.backend:set_frame_rect(override_rect(x, y, w, h, x1, y1, w1, h1))
 	elseif not self:minimized() then
@@ -673,7 +673,7 @@ end
 function window:normal_rect(x1, y1, w1, h1)
 	self:_check()
 	if x1 or y1 or w1 or h1 then
-		if self:fullscreen() then return end --ignore because OSX can't do it
+		if self:fullscreen() then return nil end --ignore because OSX can't do it
 		local x, y, w, h = self.backend:get_normal_rect()
 		self.backend:set_normal_rect(override_rect(x, y, w, h, x1, y1, w1, h1))
 	else
@@ -889,7 +889,7 @@ end
 
 function window:display()
 	self:_check()
-	if not self:visible() then return end --because OSX can't do it
+	--if not self:visible() then return nil end --because OSX can't do it
 	return self.backend:display()
 end
 
@@ -997,7 +997,7 @@ end
 
 function window:mouse(var)
 	--hidden or minimized windows don't have a mouse state.
-	if not self:visible() or self:minimized() then return end
+	if not self:visible() or self:minimized() then return nil end
 	if var then
 		return self._mouse[var]
 	else
@@ -1444,7 +1444,7 @@ function app:opendialog(opt)
 	opt = glue.update({}, defaults, opt)
 	assert(not opt.filetypes or #opt.filetypes > 0, 'filetypes cannot be an empty list')
 	local paths = self.backend:opendialog(opt)
-	if not paths then return end
+	if not paths then return nil end
 	return opt.multiselect and paths or paths[1]
 end
 

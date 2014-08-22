@@ -62,8 +62,8 @@ function app:new(frontend)
 	--create the default autorelease pool for small objects.
 	self.pool = objc.NSAutoreleasePool:new()
 
-	--TODO: we have to reference mainScreen() before using any of the the display functions,
-	--or we will get NSRecursiveLock errors.
+	--TODO: we have to reference mainScreen() before using any of the
+	--display functions, or we will get NSRecursiveLock errors.
 	objc.NSScreen:mainScreen()
 
 	self.nsapp = App:sharedApplication()
@@ -250,7 +250,7 @@ function window:new(app, frontend, t)
 
 	--set maximized state after setting constraints.
 	if t.maximized then
-		self:_init_maximized()
+		self:_maximize_frame()
 	end
 
 	--init drawable content view.
@@ -280,8 +280,13 @@ end
 
 --closing --------------------------------------------------------------------
 
+--NOTE: close() doesn't call windowShouldClose.
 function window:forceclose()
-	self.nswin:close() --doesn't call windowShouldClose
+	self.nswin:close()
+	--if hidden, then it's already closed, so no closing event.
+	if not self._closed then
+		self.nswin:windowWillClose(nil)
+	end
 end
 
 function Window:windowShouldClose()
@@ -296,7 +301,11 @@ function window:_close()
 end
 
 function Window:windowWillClose()
+	if self.backend._just_hiding then
+		return
+	end
 	--defer closing on deactivation so that 'deactivated' event is sent before the 'closed' event
+	self.backend._closed = true
 	if self.backend:active() then
 		self.nw_close_on_deactivate = true
 	else
@@ -306,11 +315,11 @@ end
 
 --activation -----------------------------------------------------------------
 
+--NOTE: windows created after calling activateIgnoringOtherApps(false) go behind the active app.
+--NOTE: windows created after calling activateIgnoringOtherApps(true) go in front of the active app.
+--NOTE: the first call to nsapp:activateIgnoringOtherApps() doesn't also activate the main menu.
+--but NSRunningApplication:currentApplication():activateWithOptions() does, so we use that instead!
 function app:activate()
-	--NOTE: windows created after calling activateIgnoringOtherApps(false) go behind the active app.
-	--NOTE: windows created after calling activateIgnoringOtherApps(true) go in front of the active app.
-	--NOTE: the first call to nsapp:activateIgnoringOtherApps() doesn't also activate the main menu.
-	--but NSRunningApplication:currentApplication():activateWithOptions() does, so we use that instead!
 	objc.NSRunningApplication:currentApplication():activateWithOptions(bit.bor(
 		objc.NSApplicationActivateIgnoringOtherApps,
 		objc.NSApplicationActivateAllWindows))
@@ -349,16 +358,17 @@ function Window:windowDidResignKey()
 	end
 end
 
+--NOTE: makeKeyAndOrderFront() on an initially hidden window is ignored, but not on an orderOut() window.
+--NOTE: makeKeyWindow() and makeKeyAndOrderFront() do the same thing (both bring the window to front).
+--NOTE: makeKeyAndOrderFront() is deferred, if the app is not active, for when it becomes active.
+--Only windows activated while the app is inactive will move to front when the app is activated,
+--but other windows will not, unlike clicking the dock icon, which moves all the app's window in front.
+--So only the windows made key after the call to activateIgnoringOtherApps(true) are moved to front!
+--NOTE: makeKeyAndOrderFront() is deferred to after the message loop is started,
+--after which a single windowDidBecomeKey is triggered on the last window made key,
+--unlike Windows which activates/deactivates windows as it happens, without a message loop.
+--NOTE: makeKeyAndOrderFront() is asynchornous and not guaranteed to succeed.
 function window:activate()
-	--NOTE: makeKeyAndOrderFront() on an initially hidden window is ignored, but not on an orderOut() window.
-	--NOTE: makeKeyWindow() and makeKeyAndOrderFront() do the same thing (both bring the window to front).
-	--NOTE: makeKeyAndOrderFront() is deferred, if the app is not active, for when it becomes active.
-	--Only windows activated while the app is inactive will move to front when the app is activated,
-	--but other windows will not, unlike clicking the dock icon, which moves all the app's window in front.
-	--So only the windows made key after the call to activateIgnoringOtherApps(true) are moved to front!
-	--NOTE: makeKeyAndOrderFront() is deferred to after the message loop is started,
-	--after which a single windowDidBecomeKey is triggered on the last window made key,
-	--unlike Windows which activates/deactivates windows as it happens, without a message loop.
 	self.nswin:makeKeyAndOrderFront(nil)
 end
 
@@ -366,13 +376,13 @@ function window:active()
 	return self.nswin:isKeyWindow()
 end
 
+--NOTE: windows with NSBorderlessWindowMask can't become key by default.
 function Window:canBecomeKeyWindow()
-	--this is because windows with NSBorderlessWindowMask can't become key by default.
 	return true
 end
 
+--NOTE: windows with NSBorderlessWindowMask can't become main by default.
 function Window:canBecomeMainWindow()
-	--this is because windows with NSBorderlessWindowMask can't become main by default.
 	return true
 end
 
@@ -411,7 +421,7 @@ function window:show()
 	if self._minimized then
 		--was minimized before hiding, minimize it back.
 		self.nswin:miniaturize(nil)
-		--windowDidMiniaturize() not called from hidden.
+		--windowDidMiniaturize() is not called from hidden.
 		self:_did_minimize()
 	else
 		self._visible = true
@@ -419,17 +429,29 @@ function window:show()
 	end
 end
 
+--NOTE: orderOut() is ignored on a minimized window (known bug from 2008).
+--NOTE: orderOut() is buggy: don't use it before starting the message loop.
+--You'll get a window that is not hidden but doesn't respond to mouse events.
+--NOTE: close() is buggy too: closing a minimized window, and then restoring
+--it will result in hovering over titlebar buttons not working.
 function window:hide()
 	if not self._visible then return end
 	self._visible = false
 	self._minimized = self.nswin:isMiniaturized()
-	--TODO: orderOut() doesn't hide a window if it's the key window, instead it acts all weird:
-	--it disables mouse on it making it appear frozen.
-	self.nswin:orderOut(nil)
+	if true then
+		self.nswin:setReleasedWhenClosed(false)
+		self._just_hiding = true --windowWillClose barrier
+		self.nswin:close()
+		self._just_hiding = false
+		self.nswin:setReleasedWhenClosed(true)
+	else
+		self.nswin:orderOut(nil)
+	end
 end
 
 --state/minimizing -----------------------------------------------------------
 
+--NOTE: isMiniaturized() returns false on a hidden window.
 function window:minimized()
 	if self._minimized ~= nil then
 		return self._minimized
@@ -442,7 +464,7 @@ end
 --NOTE: miniaturize() shows the window if hidden.
 function window:minimize()
 	self.nswin:miniaturize(nil)
-	--windowDidMiniaturize() not called from hidden.
+	--windowDidMiniaturize() is not called from hidden.
 	if not self._visible then
 		self:_did_minimize()
 	end
@@ -451,8 +473,9 @@ end
 --NOTE: deminiaturize() shows the window if it's hidden.
 function window:_unminimize()
 	self.nswin:deminiaturize(nil)
+	--windowDidDeminiaturize() is not called from hidden.
 	if not self._visible then
-		error'call self:_did_minimize()'
+		self:_did_minimize()
 	end
 end
 
@@ -467,6 +490,7 @@ function Window:windowDidMiniaturize()
 	self.backend:_did_minimize()
 end
 
+--NOTE: windowDidDeminiaturize() is not called if restoring from hidden state.
 function Window:windowDidDeminiaturize()
 	self.backend:_did_minimize()
 end
@@ -483,165 +507,123 @@ function window:maximized()
 	end
 end
 
---maximize the window manually and save the old rect for restoring.
-function window:_maximize_frame()
+--NOTE: zoom() on a minimized window is ignored.
+--NOTE: zoom() on a fullscreen window is ignored.
+--NOTE: zoom() on a frameless window is ignored.
+--NOTE: zoom() on a hidden window works, and keeps the window hidden.
+
+--NOTE: screen() on an initially hidden window works.
+--NOTE: screen() on an orderOut() window is nil.
+--NOTE: screen() on a closed window works!
+--NOTE: screen() on a minimized window works!
+--NOTE: screen() on an off-screen window is nil.
+
+--maximize the window frame manually for when zoom() doesn't work.
+--NOTE: off-screen windows maximize to the active screen.
+--NOTE: hiding via orderOut() makes maximizing from hidden move the window to
+--the active screen instead of the screen that matches the window's frame rect.
+--Hiding via close() doesn't have this problem (but has other problems).
+function window:_save_restore_frame()
 	self._restore_frame = self.nswin:frame()
-	--if the window is initially, hidden, screen() works.
-	--if the window is orderOut(), screen returns nil.
-	--if the window is off-screen, screen() returns nil.
+end
+function window:_maximize_frame_manually()
+	self:_save_restore_frame()
 	local screen = self.nswin:screen() or objc.NSScreen:mainScreen()
 	self.nswin:setFrame_display(screen:visibleFrame(), true)
 	self:_apply_constraints()
 end
 
---unmaximize the window manually to the saved rect.
-function window:_unmaximize_frame()
+--unmaximize the window frame manuall for when zoom() doesn't work.
+function window:_unmaximize_frame_manually()
 	self.nswin:setFrame_display(self._restore_frame, true)
+	self._restore_frame = nil
 	self:_apply_constraints()
 end
 
---[=[
-function Window.windowWillUseStandardFrame_defaultFrame(cpu)
-	cbframe.dump(cpu)
-
-	local self, nswin, x, y, w, h
-	if ffi.arch == 'x64' then
-		self = ffi.cast('void*', cpu.RDI.p)
-		nswin = ffi.cast('void*', cpu.RSI.p)
-		x = cpu.RSP.dp[1].f
-		y = cpu.RSP.dp[2].f
-		w = cpu.RSP.dp[3].f
-		h = cpu.RSP.dp[4].f
-	else
-		self  = ffi.cast('id', cpu.ESP.dp[2].p)
-		nswin = ffi.cast('id', cpu.ESP.dp[4].p)
-		x = cpu.ESP.dp[5].f
-		y = cpu.ESP.dp[6].f
-		w = cpu.ESP.dp[7].f
-		h = cpu.ESP.dp[8].f
-	end
-
-	print(self, nswin, x, y, w, h)
-
-	--[[
-
-	--save restore rect for restoring manually where zoom() doesn't work.
-	self._restore_rect = {self:get_normal_rect()}
-
-	self._maximized = true
-	]]
-
-	print'here'
-end
-]=]
-
---NOTE: zoom() on a minimized window is ignored.
---NOTE: zoom() on a fullscreen window is ignored.
---NOTE: zoom() on a frameless window is ignored.
---NOTE: zoom() on a hidden window does not show it, but does maximize it.
-
---set an initially hidden window in maximized state, keeping it hidden.
-function window:_init_maximized()
+--maximize the window frame without changing its visibility.
+--NOTE: frameless off-screen windows maximize to the active screen.
+function window:_maximize_frame()
 	if self._frameless then
-		self:_maximize_frame()
 		self._maximized = true
+		self:_maximize_frame_manually()
 	else
 		self.nswin:zoom(nil)
+		self:_apply_constraints()
 	end
+end
+
+--unmaximize the window manually to the saved rect.
+function window:_unmaximize_frame()
+	if self._frameless then
+		self._maximized = false
+		self:_unmaximize_frame_manually()
+	else
+		self.nswin:zoom(nil)
+		self:_apply_constraints()
+	end
+end
+
+--zoom() doesn't work on a minimzied window, so we adjust the rect manually.
+function window:_maximize_minimized()
+	if self._frameless then
+		self._maximized = true
+		self:_maximize_frame_manually()
+	else
+		self:_maximize_frame_manually()
+	end
+	self:_unminimize()
+end
+
+--zoom() doesn't work on a minimzied window, so we adjust the rect manually.
+function window:_unmaximize_minimized()
+	if self._frameless then
+		self._maximized = false
+		self:_unmaximize_frame_manually()
+	else
+		self:_unmaximize_frame_manually()
+	end
+	self:_unminimize()
 end
 
 function window:maximize()
-
-	if self:maximized() then
-
-		--if hidden or minimized, show it to emulate Windows behavior.
-		--if minimized, unminimize it to emulate Windows behvior.
-		if self:minimized() then
+	if self:minimized() then
+		if self:maximized() then
 			self:_unminimize()
-		elseif not self:visible() then
-			self:show()
+		else
+			self:_maximize_minimized()
 		end
-		return
-
-	elseif self._frameless then
-
-		--save unmaximized rect for restoring.
-		self._restore_rect = {self:get_normal_rect()}
-
-		--if the window is orderOut(), there's no self:display().
-		if not self._visible then
-			self:show()
-		end
-
-		--if the window is off-screen, there's no self:display().
-		local display = self:display() or self.app:active_display()
-
-		self:set_normal_rect(display:client_rect())
-
-		--set maximized state after firing the resize events.
-		self._maximized = true
-
-		if self:minimized() then
-			self:_unminimize()
-		end
-
-	elseif self:minimized() then
-
-		--if the window is orderOut(), there's no self:display().
-		if not self._visible then
-			self:show()
-		end
-
-		--if the window is off-screen, there's no self:display().
-		local display = self:display() or self.app:active_display()
-
-		self:set_normal_rect(display:client_rect())
-
-		self:_unminimize()
-
 	else
-
-		--zoom() on a hidden window does not show it, but does maximize it.
-		self.nswin:zoom(nil)
-
-		--if hidden, show it to emulate Windows behavior.
-		if not self._visible then
+		if not self:maximized() then
+			self:_maximize_frame()
+		end
+		if not self:visible() then
 			self:show()
 		end
-
 	end
-end
-
-function window:_end_frame_change()
-	--self.frontend:_backend_changed()
 end
 
 function window:_unmaximize()
-	if self._frameless then
-		self._maximized = false
-		self:set_normal_rect(unpack(self._restore_rect))
-		self._restore_rect = nil
-		self:show()
-	else
-		--zoom() on a hidden window does not show it, but does maximize it.
-		self.nswin:zoom(nil)
+	self:_unmaximize_frame()
+	if not self:visible() then
 		self:show()
 	end
-	self:_end_frame_change()
 end
 
-function window:_unmaximize_minimized()
-	self._maximized = false
-	if self._frameless then
-		self:set_normal_rect(unpack(self._restore_rect))
-		self:_unminimize()
+--save normal rect before maximizing so we can maximize from minimized.
+function Window.windowShouldZoom_toFrame(cpu)
+	--get arg1 from the ABI guts and set `true` as return value.
+	local self
+	if ffi.arch == 'x64' then
+		self = ffi.cast('id', cpu.RDI.p) --RDI = self
+		cpu.RAX.lo.i = true
 	else
-		--zoom() on a minimized window is ignored.
-		self:set_normal_rect(unpack(self._restore_rect))
-		self:_unminimize()
+		self = ffi.cast('id', cpu.ESP.dp[1].p) --ESP[1] = self
+		cpu.EAX.i = true
 	end
 
-	self:_end_frame_change()
+	if not self._frameless then
+		self.backend:_save_restore_frame()
+	end
 end
 
 --state/restoring ------------------------------------------------------------
@@ -657,16 +639,10 @@ function window:restore()
 end
 
 function window:shownormal()
-	if self:minimized() then
-		if self:maximized() then
-			self:_unmaximize_minimized()
-		else
-			self:_unminimize()
-		end
-	elseif self:maximized() then
-		self:_unmaximize()
-	elseif not self:visible() then
-		self:show()
+	if self:minimized() and self:maximized() then
+		self:_unmaximize_minimized()
+	else
+		self:restore()
 	end
 end
 
@@ -937,7 +913,7 @@ end
 --if/while the app blocks on the main thread. So never block the GUI thread.
 
 function Window:sendEvent(event)
-	if self.frontend:edgesnapping() then
+	if not self.frontend:dead() and self.frontend:edgesnapping() then
 		--take over window dragging by the titlebar so that we can post moving events
 		local etype = event:type()
 		if self.dragging then
@@ -960,7 +936,7 @@ function Window:sendEvent(event)
 				self.dragging = false
 				self.mousepos = nil
 				self.frontend:_backend_end_resize'move'
-				self.backend:_end_frame_change()
+				--self.backend:_end_frame_change()
 				return
 			end
 		elseif etype == objc.NSLeftMouseDown
@@ -998,7 +974,7 @@ end
 --also triggered on maximize.
 function Window:windowDidEndLiveResize()
 	self.frontend:_backend_end_resize()
-	self.backend:_end_frame_change()
+	--self.backend:_end_frame_change()
 end
 
 function Window:nw_resizing(w_, h_)
@@ -1050,7 +1026,7 @@ function Window:windowWillMove()
 end
 
 function Window:windowDidMove()
-	self.backend:_end_frame_change()
+	--self.backend:_end_frame_change()
 end
 
 --z-order --------------------------------------------------------------------
@@ -1118,6 +1094,7 @@ function app:display_count()
 end
 
 --NOTE: screen() works on an initially hidden window.
+--NOTE: screen() works on a closed window.
 --NOTE: screen() returns nil on an orderOut() window.
 --NOTE: screen() returns nil on an off-screen window (frameless windows can be made off-screen).
 function window:display()
@@ -1989,7 +1966,7 @@ function notifyicon:get_text() --OSX specific
 	return objc.tolua(self.si:title())
 end
 
-function notifyicon:set_text(text)  --OSX specific
+function notifyicon:set_text(text) --OSX specific
 	self.si:setTitle(text)
 end
 
