@@ -918,6 +918,7 @@ for i,test in ipairs({
 
 			local was_fs = win:fullscreen() and nw:os'OSX'
 			print('close', flags_string())
+			--sleep(100)
 			win:close()
 			if was_fs then sleep(1.5) end
 		end))

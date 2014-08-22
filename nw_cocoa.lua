@@ -426,6 +426,7 @@ function window:show()
 	else
 		self._visible = true
 		self.nswin:makeKeyAndOrderFront(nil)
+		self.frontend:_backend_changed()
 	end
 end
 
@@ -447,6 +448,7 @@ function window:hide()
 	else
 		self.nswin:orderOut(nil)
 	end
+	self.frontend:_backend_changed()
 end
 
 --state/minimizing -----------------------------------------------------------
@@ -593,11 +595,17 @@ function window:maximize()
 			self:_maximize_minimized()
 		end
 	else
+		local changed
 		if not self:maximized() then
 			self:_maximize_frame()
+			changed = true
 		end
 		if not self:visible() then
 			self:show()
+			changed = false --show() posts changed event
+		end
+		if changed then
+			self.frontend:_backend_changed()
 		end
 	end
 end
@@ -605,7 +613,9 @@ end
 function window:_unmaximize()
 	self:_unmaximize_frame()
 	if not self:visible() then
-		self:show()
+		self:show() --show posts changed event
+	else
+		self.frontend:_backend_changed()
 	end
 end
 
@@ -672,14 +682,15 @@ function Window:windowWillEnterFullScreen()
 	self.nw_stylemask = self:styleMask()
 	self.nw_frame = self:frame()
 	self:setStyleMask(bit.bor(
-		objc.NSFullScreenWindowMask,
-		objc.NSBorderlessWindowMask
+		objc.NSFullScreenWindowMask,  --fullscreen appearance (?)
+		objc.NSBorderlessWindowMask   --remove the round corners
 	))
-	self:setFrame_display(self:screen():frame(), true)
+	local screen = self:screen() or objc.NSScreen:mainScreen()
+	self:setFrame_display(screen:frame(), true)
 end
 
 function Window:windowDidEnterFullScreen()
-	self.frontend:_backend_entered_fullscreen()
+	self.frontend:_backend_changed()
 end
 
 function Window:windowWillExitFullScreen()
@@ -690,7 +701,7 @@ end
 function Window:windowDidExitFullScreen()
 	--window will exit fullscreen before closing. suppress that.
 	if self.frontend:dead() then return end
-	self.frontend:_backend_exited_fullscreen()
+	self.frontend:_backend_changed()
 end
 
 --positioning/rectangles -----------------------------------------------------
@@ -1016,6 +1027,7 @@ function Window.windowWillResize_toSize(cpu)
 end
 
 function Window:windowDidResize()
+	if self.frontend:dead() then return end
 	if not self.nw_resizing_maximized then
 		self.backend._restore_rect = {self.frontend:frame_rect()}
 	end
@@ -1026,7 +1038,7 @@ function Window:windowWillMove()
 end
 
 function Window:windowDidMove()
-	--self.backend:_end_frame_change()
+	self.frontend:_backend_changed()
 end
 
 --z-order --------------------------------------------------------------------
