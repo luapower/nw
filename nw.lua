@@ -363,6 +363,7 @@ local defaults = {
 	fullscreenable = true,
 	autoquit = false, --quit the app on closing
 	edgesnapping = false,
+	--hide_on_deactivate = false,
 }
 
 function app:window(t)
