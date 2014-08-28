@@ -370,7 +370,7 @@ function app:window(t)
 end
 
 local bool_frame = {[false] = 'none', [true] = 'normal'}
-local frame_opt = glue.index{'normal', 'none', 'none-transparent'}
+local frame_opt = glue.index{'normal', 'none', 'none-transparent', 'toolbox'}
 
 local function checkframe(frame)
 	frame = bool_frame[frame] or frame
@@ -378,14 +378,19 @@ local function checkframe(frame)
 	return frame
 end
 
-function window:_new(app, backend_class, opt)
+function window:_new(app, backend_class, useropt)
 
 	--check/normalize args.
-	opt = glue.update({}, defaults, opt)
+	local opt = glue.update({}, defaults, useropt)
 	opt.frame = checkframe(opt.frame)
 
 	--frameless windows are not resizeable.
-	opt.resizeable = opt.frame == 'normal' and opt.resizeable ~= false
+	opt.resizeable = (opt.frame == 'normal' or opt.frame == 'toolbox') and opt.resizeable ~= false
+
+	--toolbox windows are topmost by default.
+	if useropt.topmost == nil and opt.frame == 'toolbox' then
+		opt.topmost = true
+	end
 
 	--if missing some frame coords but given some client coords, convert client
 	--coords to frame coords, and replace missing frame coords with the result.
@@ -397,17 +402,11 @@ function window:_new(app, backend_class, opt)
 		opt.h = opt.h or (opt.ch and h1)
 	end
 
-	--with and height must be given, either of the client area or of the frame.
-	assert(opt.w or 'w or cw missing')
-	assert(opt.h or 'h or ch missing')
+	--width and height must be given, either of the client area or of the frame.
+	assert(opt.w, 'w or cw missing')
+	assert(opt.h, 'h or ch missing')
 
-	--if missing x or y, center the window horizontally and/or vertically to --- which display??????
-	if not opt.x or not opt.y then
-		local bx, by, bw, bh = app:active_display():client_rect() --TODO: active_display is wrong here!!
-		local x, y = box2d.align(opt.w, opt.h, 'center', 'center', bx, by, bw, bh)
-		opt.x = opt.x or x
-		opt.y = opt.y or y
-	end
+	assert((not opt.x) == (not opt.y), 'either give both x and y or none')
 
 	self = glue.inherit({app = app}, self)
 
@@ -427,6 +426,19 @@ function window:_new(app, backend_class, opt)
 	self._fullscreenable = opt.fullscreenable
 	self._autoquit = opt.autoquit
 	self:edgesnapping(opt.edgesnapping)
+
+	--move sticky children along with the parent
+	self:observe('resizing', function(self, how, x, y)
+		local x0, y0 = self:frame_rect()
+		local dx = x - x0
+		local dy = y - y0
+		for _,win in ipairs(self.app:windows()) do
+			if win:sticky() and win:parent() == self then
+				local x, y = win:frame_rect()
+				win:frame_rect(x + dx, y + dy)
+			end
+		end
+	end)
 
 	self.app:_window_created(self)
 	self:_event'created'
@@ -567,6 +579,7 @@ end
 
 function window:hide()
 	self:_check()
+	if self:fullscreen() then return end --ignore because OSX can't do it
 	self.backend:hide()
 end
 
@@ -634,14 +647,6 @@ function window:fullscreen(fullscreen)
 	end
 end
 
-function window:_backend_entering_fullscreen()
-	return self:_query'entering_fullscreen'
-end
-
-function window:_backend_exiting_fullscreen()
-	return self:_query'exiting_fullscreen'
-end
-
 --state/synthesis ------------------------------------------------------------
 
 function window:state()
@@ -653,7 +658,48 @@ function window:state()
 		or 'normal'
 end
 
---positioning/frame rect -----------------------------------------------------
+--positioning/conversions ----------------------------------------------------
+
+local function point_or_rect(x, y, w, h)
+	if not w and not h then
+		return x, y
+	else
+		assert(w, 'width missing')
+		assert(h, 'height missing')
+		return x, y, w, h
+	end
+end
+
+--point or rect in client space to screen space.
+function window:to_screen(x, y, w, h)
+	self:_check()
+	x, y = self.backend:to_screen(x, y)
+	return point_or_rect(x, y, w, h)
+end
+
+--point or rect in screen space to client space.
+function window:to_client(x, y, w, h)
+	self:_check()
+	x, y = self.backend:to_client(x, y)
+	return point_or_rect(x, y, w, h)
+end
+
+--frame rect for a frame type and client rectangle in screen coordinates.
+function app:client_to_frame(frame, x, y, w, h)
+	frame = checkframe(frame)
+	return self.backend:client_to_frame(frame, x, y, w, h)
+end
+
+--client rect in screen coordinates for a frame type and frame rectangle.
+function app:frame_to_client(frame, x, y, w, h)
+	frame = checkframe(frame)
+	local cx, cy, cw, ch = self.backend:frame_to_client(frame, x, y, w, h)
+	cw = math.max(0, cw)
+	ch = math.max(0, ch)
+	return cx, cy, cw, ch
+end
+
+--positioning/rectangles -----------------------------------------------------
 
 local function override_rect(x, y, w, h, x1, y1, w1, h1)
 	return x1 or x, y1 or y, w1 or w, h1 or h
@@ -662,10 +708,15 @@ end
 function window:frame_rect(x1, y1, w1, h1) --returns x, y, w, h
 	self:_check()
 	if x1 or y1 or w1 or h1 then
-		if self:fullscreen() then return nil end --ignore because OSX can't do it
+		if self:minimized() then
+			self:normal_rect(x1, y1, w1, h1)
+		end
+		if self:fullscreen() then return end --ignore because OSX can't do it
 		local x, y, w, h = self.backend:get_frame_rect()
 		self.backend:set_frame_rect(override_rect(x, y, w, h, x1, y1, w1, h1))
-	elseif not self:minimized() then
+	elseif self:minimized() then
+		return self:normal_rect()
+	else
 		return self.backend:get_frame_rect()
 	end
 end
@@ -673,7 +724,7 @@ end
 function window:normal_rect(x1, y1, w1, h1)
 	self:_check()
 	if x1 or y1 or w1 or h1 then
-		if self:fullscreen() then return nil end --ignore because OSX can't do it
+		if self:fullscreen() then return end --ignore because OSX can't do it
 		local x, y, w, h = self.backend:get_normal_rect()
 		self.backend:set_normal_rect(override_rect(x, y, w, h, x1, y1, w1, h1))
 	else
@@ -681,7 +732,21 @@ function window:normal_rect(x1, y1, w1, h1)
 	end
 end
 
---positioning/client rect ----------------------------------------------------
+function window:client_rect(x1, y1, w1, h1)
+	self:_check()
+	if x1 or y1 or w1 or h1 then
+		if self:fullscreen() then return end --ignore because OSX can't do it
+		local cx, cy, cw, ch = self:client_rect()
+		local cx, cy, cw, ch = override_rect(cx, cy, cw, ch, x1, y1, w1, h1)
+		local x, y, w, h = self:frame_rect()
+		local dx, dy = self:to_client(x, y)
+		local ccw, cch = self:size()
+		local dw, dh = w - ccw, h - cch
+		self.backend:set_frame_rect(cx + dx, cy + dy, cw + dw, ch + dh)
+	else
+		return self:to_screen(0, 0, self:size())
+	end
+end
 
 function window:size() --returns w, h
 	self:_check()
@@ -690,6 +755,8 @@ function window:size() --returns w, h
 	end
 	return self.backend:get_size()
 end
+
+--positioning/constraints ----------------------------------------------------
 
 function window:minsize(w, h)
 	if not w and not h then
@@ -711,45 +778,6 @@ function window:maxsize(w, h)
 		if h and minh then h = math.max(h, minh) end
 		self.backend:set_maxsize(w, h)
 	end
-end
-
---positioning/conversions ----------------------------------------------------
-
-local function point_or_rect(x, y, w, h)
-	if not w and not h then
-		return x, y
-	else
-		assert(w, 'width missing')
-		assert(h, 'height missing')
-		return x, y, w, h
-	end
-end
-
-function window:to_screen(x, y, w, h)
-	self:_check()
-	x, y = self.backend:to_screen(x, y)
-	return point_or_rect(x, y, w, h)
-end
-
-function window:to_client(x, y, w, h)
-	self:_check()
-	x, y = self.backend:to_client(x, y)
-	return point_or_rect(x, y, w, h)
-end
-
---frame rect for a frame type and client rectangle in screen coordinates.
-function app:client_to_frame(frame, x, y, w, h)
-	frame = checkframe(frame)
-	return self.backend:client_to_frame(frame, x, y, w, h)
-end
-
---client rect in screen coordinates for a frame type and frame rectangle.
-function app:frame_to_client(frame, x, y, w, h)
-	frame = checkframe(frame)
-	local cx, cy, cw, ch = self.backend:frame_to_client(frame, x, y, w, h)
-	cw = math.max(0, cw)
-	ch = math.max(0, ch)
-	return cx, cy, cw, ch
 end
 
 --positioning/resizing -------------------------------------------------------
@@ -889,7 +917,6 @@ end
 
 function window:display()
 	self:_check()
-	--if not self:visible() then return nil end --because OSX can't do it
 	return self.backend:display()
 end
 

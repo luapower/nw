@@ -6,6 +6,9 @@ local glue = require'glue'
 local ffi = require'ffi'
 local bit = require'bit'
 
+--local objc = require'objc'
+--objc.debug.logtopics.refcount = true
+
 local app --global app object
 
 --testing helpers ------------------------------------------------------------
@@ -802,32 +805,32 @@ for i,test in ipairs({
 
 	--transitions from fullscreen
 	{{'enter_fullscreen'}, 'vF', {'show'}, 'vF'},
-	{{'enter_fullscreen'}, 'vF', {'hide'}, 'F'},
+	{{'enter_fullscreen'}, 'vF', {'hide'}, 'vF'},
 	{{'enter_fullscreen'}, 'vF', {'maximize'}, 'vF'},
 	{{'enter_fullscreen'}, 'vF', {'minimize'}, 'vF'},
 	{{'enter_fullscreen'}, 'vF', {'restore'}, 'v'},
 	{{'enter_fullscreen'}, 'vF', {'shownormal'}, 'vF'},
 	--transitions from hidden fullscreen
-	{{'enter_fullscreen', 'hide'}, 'F', {'show'}, 'vF'},
-	{{'enter_fullscreen', 'hide'}, 'F', {'hide'}, 'F'},
-	{{'enter_fullscreen', 'hide'}, 'F', {'maximize'}, 'F'},
-	{{'enter_fullscreen', 'hide'}, 'F', {'minimize'}, 'F'},
-	{{'enter_fullscreen', 'hide'}, 'F', {'restore'}, 'v'},
-	{{'enter_fullscreen', 'hide'}, 'F', {'shownormal'}, 'F'},
+	{{'enter_fullscreen', 'hide'}, 'vF', {'show'}, 'vF'},
+	{{'enter_fullscreen', 'hide'}, 'vF', {'hide'}, 'vF'},
+	{{'enter_fullscreen', 'hide'}, 'vF', {'maximize'}, 'vF'},
+	{{'enter_fullscreen', 'hide'}, 'vF', {'minimize'}, 'vF'},
+	{{'enter_fullscreen', 'hide'}, 'vF', {'restore'}, 'v'},
+	{{'enter_fullscreen', 'hide'}, 'vF', {'shownormal'}, 'vF'},
 	--transitions from maximized fullscreen
 	{{'maximize', 'enter_fullscreen'}, 'vMF', {'show'}, 'vMF'},
-	{{'maximize', 'enter_fullscreen'}, 'vMF', {'hide'}, 'MF'},
+	{{'maximize', 'enter_fullscreen'}, 'vMF', {'hide'}, 'vMF'},
 	{{'maximize', 'enter_fullscreen'}, 'vMF', {'maximize'}, 'vMF'},
 	{{'maximize', 'enter_fullscreen'}, 'vMF', {'minimize'}, 'vMF'},
 	{{'maximize', 'enter_fullscreen'}, 'vMF', {'restore'}, 'vM'},
 	{{'maximize', 'enter_fullscreen'}, 'vMF', {'shownormal'}, 'vMF'},
 	--transitions from hidden maximized fullscreen
-	{{'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'show'}, 'vMF'},
-	{{'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'hide'}, 'MF'},
-	{{'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'maximize'}, 'MF'},
-	{{'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'minimize'}, 'MF'},
-	{{'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'restore'}, 'vM'},
-	{{'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'shownormal'}, 'MF'},
+	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMF', {'show'}, 'vMF'},
+	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMF', {'hide'}, 'vMF'},
+	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMF', {'maximize'}, 'vMF'},
+	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMF', {'minimize'}, 'vMF'},
+	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMF', {'restore'}, 'vM'},
+	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMF', {'shownormal'}, 'vMF'},
 	--transitions to enter fullscreen
 	{{}, 'v', {'enter_fullscreen'}, 'vF'},
 	{{'hide'}, '', {'enter_fullscreen'}, 'vF'},
@@ -837,9 +840,9 @@ for i,test in ipairs({
 	{{'maximize', 'minimize'}, 'vmM', {'enter_fullscreen'}, 'vMF'},
 	{{'maximize', 'minimize', 'hide'}, 'mM', {'enter_fullscreen'}, 'vMF'},
 	{{'enter_fullscreen'}, 'vF', {'enter_fullscreen'}, 'vF'},
-	{{'enter_fullscreen', 'hide'}, 'F', {'enter_fullscreen'}, 'F'},
+	{{'enter_fullscreen', 'hide'}, 'vF', {'enter_fullscreen'}, 'vF'},
 	{{'maximize', 'enter_fullscreen'}, 'vMF', {'enter_fullscreen'}, 'vMF'},
-	{{'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'enter_fullscreen'}, 'MF'},
+	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMF', {'enter_fullscreen'}, 'vMF'},
 	--transitions to exit fullscreen
 	{{}, 'v', {'exit_fullscreen'}, 'v'},
 	{{'hide'}, '', {'exit_fullscreen'}, ''},
@@ -849,14 +852,15 @@ for i,test in ipairs({
 	{{'maximize', 'minimize'}, 'vmM', {'exit_fullscreen'}, 'vmM'},
 	{{'maximize', 'minimize', 'hide'}, 'mM', {'exit_fullscreen'}, 'mM'},
 	{{'enter_fullscreen'}, 'vF', {'exit_fullscreen'}, 'v'},
-	{{'enter_fullscreen', 'hide'}, 'F', {'exit_fullscreen'}, 'v'},
+	{{'enter_fullscreen', 'hide'}, 'vF', {'exit_fullscreen'}, 'v'},
 	{{'maximize', 'enter_fullscreen'}, 'vMF', {'exit_fullscreen'}, 'vM'},
-	{{'maximize', 'enter_fullscreen', 'hide'}, 'MF', {'exit_fullscreen'}, 'vM'},
+	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMF', {'exit_fullscreen'}, 'vM'},
 
 }) do
 	local commands1, check1, commands2, check2 = unpack(test)
 
 	local function make_test(init_flags)
+
 		--compose test name.
 		local t = {}
 		t[#t+1] = init_flags.visible == false and 'hidden' or nil
@@ -879,9 +883,13 @@ for i,test in ipairs({
 					(win:fullscreen() and 'F' or '')
 			end
 
+			local changed = 0
 			function win:event(e, ...)
-				if e == 'changed' then
+				if e == 'changed' or e == 'closed' then
 					print('> '..e, flags_string())
+				end
+				if e == 'changed' then
+					changed = changed + 1
 				end
 			end
 
@@ -890,7 +898,8 @@ for i,test in ipairs({
 				--run a list of commands without args on a window object.
 				for i, command in ipairs(commands) do
 
-					print(command, flags_string())
+					local flags1 = flags_string()
+					print(flags1, command)
 
 					local fs = nw:os'OSX' and (win:fullscreen() or command == 'enter_fullscreen')
 					if command == 'enter_fullscreen' then
@@ -903,7 +912,17 @@ for i,test in ipairs({
 					if fs then
 						sleep(1.5)
 					end
-					--sleep(1)
+
+					--check that at least one changed() event was fired if the flags changed.
+					local flags2 = flags_string()
+					if flags2 ~= flags1 then
+						assert(changed > 0, 'no changed() event for '..flags1..'->'..flags2)
+						if changed > 1 then
+							print('! duplicate changed() event ('..changed..' times) for '..flags1..'->'..flags2)
+						end
+					end
+					changed = 0
+
 				end
 
 				--check current state flags against a flag combination string.
@@ -917,10 +936,14 @@ for i,test in ipairs({
 			run_commands(commands2, check2)
 
 			local was_fs = win:fullscreen() and nw:os'OSX'
-			print('close', flags_string())
-			--sleep(100)
+
 			win:close()
+
 			if was_fs then sleep(1.5) end
+
+			assert(win:dead())
+			--collectgarbage()
+
 		end))
 	end
 
@@ -929,48 +952,8 @@ for i,test in ipairs({
 end
 
 add('test', function()
-	app:runafter(0, function()
-	local win = app:window(winpos())
-	win:minimize()
-	--win:hide()
-	require'pp'(win:display())
-	win:normal_rect(-1000, -2000, 400, 300)
-	print(win:frame_rect())
-	print(win:normal_rect())
-	--win:restore()
-
-	--[[
-	local objc = require'objc'
-	app:runafter(0, function()
-
-		local style = bit.bor(
-			objc.NSTitledWindowMask,
-			t.closeable and objc.NSClosableWindowMask or 0,
-			t.minimizable and objc.NSMiniaturizableWindowMask or 0,
-			t.resizeable and objc.NSResizableWindowMask or 0)
-
-		local nswin = objc.NSWindow:alloc():initWithContentRect_styleMask_backing_defer(
-							objc.NSMakeRect(100, 100, 500, 300), style, objc.NSBackingStoreBuffered, false)
-
-		nswin:setReleasedWhenClosed(false)
-		nswin:miniaturize(nswin)
-		app:runafter(1, function()
-			app:runafter(1, function()
-				nswin:close()
-				app:runafter(1, function()
-					--nswin:orderOut(nswin)
-					--nswin:zoom(nswin)
-					print(nswin:screen())
-					nswin:makeKeyAndOrderFront(nswin)
-					app:runafter(1, function()
-						--nswin:setIgnoresMouseEvents(false)
-					end)
-				end)
-			end)
-		end)
-	end)
-	]]
-	end)
+	local win1 = app:window(winpos{frame = 'normal'})
+	local win2 = app:window(winpos{frame = 'toolbox', parent = win1, topmost = false})
 	app:run()
 end)
 
@@ -994,7 +977,7 @@ add('pos-init', function()
 end)
 
 --test if x,y,w,h mixed with cx,cy,cw,ch works.
---this is an eye-test.
+--this is an eye-test for framed windows.
 add('pos-init-mixed', function()
 	app:window{cx = 200, cy = 200, cw = 200, ch = 200}
 	app:window{x = 200, cy = 200, w = 200, ch = 200}
@@ -1003,12 +986,31 @@ add('pos-init-mixed', function()
 	app:run()
 end)
 
+--check that frame_rect() and initial client rect values match for frameless windows.
+add('pos-init-client-noframe', function()
+	local win = app:window{cx = 100, cy = 100, cw = 500, ch = 500, frame = 'none'}
+	local x, y, w, h = win:frame_rect()
+	assert(x == 100)
+	assert(y == 100)
+	assert(w == 500)
+	assert(h == 500)
+	print'ok'
+end)
+
+--check that the default window position is cascaded.
+add('pos-init-cascade', function()
+	for i = 1,30 do
+		app:window{w = 500, h = 300}
+	end
+	app:run()
+end)
+
 --create a window off-screen. move a window off-screen.
 --NOTE: Windows can create windows off-screen but can't move them off-screen.
 --NOTE: OSX can create/move windows off-screen when hidden, but it repositions
 --them on the next show().
 --NOTE: OSX can always create/move frameless windows off-screen.
---These differences were not leveled out.
+--These differences were not leveled out between platforms.
 add('pos-out', function()
 
 	local win = app:window(winpos{x = -5000, y = -5000})
@@ -1042,20 +1044,11 @@ add('pos-out', function()
 	win:close()
 end)
 
---check that missing x or y works (i.e. the window is centered on its dispaly).
-add('pos-init-align', function()
-	--TODO
-	local win = app:window{cx = 200, cy = 200, cw = 200, ch = 200}
-	local win = app:window{x = 200, cy = 200, w = 200, ch = 200}
-	local win = app:window{cx = 200, y = 200, cw = 200, h = 200}
-	app:run()
-end)
-
 --resize the windows to see the constraints in effect.
 add('pos-minmax', function()
 
 	--check that initial constraints are set and the window size respects them.
-	local win = app:window{w = 800, h = 800, minw = 200, minh = 200, maxw = 400, maxh = 400}
+	local win = app:window{w = 800, h = 800, min_cw = 200, min_ch = 200, max_cw = 400, max_ch = 400}
 
 	local minw, minh = win:minsize()
 	assert(minw == 200)
@@ -1114,7 +1107,7 @@ add('pos-minmax', function()
 	win:close()
 
 	--check that initial partial constraints work too.
-	local win = app:window{w = 800, h = 100, maxw = 400, minh = 200}
+	local win = app:window{w = 800, h = 100, max_cw = 400, min_ch = 200}
 
 	local minw, minh = win:minsize()
 	assert(minw == nil)
@@ -1150,7 +1143,7 @@ add('pos-minmax', function()
 	win:close()
 
 	--frame_rect() is constrained too.
-	local win = app:window{w = 100, h = 100, minw = 200, maxw = 500, minh = 200, maxh = 500}
+	local win = app:window{w = 100, h = 100, min_cw = 200, max_cw = 500, min_ch = 200, max_ch = 500}
 
 	win:frame_rect(nil, nil, 100, 100)
 	local w, h = win:size()
@@ -1165,7 +1158,7 @@ add('pos-minmax', function()
 	win:close()
 
 	--maximized state is constrained too (runtime).
-	local win = app:window{w = 100, h = 100, minw = 200, minh = 200, maxw = 500, maxh = 500}
+	local win = app:window{w = 100, h = 100, min_cw = 200, min_ch = 200, max_cw = 500, max_ch = 500}
 	win:maximize()
 
 	local maxw, maxh = win:size()
@@ -1178,7 +1171,8 @@ add('pos-minmax', function()
 	win:close()
 
 	--maximized state is constrained too (init).
-	local win = app:window{w = 100, h = 100, minw = 200, minh = 200, maxw = 500, maxh = 500, maximized = true}
+	local win = app:window{w = 100, h = 100, min_cw = 200, min_ch = 200,
+		max_cw = 500, max_ch = 500, maximized = true}
 
 	local maxw, maxh = win:size()
 	assert(maxw == 500)
@@ -1189,12 +1183,34 @@ add('pos-minmax', function()
 
 	win:close()
 
-	--TODO: setting maxsize while maximized works (resizes the window and resize events are sent).
+	--setting maxsize while maximized works: the window is resized.
+	--TODO: the position is preserved.
+	local win = app:window{x = 100, y = 100, w = 500, h = 500, maximized = true}
+	print(win:frame_rect())
+	win:maxsize(200, 200)
+	print(win:frame_rect())
 
-	--TODO: maxsize takes precedence over minsize.
+	local maxw, maxh = win:size()
+	assert(maxw == 200)
+	assert(maxh == 200)
+
+	local w, h = win:size()
+	assert(w == 200)
+	assert(h == 200)
+
+	app:run()
 
 	--TODO: setting minsize/maxize inside resizing() event works.
 
+	--TODO: minsize is itself constrained to previously set maxsize and viceversa.
+
+end)
+
+--constraints apply to fullscreen mode too
+add('pos-minmax-fullscreen', function()
+	local win = app:window(winpos{max_cw = 500, max_ch = 500})
+	win:fullscreen(true)
+	app:run()
 end)
 
 --normal_rect() -> x, y, w, h works.
@@ -1244,6 +1260,27 @@ add('pos-frame-rect-minimized', function()
 	print'ok'
 end)
 
+--setting client_rect() works (matches initial client coordinates).
+add('pos-client-rect', function()
+	local function test(init_flags)
+		local win1 = app:window(glue.update({cx = 100, cy = 100, cw = 500, ch = 500}, init_flags))
+		local win2 = app:window(winpos(glue.update({}, init_flags)))
+		win2:client_rect(100, 100, 500, 500)
+		local x1, y1, w1, h1 = win1:frame_rect()
+		local x2, y2, w2, h2 = win2:frame_rect()
+		print('win1', x1, y1, w1, h1)
+		print('win2', x2, y2, w2, h2)
+		assert(x1 == x2)
+		assert(y1 == y2)
+		assert(w1 == w2)
+		assert(h1 == h2)
+	end
+	test{}
+	test{frame = 'none'}
+	test{frame = 'none-transparent'}
+	print'ok'
+end)
+
 --normal_rect(x, y, w, h) generates only one ('resized', 'set') event.
 add('pos-set-event', function()
 	local rec = recorder()
@@ -1263,12 +1300,12 @@ add('pos-events', function()
 		--print('mousemove', x, y)
 	end
 	function win:start_resize(how) print('start_resize', how) end
-	function win:end_resize(how) print('end_resize', how) end
+	function win:end_resize() print('end_resize') end
 	function win:resizing(how, x, y, w, h)
 		print('resizing', how, x, y, w, h)
 	end
-	function win:resized(how)
-		print('resized', how)
+	function win:resized()
+		print('resized')
 	end
 	app:run()
 end)

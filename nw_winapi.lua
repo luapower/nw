@@ -118,7 +118,7 @@ local win_map = {} --win->window, for app:active_window()
 function window:new(app, frontend, t)
 	self = glue.inherit({app = app, frontend = frontend}, self)
 
-	local framed = t.frame == 'normal'
+	local framed = t.frame == 'normal' or t.frame == 'toolbox'
 	self._layered = t.frame == 'none-transparent'
 
 	self.win = Window{
@@ -127,10 +127,10 @@ function window:new(app, frontend, t)
 		y = t.y,
 		w = t.w,
 		h = t.h,
-		min_cw = t.minw,
-		min_ch = t.minh,
-		max_cw = t.maxw,
-		max_ch = t.maxh,
+		min_cw = t.min_cw,
+		min_ch = t.min_ch,
+		max_cw = t.max_cw,
+		max_ch = t.max_ch,
 		visible = false,
 		maximized = t.maximized,
 		--frame
@@ -139,13 +139,16 @@ function window:new(app, frontend, t)
 		frame = framed,
 		window_edge = framed,
 		layered = self._layered,
+		tool_window = t.frame == 'toolbox',
+		owner = t.parent and t.parent.backend.win,
 		--behavior
 		topmost = t.topmost,
 		minimize_button = t.minimizable,
 		maximize_button = t.maximizable,
 		noclose = not t.closeable,
-		sizeable = t.resizeable,
+		sizeable = framed and t.resizeable,
 		receive_double_clicks = false, --we do our own double-clicking
+		remember_maximized_pos = true, --to emulate OSX behavior
 	}
 
 	--init keyboard state
@@ -359,6 +362,7 @@ end
 --state/changed event --------------------------------------------------------
 
 function Window:on_pos_changed(winpos)
+	if not self.frontend then return end --not yet hooked
 	self.frontend:_backend_changed()
 end
 
@@ -368,12 +372,7 @@ function window:fullscreen()
 	return self._fullscreen
 end
 
-function window:enter_fullscreen(to_minimized)
-
-	if not self.frontend:_backend_entering_fullscreen() then
-		return
-	end
-
+function window:enter_fullscreen()
 	self._fs = {
 		maximized = self:maximized(),
 		normal_rect = self.win.normal_rect,
@@ -381,8 +380,8 @@ function window:enter_fullscreen(to_minimized)
 		sizeable = self.win.sizeable,
 	}
 
-	--clear the screen for layered windows, which makes the taskbar dissapear
-	--immediately later on, when the window will be repainted.
+	--if it's a layered window, clear it, otherwise the taskbar won't
+	--dissapear quite immediately when the window will be repainted.
 	self:_clear_layered()
 
 	--disable events while we're changing the frame and size.
@@ -396,16 +395,16 @@ function window:enter_fullscreen(to_minimized)
 	self.win.border = false
 	self.win.sizeable = false
 	local display = self:display() or self.app:active_display()
-	self.win.normal_rect = pack_rect(nil, display:rect()) --TODO: when is this nil ??
+	local dx, dy, dw, dh = display:rect()
+	self.win.normal_rect = pack_rect(nil, dx, dy, dw, dh)
 
-	if to_minimized then
-		self.win.restore_to_maximized = false
-		self.win:minimize()
-	else
-		self.win:shownormal()
-	end
+	--center if constrained, to emulate OSX behavior.
+	local r = self.win.normal_rect
+	pack_rect(r, box2d.align(r.w, r.h, 'center', 'center', dx, dy, dw, dh))
+	self.win.normal_rect = r
 
 	self._fullscreen = true
+	self.win:shownormal()
 
 	--restore events, and trigger a single resize event and a repaint.
 	self._norepaint = false
@@ -415,17 +414,12 @@ function window:enter_fullscreen(to_minimized)
 	self:invalidate()
 end
 
-function window:exit_fullscreen(to_maximized)
-
-	if not self.frontend:_backend_exiting_fullscreen() then
-		return
-	end
-
+function window:exit_fullscreen()
 	--disable events while we're changing the frame and size.
 	local events = self.frontend:events(false)
 	self._norepaint = true
 
-	if to_maximized or self._fs.maximized then
+	if self._fs.maximized then
 		self.win:maximize()
 	else
 		self.win:shownormal()
@@ -446,14 +440,48 @@ function window:exit_fullscreen(to_maximized)
 	self:invalidate()
 end
 
-function window:on_minimizing()
-	--refuse to minimize a fullscreen window to emulate OSX behavior.
-	if self._fullscreen then
+function Window:on_minimizing()
+	--refuse to minimize a fullscreen window to avoid undefined behavior.
+	if self.backend._fullscreen then
 		return false
 	end
 end
 
---positioning/frame rect -----------------------------------------------------
+--positioning/conversions ----------------------------------------------------
+
+function window:to_screen(x, y)
+	local p = self.win:map_point(nil, x, y)
+	return p.x, p.y
+end
+
+function window:to_client(x, y)
+	local p = winapi.Windows:map_point(self.win, x, y)
+	return p.x, p.y
+end
+
+local function frame_args(frame)
+	local framed = frame == 'normal' or frame == 'toolbox'
+	local layered = frame == 'none-transparent'
+	return {
+		border = framed,
+		frame = framed,
+		window_edge = framed,
+		sizeable = framed,
+		layered = layered,
+	}
+end
+
+function app:client_to_frame(frame, x, y, w, h)
+	return unpack_rect(winapi.Window:client_to_frame(frame_args(frame),
+		pack_rect(nil, x, y, w, h)))
+end
+
+function app:frame_to_client(frame, x, y, w, h)
+	return unpack_rect(winapi.Window:frame_to_client(frame_args(frame),
+		pack_rect(nil, x, y, w, h)))
+end
+
+--positioning/rectangles -----------------------------------------------------
 
 function window:get_normal_rect()
 	if self._fullscreen then
@@ -483,12 +511,12 @@ function window:set_frame_rect(x, y, w, h)
 	end
 end
 
---positioning/client rect ----------------------------------------------------
-
 function window:get_size()
 	local r = self.win.client_rect
 	return r.w, r.h
 end
+
+--positioning/constraints ----------------------------------------------------
 
 function window:get_minsize()
 	return self.win.min_cw, self.win.min_ch
@@ -508,39 +536,6 @@ function window:set_maxsize(w, h)
 	self.win.max_cw = w
 	self.win.max_ch = h
 	self.win:resize(self.win.w, self.win.h)
-end
-
---positioning/conversions ----------------------------------------------------
-
-function window:to_screen(x, y)
-	local p = self.win:map_point(nil, x, y)
-	return p.x, p.y
-end
-
-function window:to_client(x, y)
-	local p = winapi.Windows:map_point(self.win, x, y)
-	return p.x, p.y
-end
-
-local function frame_args(frame)
-	local framed = frame == 'normal'
-	local layered = frame == 'none-transparent'
-	return {
-		border = framed,
-		frame = framed,
-		window_edge = framed,
-		layered = layered,
-	}
-end
-
-function app:client_to_frame(frame, x, y, w, h)
-	return unpack_rect(winapi.Window:client_to_frame(frame_args(frame),
-		pack_rect(nil, x, y, w, h)))
-end
-
-function app:frame_to_client(frame, x, y, w, h)
-	return unpack_rect(winapi.Window:frame_to_client(frame_args(frame),
-		pack_rect(nil, x, y, w, h)))
 end
 
 --positioning/resizing -------------------------------------------------------
