@@ -6,12 +6,14 @@ local ffi = require'ffi'
 local bit = require'bit'
 local glue = require'glue'
 local box2d = require'box2d'
+local bitmap = require'bitmap' --for clipboard
 local winapi = require'winapi'
 require'winapi.spi'
 require'winapi.sysinfo'
 require'winapi.systemmetrics'
 require'winapi.windowclass'
 require'winapi.gdi'
+require'winapi.bitmap'
 require'winapi.icon'
 
 local nw = {name = 'winapi'}
@@ -137,7 +139,7 @@ function window:new(app, frontend, t)
 		title = t.title,
 		border = framed,
 		frame = framed,
-		window_edge = framed,
+		window_edge = framed, --must be off for frameless windows!
 		layered = self._layered,
 		tool_window = t.frame == 'toolbox',
 		owner = t.parent and t.parent.backend.win,
@@ -146,10 +148,16 @@ function window:new(app, frontend, t)
 		minimize_button = t.minimizable,
 		maximize_button = t.maximizable,
 		noclose = not t.closeable,
-		sizeable = framed and t.resizeable,
+		sizeable = framed and t.resizeable, --must be off for frameless windows!
+		activable = t.activable,
 		receive_double_clicks = false, --we do our own double-clicking
-		remember_maximized_pos = true, --to emulate OSX behavior
+		remember_maximized_pos = true, --to emulate OSX behavior for constrained maximized windows
 	}
+
+	--must set WS_CHILD **after** window is created for non-activable toolboxes!
+	if t.frame == 'toolbox' and not t.activable then
+		self.win.child = true
+	end
 
 	--init keyboard state
 	self.win.__wantallkeys = true --don't let IsDialogMessage() filter out our precious WM_CHARs
@@ -191,11 +199,25 @@ function Window:on_close()
 	end
 end
 
-function Window:on_destroy()
-	self.frontend:_backend_closed()
+function Window:nw_destroy()
 	self.backend:_free_bitmap()
 	self.backend:_free_icon_api()
 	win_map[self] = nil
+end
+
+--NOTE: closing a window's owner in the on_destroy() event triggers
+--another on_destroy() event on the owned window!
+function Window:on_destroy()
+	if not self.nw_destroying then
+		self.nw_destroying = true
+		self.frontend:_backend_closed() --this may trigger on_destroy() again!
+	end
+	if not self.nw_destroyed then
+		self.nw_destroyed = true
+		self.backend:_free_bitmap()
+		self.backend:_free_icon_api()
+		win_map[self] = nil
+	end
 end
 
 --activation -----------------------------------------------------------------
@@ -540,18 +562,6 @@ end
 
 --positioning/resizing -------------------------------------------------------
 
-function window:magnets()
-	local t = {} --{{x, y, w, h}, ...}
-	local rect
-	for i,hwnd in ipairs(winapi.EnumChildWindows()) do --front-to-back order assured
-		if hwnd ~= self.win.hwnd and winapi.IsVisible(hwnd) then
-			rect = winapi.GetWindowRect(hwnd, rect)
-			t[#t+1] = {x = rect.x, y = rect.y, w = rect.w, h = rect.h}
-		end
-	end
-	return t
-end
-
 function Window:on_begin_sizemove()
 	--when moving the window, we want its position relative to
 	--the mouse position to remain constant, and we're going to enforce that.
@@ -569,6 +579,11 @@ function Window:on_end_sizemove()
 	local how = self.nw_sizemove_how
 	self.nw_sizemove_how = nil
 	self.frontend:_backend_end_resize(how)
+
+	--fix bug where moving non-activable child toolboxes deactivates the parent.
+	if not self.frontend:activable() then
+		self.frontend:parent():activate()
+	end
 end
 
 function Window:nw_frame_changing(how, rect)
@@ -591,6 +606,27 @@ function Window:nw_frame_changing(how, rect)
 	end
 
 	pack_rect(rect, self.frontend:_backend_resizing(how, unpack_rect(rect)))
+
+	if how == 'move' then
+
+		--fix winapi bug where non-activable toolbox windows don't show contents while moving.
+		if not self.frontend:activable() then
+			local x, y, w, h = unpack_rect(rect)
+			--NOTE: SWP_NOACTIVATE has no effect here, so might as well pass 0.
+			winapi.SetWindowPos(self.hwnd, nil, x, y, w, h, 0)
+		end
+
+		--move children too, to emulate OSX behavior.
+		local x, y = rect.x, rect.y
+		local x0, y0 = self.backend:get_frame_rect()
+		local dx = x - x0
+		local dy = y - y0
+		for _,win in ipairs(self.frontend:children()) do
+			local x, y = win:frame_rect()
+			win:frame_rect(x + dx, y + dy)
+		end
+
+	end
 end
 
 function Window:on_moving(rect)
@@ -622,7 +658,7 @@ function Window:on_resized(flag)
 		--frameless windows maximize to the entire screen, covering the taskbar. fix that.
 		if not self.frame then
 			self.nw_maximizing = true --on_resized() barrier
-			self:move(self.backend:display():client_rect())
+			self.rect = pack_rect(nil, self.backend:display():client_rect())
 			self.nw_maximizing = false
 		end
 
@@ -633,7 +669,25 @@ function Window:on_resized(flag)
 
 		self.backend:invalidate()
 		self.frontend:_backend_resized()
+
 	end
+end
+
+--positioning/magnets --------------------------------------------------------
+
+function window:magnets()
+	local t = {} --{{x, y, w, h}, ...}
+	local rect
+	for i,hwnd in ipairs(winapi.EnumChildWindows()) do --front-to-back order assured
+		if hwnd ~= self.win.hwnd         --exclude self
+			and winapi.IsVisible(hwnd)    --exclude invisible
+			and not winapi.IsZoomed(hwnd) --exclude maximized (TODO: also excludes constrained maximized)
+		then
+			rect = winapi.GetWindowRect(hwnd, rect)
+			t[#t+1] = {x = rect.x, y = rect.y, w = rect.w, h = rect.h}
+		end
+	end
+	return t
 end
 
 --titlebar -------------------------------------------------------------------
@@ -1229,106 +1283,180 @@ function window:mouse_pos()
 	return winapi.GetMessagePos()
 end
 
---rendering ------------------------------------------------------------------
+--bitmaps --------------------------------------------------------------------
 
---create or replace the window's singleton bitmap which is used to draw on the window.
-function window:bitmap()
-
-	--get needed width and height.
-	local w, h = self.frontend:size()
-
-	--can't make a zero-sized bitmap and there's no API to clear the screen.
-	--clearing the bitmap simulates a zero-sized bitmap on screen.
-	if w <= 0 or h <= 0 then
-		if self._bitmap then
-			self._bmp_size.w = 1
-			self._bmp_size.h = 1
-			self:_clear_layered()
-			self:_free_bitmap()
-			--we just changed the size to (1,1), change it back to (0,0).
-			self.win:resize(0, 0)
-		end
-		return
+--initialize a new or existing DIB header for a top-down bgra8 bitmap.
+local function dib_header(w, h, bi)
+	if bi then
+		ffi.fill(bi, ffi.sizeof'BITMAPV5HEADER')
+		bi.bV5Size = ffi.sizeof'BITMAPV5HEADER'
+	else
+		bi = winapi.BITMAPV5HEADER()
 	end
+	bi.bV5Width  = w
+	bi.bV5Height = -h
+	bi.bV5Planes = 1
+	bi.bV5BitCount = 32
+	bi.bV5Compression = winapi.BI_BITFIELDS
+	bi.bV5SizeImage = w * h * 4
+	--this mask specifies a supported 32bpp alpha format for Windows XP.
+	bi.bV5RedMask   = 0x00FF0000
+	bi.bV5GreenMask = 0x0000FF00
+	bi.bV5BlueMask  = 0x000000FF
+	bi.bV5AlphaMask = 0xFF000000
+	--this flag is important for making clipboard-compatible packed DIBs!
+	bi.bV5CSType = winapi.LCS_WINDOWS_COLOR_SPACE
+	return bi
+end
 
-	--free current bitmap if needed width or height has changed.
-	if self._bitmap then
-		local b = self._bmp_size
-		if w ~= b.w or h ~= b.h then
-			self:_free_bitmap()
-		end
-	end
+--make a top-down bgra8 DIB and return it along with the pixel buffer.
+local function dib(w, h)
+	local bi = dib_header(w, h)
+	local info = ffi.cast('BITMAPINFO*', bi)
+	local hdc = winapi.GetDC()
+	local hbmp, data = winapi.CreateDIBSection(hdc, info, winapi.DIB_RGB_COLORS)
+	winapi.ReleaseDC(nil, hdc)
+	return hbmp, data
+end
 
-	--return current bitmap, if any.
-	if self._bitmap then
-		return self._bitmap
-	end
-
-	--make an litle-endian-ARGB32 (i.e. bgra8) bitmap.
-	local info = BITMAPINFO()
-	info.bmiHeader.biSize = ffi.sizeof'BITMAPINFO'
-	info.bmiHeader.biWidth = w
-	info.bmiHeader.biHeight = -h
-	info.bmiHeader.biPlanes = 1
-	info.bmiHeader.biBitCount = 32
-	info.bmiHeader.biCompression = winapi.BI_RGB
-
-	self._bmp_hdc = winapi.CreateCompatibleDC()
-	self._bmp, self._bmp_data = winapi.CreateDIBSection(self._bmp_hdc, info, winapi.DIB_RGB_COLORS)
-	self._old_bmp = winapi.SelectObject(self._bmp_hdc, self._bmp)
-
-	self._bitmap = {
+--make a top-down bgra8 DIB with a bitmap frontend for access to pixels.
+local function dib_bitmap(w, h, data)
+	return {
 		w = w,
 		h = h,
-		data = self._bmp_data,
+		data = data,
 		stride = w * 4,
 		size = w * h * 4,
 		format = 'bgra8',
 	}
+end
 
-	--preallocate arguments for UpdateLayeredWindow().
-	self._win_pos = winapi.POINT()
-	self._bmp_pos = winapi.POINT()
-	self._bmp_size = winapi.SIZE(w, h)
-	self._blendfunc = winapi.types.BLENDFUNCTION{
+--make a DIB and APIs to paint the DIB on a DC and on a WS_EX_LAYERED window.
+local function dib_bitmap_api(w, h)
+
+	--can't create a zero-sized bitmap
+	if w <= 0 or h <= 0 then return end
+
+	local hbmp, data = dib(w, h)
+	local bitmap = dib_bitmap(w, h, data)
+	local hdc = winapi.CreateCompatibleDC()
+	local oldhbmp = winapi.SelectObject(hdc, hbmp)
+
+	local api = {bitmap = bitmap, hbmp = hbmp}
+
+	--paint the bitmap on a DC.
+	function api:paint(dest_hdc)
+		winapi.BitBlt(dest_hdc, 0, 0, w, h, hdc, 0, 0, winapi.SRCCOPY)
+	end
+
+	--update a WS_EX_LAYERED window with the bitmap contents and size.
+	--the bitmap must have window's client rectangle size, otherwise
+	--Windows **resizes the window** to the size of the bitmap.
+	local pos = winapi.POINT()
+	local topleft = winapi.POINT()
+	local size = winapi.SIZE(w, h)
+	local blendfunc = winapi.types.BLENDFUNCTION{
 		AlphaFormat = winapi.AC_SRC_ALPHA,
 		BlendFlags = 0,
 		BlendOp = winapi.AC_SRC_OVER,
 		SourceConstantAlpha = 255,
 	}
+	function api:update_layered(win)
+		local r = win.screen_rect
+		pos.x = r.x
+		pos.y = r.y
+		winapi.UpdateLayeredWindow(win.hwnd, nil, pos, size, hdc, topleft, 0,
+			blendfunc, winapi.ULW_ALPHA)
+	end
 
+	function api:free()
+		--trigger a user-supplied destructor.
+		if bitmap.free then
+			bitmap:free()
+		end
+		--free the bitmap and dc.
+		winapi.SelectObject(hdc, oldhbmp)
+		winapi.DeleteObject(hbmp)
+		winapi.DeleteDC(hdc)
+		bitmap.data = nil
+		bitmap = nil
+	end
+
+	return api
+end
+
+--a dynamic bitmap is an API that creates a new bitmap everytime its size
+--changes. user supplies the :size() function, :get() gets the bitmap,
+--and :freeing(bitmap) is triggered before the bitmap is freed.
+local function dynbitmap(api)
+
+	api = api or {}
+
+	local w, h, dib
+
+	function api:get()
+		local w1, h1 = api:size()
+		if w1 ~= w or h1 ~= h then
+			self:free()
+			dib = dib_bitmap_api(w1, h1)
+			w, h = w1, h1
+		end
+		return dib and dib.bitmap
+	end
+
+	function api:free()
+		if not dib then return end
+		self:freeing(dib.bitmap)
+		dib:free()
+	end
+
+	function api:paint(hdc)
+		if not dib then return end
+		dib:paint(hdc)
+	end
+
+	function api:update_layered(win)
+		if not dib then return end
+		dib:update_layered(win)
+	end
+
+	return api
+end
+
+--rendering ------------------------------------------------------------------
+
+function window:_create_dynbitmap()
+	if self._dynbitmap then return end
+	self._dynbitmap = dynbitmap{
+		size = function()
+			return self.frontend:size()
+		end,
+		freeing = function(_, bitmap)
+			self.frontend:_backend_free_bitmap(bitmap)
+			self._bitmap = nil
+		end,
+	}
+end
+
+function window:bitmap()
+	self:_create_dynbitmap()
+	self._bitmap = self._dynbitmap:get()
 	return self._bitmap
 end
 
 function window:_free_bitmap()
 	if not self._bitmap then return end
-
-	--trigger a free bitmap event.
-	self.frontend:_backend_free_bitmap(self._bitmap)
-
-	winapi.SelectObject(self._bmp_hdc, self._old_bmp)
-	winapi.DeleteObject(self._bmp)
-	winapi.DeleteDC(self._bmp_hdc)
-	self._bitmap.data = nil
-	self._bitmap = nil
+	self._dynbitmap:free()
 end
 
---paint the bitmap on a hdc.
-function window:_paint_bitmap(dest_hdc)
+function window:_paint_bitmap(hdc)
 	if not self._bitmap then return end
-	winapi.BitBlt(dest_hdc, 0, 0, self._bmp_size.w, self._bmp_size.h, self._bmp_hdc, 0, 0, winapi.SRCCOPY)
+	self._dynbitmap:paint(hdc)
 end
 
---update a WS_EX_LAYERED window with the bitmap.
---the bitmap must have window's client rectangle size, otherwise Windows
---resizes the _window_ to fit the bitmap.
 function window:_update_layered()
 	if not self._bitmap then return end
-	local r = self.win.screen_rect
-	self._win_pos.x = r.x
-	self._win_pos.y = r.y
-	winapi.UpdateLayeredWindow(self.win.hwnd, nil, self._win_pos, self._bmp_size,
-		self._bmp_hdc, self._bmp_pos, 0, self._blendfunc, winapi.ULW_ALPHA)
+	self._dynbitmap:update_layered(self.win)
 end
 
 function window:invalidate()
@@ -1344,12 +1472,13 @@ end
 --clear the bitmap's pixels and update the layered window.
 function window:_clear_layered()
 	if not self._bitmap or not self._layered then return end
-	ffi.fill(self._bmp_data, self._bmp_size.w * self._bmp_size.h * 4)
+	local bmp = self._bitmap
+	ffi.fill(bmp.data, bmp.stride * bmp.h)
 	self:_update_layered()
 end
 
 function Window:WM_ERASEBKGND()
-	if not self.backend._bitmap then return end
+	if not self.backend._dynbitmap then return end
 	return false --skip drawing the background to prevent flicker.
 end
 
@@ -1522,7 +1651,7 @@ end
 --the contents of that bitmap, and a third one to free the icon and bitmap.
 --the bitmap is recreated only if the icon size changed since last access.
 --the bitmap is in bgra8 format, premultiplied alpha.
-local function drawable_icon_api(which)
+local function icon_api(which)
 
 	local w, h, bmp, data, maskbmp
 
@@ -1533,31 +1662,12 @@ local function drawable_icon_api(which)
 		w, h, bmp, data, maskbmp = nil
 	end
 
-	local bi = winapi.BITMAPV5HEADER()
-	local pbi = ffi.cast('BITMAPINFO*', bi)
-
 	local function recreate_bitmaps(w1, h1)
 		free_bitmaps()
-
 		w, h = w1, h1
-		bi.bV5Width  = w
-		bi.bV5Height = h
-
-		bi.bV5Planes = 1
-		bi.bV5BitCount = 32
-		bi.bV5Compression = winapi.BI_BITFIELDS
-		-- this mask specifies a supported 32 BPP alpha format for Windows XP.
-		bi.bV5RedMask   = 0x00FF0000
-		bi.bV5GreenMask = 0x0000FF00
-		bi.bV5BlueMask  = 0x000000FF
-		bi.bV5AlphaMask = 0xFF000000
-
-		-- Create a little-endian-ARGB32 (i.e. 'bgra8') bitmap.
-		local hdc = winapi.GetDC()
-		bmp, data = winapi.CreateDIBSection(hdc, pbi, winapi.DIB_RGB_COLORS)
-		winapi.ReleaseDC(nil, hdc)
-
-		-- Create an empty mask bitmap.
+		--create a bgra8 bitmap.
+		bmp, data = dib(w, h)
+		--create an empty mask bitmap.
 		maskbmp = winapi.CreateBitmap(w, h, 1, 1)
 	end
 
@@ -1569,11 +1679,10 @@ local function drawable_icon_api(which)
 		icon = nil
 	end
 
-	local ii = winapi.ICONINFO()
-
 	local function recreate_icon()
 		free_icon()
 
+		local ii = winapi.ICONINFO()
 		ii.fIcon = true --icon, not cursor
 		ii.xHotspot = 0
 		ii.yHotspot = 0
@@ -1584,8 +1693,9 @@ local function drawable_icon_api(which)
 	end
 
 	local function size()
-		local w = winapi.GetSystemMetrics(which == 'small' and 'SM_CXSMICON' or 'SM_CXICON')
-		local h = winapi.GetSystemMetrics(which == 'small' and 'SM_CYSMICON' or 'SM_CYICON')
+		local SM = which == 'small' and 'SM_CXSMICON' or 'SM_CXICON'
+		local w = winapi.GetSystemMetrics(SM)
+		local h = winapi.GetSystemMetrics(SM)
 		return w, h
 	end
 
@@ -1632,7 +1742,7 @@ local function drawable_icon_api(which)
 end
 
 function notifyicon:_setup_icon_api()
-	self.bitmap, self._get_icon, self._free_icon_api = drawable_icon_api()
+	self.bitmap, self._get_icon, self._free_icon_api = icon_api()
 end
 
 function notifyicon:invalidate()
@@ -1669,7 +1779,7 @@ end
 
 function window:_add_icon_api(which)
 	which = whicharg(which)
-	local get_bitmap, get_icon, free_all = drawable_icon_api(which)
+	local get_bitmap, get_icon, free_all = icon_api(which)
 	self._icon_api[which] = {get_bitmap = get_bitmap, get_icon = get_icon, free_all = free_all}
 end
 
@@ -1786,11 +1896,18 @@ local formats = {
 	[winapi.CF_BITMAP] = 'bitmap',
 }
 
-function app:clipboard_formats()
+local function with_clipboard(func)
 	if not winapi.OpenClipboard() then
 		return
 	end
-	return glue.fcall(function()
+	local ok, ret = glue.pcall(func)
+	winapi.CloseClipboard()
+	if not ok then error(ret, 2) end
+	return ret
+end
+
+function app:clipboard_formats()
+	return with_clipboard(function()
 		local names = winapi.GetClipboardFormatNames()
 		local t,dupes = {},{}
 		for i=1,#names do
@@ -1801,31 +1918,58 @@ function app:clipboard_formats()
 			end
 		end
 		return t
-	end, winapi.CloseClipboard)
+	end)
 end
 
 function app:get_clipboard(format)
-	if not winapi.OpenClipboard() then
-		return
-	end
-	return glue.fcall(function()
+	return with_clipboard(function()
 		if format == 'text' then
 			return winapi.GetClipboardText()
 		elseif format == 'files' then
 			return winapi.GetClipboardFiles()
 		elseif format == 'bitmap' then
-			winapi.GetClipboardDataBuffer(format, function(buf, sz)
-				--TODO
+			--NOTE: Windows synthesizes bitmap formats so we can always get
+			--a CF_DIBV5 even if only CF_BITMAP or CF_DIB is listed.
+			return winapi.GetClipboardDataBuffer('CF_DIBV5', function(buf, sz)
+
+				local info = ffi.cast('BITMAPV5HEADER*', buf)
+
+				--check if format is supported. palette formats are not supported!
+				if info.bV5BitCount ~= 32 and info.bV5BitCount ~= 24 then return end
+				if info.bV5Compression ~= winapi.BI_BITFIELDS
+					and info.bV5Compression ~= winapi.BI_RGB then return end
+				if info.bV5ProfileSize > 0 then return end
+
+				--get bitmap metadata.
+				local w = info.bV5Width
+				local h = math.abs(info.bV5Height)
+				local bpp = info.bV5BitCount
+				local format = bpp == 32 and 'bgra8' or 'bgr8'
+				local stride = bitmap.aligned_stride(w * bpp / 8)
+				local size = stride * h
+				local bottom_up = info.bV5Height >= 0 or nil
+
+				--find the pixels: work around a winapi bug where there's
+				--sometimes a 12 bytes gap between the header and the pixels.
+				local gap = info.bV5Compression == winapi.BI_BITFIELDS
+					and (sz - info.bV5Size) > w * h * 4
+					and 12 or 0
+				local data = ffi.cast('void*', ffi.cast('char*', buf) + info.bV5Size + gap)
+
+				--create a temporary bitmap.
+				local bmp = {w = w, h = h, format = format, stride = stride,
+					size = size, data = data, bottom_up = bottom_up}
+
+				--copy the bitmap because we don't own the memory, and also
+				--because it may need to be converted to bgra8.
+				return bitmap.copy(bmp, 'bgra8', false)
 			end)
 		end
-	end, winapi.CloseClipboard)
+	end)
 end
 
 function app:set_clipboard(t)
-	if not winapi.OpenClipboard() then
-		return false
-	end
-	glue.fcall(function()
+	return with_clipboard(function()
 		winapi.EmptyClipboard()
 		for i,t in ipairs(t) do
 			local data, format = t.data, t.format
@@ -1834,11 +1978,21 @@ function app:set_clipboard(t)
 			elseif format == 'files' then
 				winapi.SetClipboardFiles(data)
 			elseif format == 'bitmap' then
-				--TODO
+				--NOTE: Windows synthesizes bitmap formats so it's enough to put
+				--a CF_DIBV5 bitmap to be able to get a CF_BITMAP or CF_DIB.
+				local bmp = data
+				local data_offset = ffi.sizeof'BITMAPV5HEADER'
+				local dib_size = data_offset + bmp.size
+				winapi.SetClipboardDataBuffer('CF_DIBV5', nil, dib_size, function(buf)
+					--make a packed DIB and copy the pixels to it.
+					local bi = dib_header(bmp.w, bmp.h, ffi.cast('BITMAPV5HEADER*', buf))
+					local data_ptr = ffi.cast('uint8_t*', buf) + data_offset
+					ffi.copy(data_ptr, bmp.data, bmp.size)
+				end)
 			end
 		end
-	end, winapi.CloseClipboard)
-	return true
+		return true
+	end) or false
 end
 
 --buttons --------------------------------------------------------------------

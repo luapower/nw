@@ -323,6 +323,14 @@ function Window:windowWillClose()
 		self.backend:_hidden()
 		return
 	end
+
+	--force-close child windows first to emulate Windows behavior.
+	if self:childWindows() then
+		for i,win in objc.ipairs(self:childWindows()) do
+			win.backend:forceclose()
+		end
+	end
+
 	if self.backend:active() then
 		--fake deactivation now because having close() not be async is more important.
 		self.frontend:_backend_deactivated()
@@ -408,14 +416,16 @@ function window:active()
 	return self.nswin:isKeyWindow()
 end
 
---NOTE: windows with NSBorderlessWindowMask can't become key by default.
+--NOTE: by default, windows with NSBorderlessWindowMask can't become key.
 function Window:canBecomeKeyWindow()
-	return true
+	if self.frontend:dead() then return true end --this is NOT a delegate method!
+	return self.frontend:activable()
 end
 
---NOTE: windows with NSBorderlessWindowMask can't become main by default.
+--NOTE: by default, windows with NSBorderlessWindowMask can't become main.
 function Window:canBecomeMainWindow()
-	return true
+	if self.frontend:dead() then return true end --this is NOT a delegate method!
+	return self.frontend:activable()
 end
 
 --state/app visibility -------------------------------------------------------
@@ -895,40 +905,6 @@ function window:set_maxsize(w, h)
 	self:_apply_constraints()
 end
 
---positioning/magnets --------------------------------------------------------
-
-function window:magnets()
-	local t = {} --{{x=, y=, w=, h=}, ...}
-
-	local opt = bit.bor(
-		objc.kCGWindowListOptionOnScreenOnly,
-		objc.kCGWindowListExcludeDesktopElements)
-
-	local nswin_number = tonumber(self.nswin:windowNumber())
-	local list = objc.CGWindowListCopyWindowInfo(opt, nswin_number) --front-to-back order assured
-
-	--a glimpse into the mind of a Cocoa (or Java, .Net, etc.) programmer...
-	local bounds = ffi.new'CGRect[1]'
-	for i = 0, tonumber(objc.CFArrayGetCount(list)-1) do
-		local entry = ffi.cast('id', objc.CFArrayGetValueAtIndex(list, i)) --entry is NSDictionary
-		local sharingState = entry:objectForKey(ffi.cast('id', objc.kCGWindowSharingState)):intValue()
-		if sharingState ~= objc.kCGWindowSharingNone then --filter out windows we can't read from
-			local layer = entry:objectForKey(ffi.cast('id', objc.kCGWindowLayer)):intValue()
-			local number = entry:objectForKey(ffi.cast('id', objc.kCGWindowNumber)):intValue()
-			if layer <= 0 and number ~= nswin_number then --ignore system menu, dock, etc.
-				local boundsEntry = entry:objectForKey(ffi.cast('id', objc.kCGWindowBounds))
-				objc.CGRectMakeWithDictionaryRepresentation(ffi.cast('CFDictionaryRef', boundsEntry), bounds)
-				local x, y, w, h = unpack_nsrect(bounds[0]) --already flipped
-				t[#t+1] = {x = x, y = y, w = w, h = h}
-			end
-		end
-	end
-
-	objc.CFRelease(ffi.cast('id', list))
-
-	return t
-end
-
 --positioning/resizing -------------------------------------------------------
 
 function Window:nw_clientarea_hit(event)
@@ -998,7 +974,8 @@ end
 --This makes the window unmovable if/while the app blocks on the main thread.
 
 function Window:sendEvent(event)
-	if not self.frontend:dead() and self.frontend:edgesnapping() then
+	if self.frontend:dead() then return end
+	if self.frontend:edgesnapping() then
 		--take over window dragging by the titlebar so that we can post moving events
 		local etype = event:type()
 		if self.dragging then
@@ -1100,7 +1077,8 @@ end
 
 function Window:windowDidResize()
 	if self.frontend:dead() then return end
-	self.frontend:_backend_resized()
+	self.frontend:_backend_resized(self.how)
+	self.how = nil
 end
 
 function Window:windowWillMove()
@@ -1108,6 +1086,40 @@ end
 
 function Window:windowDidMove()
 	self.frontend:_backend_changed()
+end
+
+--positioning/magnets --------------------------------------------------------
+
+function window:magnets()
+	local t = {} --{{x=, y=, w=, h=}, ...}
+
+	local opt = bit.bor(
+		objc.kCGWindowListOptionOnScreenOnly,
+		objc.kCGWindowListExcludeDesktopElements)
+
+	local nswin_number = tonumber(self.nswin:windowNumber())
+	local list = objc.CGWindowListCopyWindowInfo(opt, nswin_number) --front-to-back order assured
+
+	--a glimpse into the mind of a Cocoa (or Java, .Net, etc.) programmer...
+	local bounds = ffi.new'CGRect[1]'
+	for i = 0, tonumber(objc.CFArrayGetCount(list)-1) do
+		local entry = ffi.cast('id', objc.CFArrayGetValueAtIndex(list, i)) --entry is NSDictionary
+		local sharingState = entry:objectForKey(ffi.cast('id', objc.kCGWindowSharingState)):intValue()
+		if sharingState ~= objc.kCGWindowSharingNone then --filter out windows we can't read from
+			local layer = entry:objectForKey(ffi.cast('id', objc.kCGWindowLayer)):intValue()
+			local number = entry:objectForKey(ffi.cast('id', objc.kCGWindowNumber)):intValue()
+			if layer <= 0 and number ~= nswin_number then --ignore system menu, dock, etc.
+				local boundsEntry = entry:objectForKey(ffi.cast('id', objc.kCGWindowBounds))
+				objc.CGRectMakeWithDictionaryRepresentation(ffi.cast('CFDictionaryRef', boundsEntry), bounds)
+				local x, y, w, h = unpack_nsrect(bounds[0]) --already flipped
+				t[#t+1] = {x = x, y = y, w = w, h = h}
+			end
+		end
+	end
+
+	objc.CFRelease(ffi.cast('id', list))
+
+	return t
 end
 
 --z-order --------------------------------------------------------------------
@@ -2061,7 +2073,7 @@ function notifyicon:get_length() --OSX specific
 	return self.si:length()
 end
 
-function notifyicon:set_length(length)  --OSX specific
+function notifyicon:set_length(length) --OSX specific
 	self.si:setLength(length)
 end
 

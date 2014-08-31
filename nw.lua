@@ -327,7 +327,14 @@ function app:windows(order)
 	end
 end
 
-function app:window_count()
+function app:window_count(filter)
+	if filter == 'top-level' then
+		local n = 0
+		for i,win in ipairs(self._windows) do
+			n = n + (not win:dead() and not win:parent() and 1 or 0)
+		end
+		return n
+	end
 	return #self._windows
 end
 
@@ -345,7 +352,9 @@ end
 
 local window = glue.update({}, object)
 
-local defaults = {
+local defaults = {}
+
+defaults.normal = {
 	--state
 	visible = true,
 	minimized = false,
@@ -353,7 +362,6 @@ local defaults = {
 	maximized = false,
 	--frame
 	title = '',
-	frame = 'normal',
 	--behavior
 	topmost = false,
 	minimizable = true,
@@ -361,36 +369,60 @@ local defaults = {
 	closeable = true,
 	resizeable = true,
 	fullscreenable = true,
+	activable = true, --only for 'toolbox' frames
 	autoquit = false, --quit the app on closing
-	edgesnapping = false,
-	--hide_on_deactivate = false,
+	edgesnapping = 'screen',
+	hide_on_deactivate = false,
 }
+
+defaults.none = glue.merge({
+	resizeable = false,
+}, defaults.normal)
+
+defaults['none-transparent'] = defaults.none
+
+defaults.toolbox = glue.merge({
+	minimizable = false,
+	maximizable = false,
+	fullscreenable = false,
+	edgesnapping = 'parent siblings screen',
+	hide_on_deactivate = true,
+}, defaults.normal)
 
 function app:window(t)
 	return window:_new(self, self.backend.window, t)
 end
 
 local bool_frame = {[false] = 'none', [true] = 'normal'}
-local frame_opt = glue.index{'normal', 'none', 'none-transparent', 'toolbox'}
 
 local function checkframe(frame)
 	frame = bool_frame[frame] or frame
-	assert(frame_opt[frame], 'invalid frame')
+	assert(defaults[frame], 'invalid frame')
 	return frame
 end
 
 function window:_new(app, backend_class, useropt)
 
 	--check/normalize args.
-	local opt = glue.update({}, defaults, useropt)
-	opt.frame = checkframe(opt.frame)
+	local frame = checkframe(useropt.frame or 'normal')
+	local opt = glue.update({frame = frame}, defaults[frame], useropt)
 
 	--frameless windows are not resizeable.
-	opt.resizeable = (opt.frame == 'normal' or opt.frame == 'toolbox') and opt.resizeable ~= false
+	if frame:find'^none' then
+		assert(not opt.resizeable, 'frameless windows cannot be resizeable')
+	end
 
-	--toolbox windows are topmost by default.
-	if useropt.topmost == nil and opt.frame == 'toolbox' then
-		opt.topmost = true
+	if frame == 'toolbox' then
+		--toolboxes can't be minimizable because they don't show in taskbar.
+		assert(not opt.minimizable, 'toolbox windows cannot be minimizable')
+		--although not required by backends, top-level toolboxes don't make
+		--sense because they don't show in taskbar so they can't be activated.
+		assert(opt.parent, 'toolbox windows must have a parent')
+	end
+
+	--only toolboxes can be non-activable (winapi limitation)
+	if frame ~= 'toolbox' then
+		assert(opt.activable, 'only toolbox windows can be non-activable')
 	end
 
 	--if missing some frame coords but given some client coords, convert client
@@ -407,6 +439,7 @@ function window:_new(app, backend_class, useropt)
 	assert(opt.w, 'w or cw missing')
 	assert(opt.h, 'h or ch missing')
 
+	--either cascading or fixating the position, there's no mix.
 	assert((not opt.x) == (not opt.y), 'either give both x and y or none')
 
 	self = glue.inherit({app = app}, self)
@@ -425,21 +458,10 @@ function window:_new(app, backend_class, useropt)
 	self._closeable = opt.closeable
 	self._resizeable = opt.resizeable
 	self._fullscreenable = opt.fullscreenable
+	self._activable = opt.activable
 	self._autoquit = opt.autoquit
 	self:edgesnapping(opt.edgesnapping)
-
-	--move sticky children along with the parent
-	self:observe('resizing', function(self, how, x, y)
-		local x0, y0 = self:frame_rect()
-		local dx = x - x0
-		local dy = y - y0
-		for _,win in ipairs(self.app:windows()) do
-			if win:sticky() and win:parent() == self then
-				local x, y = win:frame_rect()
-				win:frame_rect(x + dx, y + dy)
-			end
-		end
-	end)
+	self._hide_on_deactivate = opt.hide_on_deactivate
 
 	self.app:_window_created(self)
 	self:_event'created'
@@ -458,7 +480,14 @@ function window:_canclose()
 	if self._closing then return false end --reject while closing (from quit() and user quit)
 
 	self._closing = true --_backend_closing() and _canclose() barrier
+
 	local allow = self:_query'closing'
+
+	--children must agree too
+	for i,win in ipairs(self:children()) do
+		allow = win:_canclose() and allow
+	end
+
 	self._closing = nil
 	return allow
 end
@@ -477,7 +506,10 @@ function window:_backend_closing()
 	if self._closed then return false end --reject if closed
 	if self._closing then return false end --reject while closing
 
-	if self:autoquit() or (self.app:autoquit() and self.app:window_count() == 1) then
+	if self:autoquit() or (self.app:autoquit()
+		and not self:parent() --closing a top-level window
+		and self.app:window_count'top-level' == 1) --of which there's only one
+	then
 		self._quitting = true
 		return self.app:_canquit()
 	else
@@ -793,38 +825,6 @@ function window:_backend_end_resize(how)
 	self:_event('end_resize', how)
 end
 
-function window:_getmagnets()
-	local mode = self:edgesnapping()
-	local t
-	if mode:find'app' then
-		if mode:find'other' then
-			t = self.backend:magnets() --app + other
-		else
-			t = {}
-			for i,win in ipairs(self.app:windows()) do
-				if win ~= self then
-					local x, y, w, h = win:frame_rect()
-					if x then
-						t[#t+1] = {x = x, y = y, w = w, h = h}
-					end
-				end
-			end
-		end
-	elseif mode:find'other' then
-		error'NYI' --TODO
-	end
-	if mode:find'screen' then
-		t = t or {}
-		for i,disp in ipairs(self.app:displays()) do
-			local x, y, w, h = disp:client_rect()
-			t[#t+1] = {x = x, y = y, w = w, h = h}
-			local x, y, w, h = disp:rect()
-			t[#t+1] = {x = x, y = y, w = w, h = h}
-		end
-	end
-	return t
-end
-
 function window:_backend_resizing(how, x, y, w, h)
 	local x1, y1, w1, h1
 
@@ -849,22 +849,79 @@ function window:_backend_resized(how)
 	self:_event('resized', how)
 end
 
-function window:edgesnapping(snapping)
+function window:edgesnapping(mode)
 	self:_check()
-	if snapping == nil then
+	if mode == nil then
 		return self._edgesnapping
 	else
-		if snapping == true then
-			snapping = 'screen'
+		if mode == true then
+			mode = 'screen'
 		end
-		if self._edgesnapping ~= snapping then
+		if mode == 'all' then
+			mode = 'app other screen'
+		end
+		if self._edgesnapping ~= mode then
 			self._magnets = nil
-			self._edgesnapping = snapping
+			self._edgesnapping = mode
 			if self.backend.set_edgesnapping then
-				self.backend:set_edgesnapping(snapping)
+				self.backend:set_edgesnapping(mode)
 			end
 		end
 	end
+end
+
+--positioning/magnets --------------------------------------------------------
+
+local modes = glue.index{'app', 'other', 'screen', 'parent', 'siblings'}
+
+function window:_getmagnets()
+	local mode = self:edgesnapping()
+
+	--parse and check options
+	local opt = {}
+	for s in mode:gmatch'[%a]+' do
+		assert(modes[s], 'invalid option %s', s)
+		opt[s] = true
+	end
+
+	--ask user for magnets
+	local t = self:_handle('magnets', opt)
+	self:_fire('magnets', opt, t)
+	if t then return t end
+
+	--ask backend for magnets
+	if opt.app and opt.other then
+		t = self.backend:magnets()
+	elseif (opt.app or opt.parent or opt.siblings) and not opt.other then
+		t = {}
+		for i,win in ipairs(self.app:windows()) do
+			if win ~= self then
+				local x, y, w, h = win:frame_rect()
+				if x then
+					if opt.app
+						or (opt.parent and win == self:parent())
+						or (opt.siblings and win:parent() == self:parent())
+					then
+						t[#t+1] = {x = x, y = y, w = w, h = h}
+					end
+				end
+			end
+		end
+	elseif opt.other then
+		error'NYI' --TODO: magnets excluding app's windows
+	end
+
+	if opt.screen then
+		t = t or {}
+		for i,disp in ipairs(self.app:displays()) do
+			local x, y, w, h = disp:client_rect()
+			t[#t+1] = {x = x, y = y, w = w, h = h}
+			local x, y, w, h = disp:rect()
+			t[#t+1] = {x = x, y = y, w = w, h = h}
+		end
+	end
+
+	return t
 end
 
 --z-order --------------------------------------------------------------------
@@ -935,6 +992,7 @@ function window:maximizable() self:_check(); return self._maximizable end
 function window:closeable() self:_check(); return self._closeable end
 function window:resizeable() self:_check(); return self._resizeable end
 function window:fullscreenable() self:_check(); return self._fullscreenable end
+function window:activable() self:_check(); return self._activable end
 
 function window:autoquit(autoquit)
 	self:_check()
@@ -945,11 +1003,23 @@ function window:autoquit(autoquit)
 	end
 end
 
+function window:hide_on_deactivate() self:_check(); return self._hide_on_deactivate end
+
 --parent ---------------------------------------------------------------------
 
 function window:parent()
 	self:_check()
 	return self._parent
+end
+
+function window:children()
+	local t = {}
+	for i,win in ipairs(self.app:windows()) do
+		if win:parent() == self then
+			t[#t+1] = win
+		end
+	end
+	return t
 end
 
 --keyboard -------------------------------------------------------------------
@@ -1395,6 +1465,7 @@ end
 
 function window:icon(which)
 	local which = whicharg(which)
+	if self:frame() == 'toolbox' then return end --toolboxes don't have icons
 	self._icons = self._icons or {}
 	if not self._icons[which] then
 		self._icons[which] = winicon:_new(self, which)

@@ -5,6 +5,8 @@ local nw = require'nw'
 local glue = require'glue'
 local ffi = require'ffi'
 local bit = require'bit'
+local box2d = require'box2d'
+local bitmap = require'bitmap'
 
 --local objc = require'objc'
 --objc.debug.logtopics.refcount = true
@@ -535,6 +537,47 @@ add('close-while-closing', function()
 	rec{'closing'}
 end)
 
+--child can close its parent from closed() event.
+add('close-parent-from-closed', function()
+	app:autoquit(false)
+	local win1 = app:window(winpos{title = 'win1'})
+	local win2 = app:window(winpos{title = 'win2', parent = win1})
+	function win1:closed()
+		print'win1 closed'
+	end
+	function win2:closed()
+		print'win2 closed'
+		win1:close()
+	end
+	win2:close()
+	assert(win1:dead())
+	assert(win2:dead())
+	print'ok'
+end)
+
+--children close too when parent closes.
+add('close-children', function()
+	app:autoquit(false)
+	local win1 = app:window(winpos{title = 'win1'})
+	local win2 = app:window(winpos{title = 'win2', parent = win1})
+	win1:close()
+	assert(win1:dead())
+	assert(win2:dead())
+	print'ok'
+end)
+
+--ask children too when parent closes.
+add('close-children-ask', function()
+	app:autoquit(false)
+	local win1 = app:window(winpos{title = 'win1'})
+	local win2 = app:window(winpos{title = 'win2', parent = win1})
+	function win2:closing() return false end
+	win1:close()
+	assert(not win1:dead())
+	assert(not win2:dead())
+	print'ok'
+end)
+
 --window & app activaton -----------------------------------------------------
 
 --1. the OS activates the app when the first window is created.
@@ -719,6 +762,15 @@ add('activation-window-activate-hidden', function()
 	end)
 	app:run()
 	rec{}
+end)
+
+--activable flag works for child toolbox windows.
+--this is an interactive test: move the child window and it doesn't activate.
+add('activation-window-nonactivable', function()
+	local win1 = app:window{x = 100, y = 100, w = 500, h = 200}
+	local win2 = app:window{x = 200, y = 130, w = 200, h = 300,
+		activable = false, frame = 'toolbox', parent = win1}
+	app:run()
 end)
 
 --app visibility (OSX only) --------------------------------------------------
@@ -952,8 +1004,12 @@ for i,test in ipairs({
 end
 
 add('test', function()
-	local win1 = app:window(winpos{frame = 'normal'})
-	local win2 = app:window(winpos{frame = 'toolbox', parent = win1, topmost = false})
+	local win1 = app:window(winpos{x = 100, y = 100, w = 500, h = 300, frame = 'normal'})
+	local win2 = app:window(winpos{x = 300, y = 150, w = 200, h = 300, frame = 'toolbox', parent = win1, topmost = false})
+	print('win1', win1)
+	print('win2', win2)
+	win1.event = print
+	win2.event = print
 	app:run()
 end)
 
@@ -1206,6 +1262,20 @@ add('pos-minmax', function()
 
 end)
 
+--setting maxsize > screen size constrains the window to screen size,
+--but the window can be resized to larger than screen size manually.
+add('pos-minmax-large-max', function()
+	local win = app:window{x = 100, y = 100, w = 10000, h = 10000, max_cw = 10000, max_ch = 10000}
+	app:run()
+end)
+
+--setting minsize > screen size works.
+--it's buggy/slow on both Windows and OSX for very large sizes.
+add('pos-minmax-large-min', function()
+	local win = app:window{x = 100, y = 100, w = 10000, h = 10000, min_cw = 10000, min_ch = 10000}
+	app:run()
+end)
+
 --constraints apply to fullscreen mode too
 add('pos-minmax-fullscreen', function()
 	local win = app:window(winpos{max_cw = 500, max_ch = 500})
@@ -1387,6 +1457,28 @@ add('pos-frame-to-client', function()
 	print'ok'
 end)
 
+--edge snapping. interactive test: move and resize windows around.
+add('pos-snap', function()
+	app:window(winpos{w = 300, title = 'no snap', edgesnapping = false})
+	app:window(winpos{w = 300, title = 'snap to: default'})
+	app:window(winpos{w = 300, title = 'snap to: screen', edgesnapping = 'screen'})
+	app:window(winpos{w = 300, title = 'snap to: app', edgesnapping = 'app'})
+	app:window(winpos{w = 300, title = 'snap to: other', edgesnapping = 'other'}) --NYI
+	app:window(winpos{w = 300, title = 'snap to: app screen', edgesnapping = 'app screen'})
+	local win = app:window(winpos{w = 300, title = 'snap to: all', edgesnapping = 'all'})
+	local child1 = app:window(winpos{w = 300, title = 'child1 snap to: parent', edgesnapping = 'parent', parent = win})
+	local child2 = app:window(winpos{w = 300, title = 'child2 snap to: siblings', edgesnapping = 'siblings', parent = win})
+	app:run()
+end)
+
+--children are sticky: they follow parent on move (but not on resize, maximize, etc).
+--interactive test: move the parent to see child moving too.
+add('pos-children', function()
+	local win1 = app:window{x = 100, y = 100, w = 500, h = 200}
+	local win2 = app:window{x = 200, y = 130, w = 200, h = 300, parent = win1}
+	app:run()
+end)
+
 --title ----------------------------------------------------------------------
 
 add('title', function()
@@ -1511,17 +1603,6 @@ add('display-out', function()
 	assert(not win:display())
 	win:close()
 	print'ok'
-end)
-
---edge snapping --------------------------------------------------------------
-
-add('snap', function()
-	local win1 = app:window(winpos{w = 300, title = 'no snap', edgesnapping = false})
-	local win2 = app:window(winpos{w = 300, title = 'snap to screen', edgesnapping = true}) --screen
-	local win3 = app:window(winpos{w = 300, title = 'snap to all windows', edgesnapping = 'all'})
-	local win3 = app:window(winpos{w = 300, title = 'snapp to app windows', edgesnapping = 'app'})
-	local win3 = app:window(winpos{w = 300, title = 'snapp to app windows and screen', edgesnapping = 'app screen'})
-	app:run()
 end)
 
 --cursors --------------------------------------------------------------------
@@ -1716,6 +1797,20 @@ local i = 1
 local function animate_bmp(bmp)
 	i = (i + 1/30) % 1
 	gradient_bmp(bmp, 1, 0, 0, i, 0, 0, 1, i)
+end
+
+local function checkerboard_bmp(bmp)
+	local d = 32
+	local h = d/2
+	local _, setpixel = bitmap.pixel_interface(bmp)
+	for y=0,bmp.h-1 do
+		for x=0,bmp.w-1 do
+			local dx = bit.band(x, d)
+			local dy = bit.band(y, d)
+			local r = ((dx > h and dy < h) or (dx < h and dy > h)) and 220 or 192
+			setpixel(x, y, r, r, r, 255)
+		end
+	end
 end
 
 --window bitmap --------------------------------------------------------------
@@ -2196,6 +2291,7 @@ add('clipboard-text', function()
 	assert(app:clipboard()[1] == 'text')
 	assert(app:clipboard'text' == s)
 	assert(not app:clipboard'files')
+	print(app:clipboard'text')
 end)
 
 add('clipboard-files', function()
@@ -2212,7 +2308,10 @@ add('clipboard-files', function()
 end)
 
 add('clipboard-bitmap', function()
-	--app:setclipboard(bitmap, 'bitmap')
+	local bmp = app:clipboard'bitmap'
+	if bmp then
+		app:setclipboard(bmp)
+	end
 end)
 
 add('clipboard-inspect', function()
@@ -2230,12 +2329,12 @@ add('clipboard-inspect', function()
 		local x, y = margin, margin
 		function win:repaint()
 			local wbmp = win:bitmap()
-			fill_bmp(wbmp, 1, 1, 1, 0.5)
-			local x, y, w, h = bitmap.fit(wbmp, x, y, bmp.w, bmp.h)
+			checkerboard_bmp(wbmp)
+			local x, y, w, h = box2d.clip(x, y, bmp.w, bmp.h, 0, 0, wbmp.w, wbmp.h)
 			local src = bitmap.sub(bmp, 0, 0, w, h)
 			local dst = bitmap.sub(wbmp, x, y, w, h)
 			if src and dst then
-				bitmap.paint(src, dst)
+				bitmap.blend(src, dst)
 			end
 		end
 		win:invalidate()
