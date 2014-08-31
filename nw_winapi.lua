@@ -1981,6 +1981,7 @@ function app:set_clipboard(t)
 				--NOTE: Windows synthesizes bitmap formats so it's enough to put
 				--a CF_DIBV5 bitmap to be able to get a CF_BITMAP or CF_DIB.
 				local bmp = data
+				assert(bmp.format == 'bgra8', 'invalid bitmap format')
 				local data_offset = ffi.sizeof'BITMAPV5HEADER'
 				local dib_size = data_offset + bmp.size
 				winapi.SetClipboardDataBuffer('CF_DIBV5', nil, dib_size, function(buf)
@@ -1989,6 +1990,8 @@ function app:set_clipboard(t)
 					local data_ptr = ffi.cast('uint8_t*', buf) + data_offset
 					ffi.copy(data_ptr, bmp.data, bmp.size)
 				end)
+			else
+				assert(false) --invalid args from frontend
 			end
 		end
 		return true
