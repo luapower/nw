@@ -350,8 +350,8 @@ function Window:windowWillClose()
 	--release the window manually.
 	--NOTE: we must release the nswin reference, not self, because self
 	--is a weak reference and we can't release weak references.
+	--NOTE: this will free all luavars.
 	self.backend.nswin:release()
-	self.backend.nswin = nil
 end
 
 --activation -----------------------------------------------------------------
@@ -418,13 +418,13 @@ end
 
 --NOTE: by default, windows with NSBorderlessWindowMask can't become key.
 function Window:canBecomeKeyWindow()
-	if self.frontend:dead() then return true end --this is NOT a delegate method!
+	if not self.frontend or self.frontend:dead() then return true end --this is NOT a delegate method!
 	return self.frontend:activable()
 end
 
 --NOTE: by default, windows with NSBorderlessWindowMask can't become main.
 function Window:canBecomeMainWindow()
-	if self.frontend:dead() then return true end --this is NOT a delegate method!
+	if not self.frontend or self.frontend:dead() then return true end --this is NOT a delegate method!
 	return self.frontend:activable()
 end
 
@@ -2251,7 +2251,7 @@ function bitmap_to_nsimage(bitmap)
 
 	local nsimage = objc.NSImage:alloc():initWithCGImage_size(cgimage, objc.NSZeroSize)
 
-	objc.CGImageRelease(image)
+	objc.CGImageRelease(cgimage)
 	objc.CGColorSpaceRelease(colorspace)
 	objc.CGDataProviderRelease(provider)
 
@@ -2340,7 +2340,9 @@ function app:set_clipboard(items)
 			return pasteboard:setPropertyList_forType(objc.toobj(data), objc.NSFilenamesPboardType)
 		elseif format == 'bitmap' then
 			local image = bitmap_to_nsimage(data)
-			return pasteboard:setPropertyList_forType(image, objc.NSTIFFPboardType)
+			local ok = pasteboard:writeObjects{image}
+			image:release()
+			return ok
 		else
 			assert(false) --invalid args from frontend
 		end

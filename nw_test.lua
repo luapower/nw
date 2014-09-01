@@ -2324,7 +2324,7 @@ add('clipboard-inspect', function()
 	local bmp = app:clipboard'bitmap'
 	if bmp then
 		local bitmap = require'bitmap'
-		local margin = 100
+		local margin = 50
 		local win = app:window{cw = bmp.w + 2*margin, ch = bmp.h + 2*margin}
 		local x, y = margin, margin
 		function win:repaint()

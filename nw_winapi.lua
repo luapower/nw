@@ -1930,7 +1930,7 @@ function app:get_clipboard(format)
 		elseif format == 'bitmap' then
 			--NOTE: Windows synthesizes bitmap formats so we can always get
 			--a CF_DIBV5 even if only CF_BITMAP or CF_DIB is listed.
-			return winapi.GetClipboardDataBuffer('CF_DIBV5', function(buf, sz)
+			return winapi.GetClipboardDataBuffer('CF_DIBV5', function(buf, bufsize)
 
 				local info = ffi.cast('BITMAPV5HEADER*', buf)
 
@@ -1944,16 +1944,15 @@ function app:get_clipboard(format)
 				local w = info.bV5Width
 				local h = math.abs(info.bV5Height)
 				local bpp = info.bV5BitCount
-				local format = bpp == 32 and 'bgra8' or 'bgr8'
+				local bitfields = info.bV5Compression == winapi.BI_BITFIELDS
+				local format = bpp == 32 and (bitfields and 'bgra8' or 'bgrx8') or 'bgr8'
 				local stride = bitmap.aligned_stride(w * bpp / 8)
 				local size = stride * h
 				local bottom_up = info.bV5Height >= 0 or nil
 
 				--find the pixels: work around a winapi bug where there's
 				--sometimes a 12 bytes gap between the header and the pixels.
-				local gap = info.bV5Compression == winapi.BI_BITFIELDS
-					and (sz - info.bV5Size) > w * h * 4
-					and 12 or 0
+				local gap = bitfields and (bufsize - info.bV5Size) > size and 12 or 0
 				local data = ffi.cast('void*', ffi.cast('char*', buf) + info.bV5Size + gap)
 
 				--create a temporary bitmap.
