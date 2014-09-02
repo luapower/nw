@@ -135,6 +135,7 @@ function window:new(app, frontend, t)
 		max_ch = t.max_ch,
 		visible = false,
 		maximized = t.maximized,
+		enabled = t.enabled,
 		--frame
 		title = t.title,
 		border = framed,
@@ -467,6 +468,16 @@ function Window:on_minimizing()
 	if self.backend._fullscreen then
 		return false
 	end
+end
+
+--state/enabled --------------------------------------------------------------
+
+function window:get_enabled()
+	return self.win.enabled
+end
+
+function window:set_enabled(enabled)
+	self.win.enabled = enabled
 end
 
 --positioning/conversions ----------------------------------------------------

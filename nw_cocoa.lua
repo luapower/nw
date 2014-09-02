@@ -214,9 +214,9 @@ function window:new(app, frontend, t)
 	end
 
 	--enable manual moving for edgesnapping.
-	if t.edgesnapping then
-		self.nswin:setMovable(false)
-	end
+	self._disabled = not t.enabled
+	self._edgesnapping = t.edgesnapping
+	self:_set_movable()
 
 	--enable full screen button.
 	if not toolbox and t.fullscreenable and nw.frontend:os'OSX 10.7' then
@@ -775,6 +775,34 @@ function Window:windowDidExitFullScreen()
 	self.frontend:_backend_changed()
 end
 
+--state/enabled --------------------------------------------------------------
+
+function window:get_enabled()
+	return not self._disabled
+end
+
+function window:set_enabled(enabled)
+	self._disabled = not enabled
+	print(self._disabled)
+	--[[
+	if enabled = self:get_enabled() then return end
+	if enabled then
+		self._disabled_view:release()
+		self._disabled_view = nil
+		self.nswin:setContentView(self._enabled_view)
+		self._enabled_view = nil
+	else
+		self._enabled_view = self.nswin:contentView()
+		local bounds = self._enabled_view:bounds()
+		self._disabled_view = NSView:alloc():initWithFrame(bounds)
+		self._disabled_view:setAlphaValue(0)
+		self._disabled_view:
+		self.nswin:setContentView(self._disabled_view)
+	end
+	--self.nswin:contentView()
+	]]
+end
+
 --positioning/conversions ----------------------------------------------------
 
 function window:_flip_y(y)
@@ -965,8 +993,13 @@ function Window:nw_resize_area_hit(event)
 	return resize_area_hit(mp.x, mp.y, w, h)
 end
 
+function window:_set_movable()
+	self.nswin:setMovable(not self._edgesnapping and not self._disabled)
+end
+
 function window:set_edgesnapping(snapping)
-	self.nswin:setMovable(not snapping)
+	self._edgesnapping = snapping
+	self:_set_movable()
 end
 
 --NOTE: No event is triggered while moving a window and frame_rect() is not
@@ -975,6 +1008,7 @@ end
 
 function Window:sendEvent(event)
 	if self.frontend:dead() then return end
+	if self.backend._disabled then return end
 	if self.frontend:edgesnapping() then
 		--take over window dragging by the titlebar so that we can post moving events
 		local etype = event:type()

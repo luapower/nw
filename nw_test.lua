@@ -1003,6 +1003,19 @@ for i,test in ipairs({
 	make_test{frame = 'none'}
 end
 
+--state/enabled --------------------------------------------------------------
+
+--interactive test showing modal operation based on `enabled` and `parent` properties.
+add('enabled', function()
+	local win1 = app:window(winpos{x = 100, y = 100, w = 500, h = 300, enabled = false})
+	local win2 = app:window(winpos{x = 200, y = 150, w = 300, h = 200, parent = win1,
+		minimizable = false, maximizable = false, resizeable = false})
+	function win2:closing()
+		win1:enabled(true)
+	end
+	app:run()
+end)
+
 add('test', function()
 	local win1 = app:window(winpos{x = 100, y = 100, w = 500, h = 300, frame = 'normal'})
 	local win2 = app:window(winpos{x = 300, y = 150, w = 200, h = 300, frame = 'toolbox', parent = win1, topmost = false})

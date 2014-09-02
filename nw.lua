@@ -360,6 +360,7 @@ defaults.normal = {
 	minimized = false,
 	fullscreen = false,
 	maximized = false,
+	enabled = true,
 	--frame
 	title = '',
 	--behavior
@@ -659,12 +660,6 @@ function window:shownormal()
 	self.backend:shownormal()
 end
 
---state/state changed ---------------------------------------------------------
-
-function window:_backend_changed()
-	self:_event'changed'
-end
-
 --state/fullscreen -----------------------------------------------------------
 
 function window:fullscreen(fullscreen)
@@ -680,6 +675,12 @@ function window:fullscreen(fullscreen)
 	end
 end
 
+--state/changed event --------------------------------------------------------
+
+function window:_backend_changed()
+	self:_event'changed'
+end
+
 --state/synthesis ------------------------------------------------------------
 
 function window:state()
@@ -690,6 +691,10 @@ function window:state()
 		or self:maximized() and 'maximized'
 		or 'normal'
 end
+
+--state/enabled --------------------------------------------------------------
+
+window:_property'enabled'
 
 --positioning/conversions ----------------------------------------------------
 
