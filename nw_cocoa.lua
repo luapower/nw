@@ -783,24 +783,6 @@ end
 
 function window:set_enabled(enabled)
 	self._disabled = not enabled
-	print(self._disabled)
-	--[[
-	if enabled = self:get_enabled() then return end
-	if enabled then
-		self._disabled_view:release()
-		self._disabled_view = nil
-		self.nswin:setContentView(self._enabled_view)
-		self._enabled_view = nil
-	else
-		self._enabled_view = self.nswin:contentView()
-		local bounds = self._enabled_view:bounds()
-		self._disabled_view = NSView:alloc():initWithFrame(bounds)
-		self._disabled_view:setAlphaValue(0)
-		self._disabled_view:
-		self.nswin:setContentView(self._disabled_view)
-	end
-	--self.nswin:contentView()
-	]]
 end
 
 --positioning/conversions ----------------------------------------------------
@@ -1008,7 +990,7 @@ end
 
 function Window:sendEvent(event)
 	if self.frontend:dead() then return end
-	if self.backend._disabled then return end
+	if self.backend._disabled then return end --disable events completely
 	if self.frontend:edgesnapping() then
 		--take over window dragging by the titlebar so that we can post moving events
 		local etype = event:type()

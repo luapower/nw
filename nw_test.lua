@@ -1013,6 +1013,9 @@ add('enabled', function()
 	function win2:closing()
 		win1:enabled(true)
 	end
+	function win1:event(...)
+		print(...)
+	end
 	app:run()
 end)
 
