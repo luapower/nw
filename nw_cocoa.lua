@@ -250,6 +250,9 @@ function window:new(app, frontend, t)
 	--init keyboard API.
 	self.nswin:reset_keystate()
 
+	--enable mouse move events when no mouse button is pressed.
+	self.nswin:setAcceptsMouseMovedEvents(true)
+
 	--enable mouse enter/leave events.
 	local opts = bit.bor(
 		objc.NSTrackingActiveInKeyWindow,
