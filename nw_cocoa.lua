@@ -154,7 +154,7 @@ app.window = window
 
 local nswin_map = {} --nswin->window
 
-local Window = objc.class('Window', 'NSWindow <NSWindowDelegate>')
+local Window = objc.class('Window', 'NSWindow <NSWindowDelegate, NSDraggingDestination>')
 
 --NOTE: windows are created hidden.
 
@@ -213,7 +213,7 @@ function window:new(app, frontend, t)
 		t.parent.backend.nswin:addChildWindow_ordered(self.nswin, objc.NSWindowAbove)
 	end
 
-	--enable manual moving for edgesnapping.
+	--enable moving events.
 	self._disabled = not t.enabled
 	self._edgesnapping = t.edgesnapping
 	self:_set_movable()
@@ -239,27 +239,23 @@ function window:new(app, frontend, t)
 		end
 	end
 
-	--enable toolbox features.
-	if toolbox then
-		self.nswin:setHidesOnDeactivate(true)
-	end
-
 	--set the title.
 	self.nswin:setTitle(t.title)
 
 	--init keyboard API.
 	self.nswin:reset_keystate()
 
-	--enable mouse move events when no mouse button is pressed.
-	self.nswin:setAcceptsMouseMovedEvents(true)
+	--init drawable content view.
+	self:_init_content_view()
 
-	--enable mouse enter/leave events.
+	--enable mouse enter/leave events on the newly set content view.
 	local opts = bit.bor(
-		objc.NSTrackingActiveInKeyWindow,
-		objc.NSTrackingInVisibleRect,
+		objc.NSTrackingActiveAlways,           --also when inactive (emulate Windows behavior)
+		objc.NSTrackingInVisibleRect,          --only if unobscured (duh)
+		objc.NSTrackingEnabledDuringMouseDrag, --also when dragging *into* the window
 		objc.NSTrackingMouseEnteredAndExited,
 		objc.NSTrackingMouseMoved,
-		objc.NSTrackingCursorUpdate)
+		objc.NSTrackingCursorUpdate) --TODO: fix this with NSTrackingActiveAlways
 	local rect = self.nswin:contentView():bounds()
 	local area = objc.NSTrackingArea:alloc():initWithRect_options_owner_userInfo(
 		rect, opts, self.nswin:contentView(), nil)
@@ -283,8 +279,8 @@ function window:new(app, frontend, t)
 		self:set_topmost(true)
 	end
 
-	--init drawable content view.
-	self:_init_content_view()
+	--init drag & drop operation.
+	self:_init_drop()
 
 	--set visible state.
 	self._visible = false
@@ -1568,6 +1564,14 @@ function Window:setmouse(event)
 	return m
 end
 
+--disable mousemove events when exiting client area, but only if no mouse
+--buttons are down, to emulate Windows behavior.
+function window:_check_mousemove(event, m)
+	if not m.inside and event:pressedMouseButtons() == 0 then
+		self.nswin:setAcceptsMouseMovedEvents(false)
+	end
+end
+
 function Window:mouseDown(event)
 	local m = self:setmouse(event)
 	self.frontend:_backend_mousedown('left', m.x, m.y)
@@ -1575,6 +1579,7 @@ end
 
 function Window:mouseUp(event)
 	local m = self:setmouse(event)
+	self.backend:_check_mousemove(event, m)
 	self.frontend:_backend_mouseup('left', m.x, m.y)
 end
 
@@ -1585,6 +1590,7 @@ end
 
 function Window:rightMouseUp(event)
 	local m = self:setmouse(event)
+	self.backend:_check_mousemove(event, m)
 	self.frontend:_backend_mouseup('right', m.x, m.y)
 end
 
@@ -1601,6 +1607,7 @@ function Window:otherMouseUp(event)
 	local btn = other_buttons[tonumber(event:buttonNumber())]
 	if not btn then return end
 	local m = self:setmouse(event)
+	self.backend:_check_mousemove(event, m)
 	self.frontend:_backend_mouseup(btn, m.x, m.y)
 end
 
@@ -1622,12 +1629,21 @@ function Window:otherMouseDragged(event)
 end
 
 function Window:mouseEntered(event)
-	self:setmouse(event)
+	local m = self:setmouse(event)
+	m.inside = true
+	--enable mousemove events only inside the client area to emulate Windows behavior.
+	self:setAcceptsMouseMovedEvents(true)
+	--mute mousenter() if buttons are pressed to emulate Windows behavior.
+	if event:pressedMouseButtons() ~= 0 then return end
 	self.frontend:_backend_mouseenter()
 end
 
 function Window:mouseExited(event)
-	self:setmouse(event)
+	local m = self:setmouse(event)
+	m.inside = false
+	self.backend:_check_mousemove(event, m)
+	--mute mouseleave() if buttons are pressed to emulate Windows behavior.
+	if event:pressedMouseButtons() ~= 0 then return end
 	self.frontend:_backend_mouseleave()
 end
 
@@ -1646,6 +1662,11 @@ end
 
 function window:mouse_pos()
 	--return objc.NSEvent:
+end
+
+function Window:acceptsFirstMouse()
+	--get mouseDown when clicked while not active to emulate Windows behavior.
+	return true
 end
 
 --dynamic bitmaps ------------------------------------------------------------
@@ -2366,6 +2387,49 @@ function app:set_clipboard(items)
 			assert(false) --invalid args from frontend
 		end
 	end
+end
+
+--drag & drop ----------------------------------------------------------------
+
+function window:_init_drop()
+	self.nswin:registerForDraggedTypes{objc.NSFilenamesPboardType}
+end
+
+function Window:draggingEntered(sender) --NSDraggingInfo
+	local sourceDragMask = sender:draggingSourceOperationMask() --NSDragOperation
+	local pboard = sender:draggingPasteboard() --NSPasteboard
+
+	if pboard:types():containsObject(objc.NSFilenamesPboardType) then
+		if bit.band(sourceDragMask, objc.NSDragOperationLink) then
+			return objc.NSDragOperationLink
+		elseif bit.band(sourceDragMask, objc.NSDragOperationCopy) then
+			return objc.NSDragOperationCopy
+		end
+	end
+	return obkc.NSDragOperationNone
+end
+
+function Window:prepareForDragOperation(sender)
+	return true
+end
+
+--function Window:draggingUpdated() end
+
+function Window:performDragOperation(sender)
+	--[[
+	local sourceDragMask = sender:draggingSourceOperationMask() --NSDragOperation
+	local pboard = sender:draggingPasteboard() --NSPasteboard
+
+	if pboard:types():containsObject(objc.NSFilenamesPboardType) then
+		if bit.band(sourceDragMask, objc.NSDragOperationLink) then
+			return objc.NSDragOperationLink
+		elseif bit.band(sourceDragMask, objc.NSDragOperationCopy) then
+			return objc.NSDragOperationCopy
+		end
+	end
+	return obkc.NSDragOperationNone
+	]]
+	return true
 end
 
 --buttons --------------------------------------------------------------------

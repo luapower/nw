@@ -178,8 +178,14 @@ function window:new(app, frontend, t)
 	self.win.backend = self
 	self.win.app = app
 
-	--set up icon API
-	self:_setup_icon_api()
+	--init icon API
+	self:_init_icon_api()
+
+	--init drop target API
+	self:_init_drop_target()
+
+	--announce acceptance to drop files into the window.
+	winapi.DragAcceptFiles(self.win.hwnd, true)
 
 	--register window
 	win_map[self.win] = self.frontend
@@ -200,12 +206,6 @@ function Window:on_close()
 	end
 end
 
-function Window:nw_destroy()
-	self.backend:_free_bitmap()
-	self.backend:_free_icon_api()
-	win_map[self] = nil
-end
-
 --NOTE: closing a window's owner in the on_destroy() event triggers
 --another on_destroy() event on the owned window!
 function Window:on_destroy()
@@ -217,6 +217,7 @@ function Window:on_destroy()
 		self.nw_destroyed = true
 		self.backend:_free_bitmap()
 		self.backend:_free_icon_api()
+		self.backend:_free_drop_target()
 		win_map[self] = nil
 	end
 end
@@ -1636,7 +1637,7 @@ function notifyicon:new(app, frontend, opt)
 	self.ni.backend = self
 	self.ni.frontend = frontend
 
-	self:_setup_icon_api()
+	self:_init_icon_api()
 
 	return self
 end
@@ -1752,7 +1753,7 @@ local function icon_api(which)
 	return get_bitmap, get_icon, free_all
 end
 
-function notifyicon:_setup_icon_api()
+function notifyicon:_init_icon_api()
 	self.bitmap, self._get_icon, self._free_icon_api = icon_api()
 end
 
@@ -1794,7 +1795,7 @@ function window:_add_icon_api(which)
 	self._icon_api[which] = {get_bitmap = get_bitmap, get_icon = get_icon, free_all = free_all}
 end
 
-function window:_setup_icon_api()
+function window:_init_icon_api()
 	self._icon_api = {}
 	self:_add_icon_api'big'
 	self:_add_icon_api'small'
@@ -1899,7 +1900,8 @@ function app:clipboard_empty(format)
 	return winapi.CountClipboardFormats() == 0
 end
 
-local formats = {
+local clipboard_formats = {
+	[winapi.CF_TEXT] = 'text',
 	[winapi.CF_UNICODETEXT] = 'text',
 	[winapi.CF_HDROP] = 'files',
 	[winapi.CF_DIB] = 'bitmap',
@@ -1922,7 +1924,7 @@ function app:clipboard_formats()
 		local names = winapi.GetClipboardFormatNames()
 		local t,dupes = {},{}
 		for i=1,#names do
-			local format = formats[names[i]]
+			local format = clipboard_formats[names[i]]
 			if format and not dupes[format] then
 				dupes[format] = true
 				t[#t+1] = format
@@ -2006,6 +2008,192 @@ function app:set_clipboard(t)
 		end
 		return true
 	end) or false
+end
+
+--drag & drop ----------------------------------------------------------------
+
+require'winapi.dragdrop'
+local cbframe = require'cbframe'
+local ptonumber = winapi.ptonumber
+
+function Window:WM_DROPFILES(hdrop)
+	local files = winapi.DragQueryFiles(hdrop)
+	local p, in_client_area = winapi.DragQueryPoint(hdrop)
+	if not in_client_area then return end
+	self.frontend:_backend_drop_files(p.x, p.y, files)
+	winapi.DragFinish(hdrop)
+end
+
+--interface -> backend mapping
+
+local imap = setmetatable({}, {__mode = 'v'})
+
+function backend(self)
+	return imap[ptonumber(self)]
+end
+
+function setbackend(self, backend)
+	imap[ptonumber(ffi.cast('void*', self))] = backend
+end
+
+--IUnknown -------------------------------------------------------------------
+
+local function QueryInterface(self, riid, ppvobject)
+	ppvobject[0] = nil
+	return E_NOINTERFACE
+end
+
+local function AddRef(self)
+	self.refcount = self.refcount + 1
+	return self.refcount
+end
+
+local function Release(self)
+	self.refcount = self.refcount - 1
+	return self.refcount
+end
+
+--IDropSource ----------------------------------------------------------------
+
+local function QueryContinueDrag(self, esc_pressed, key_state)
+	if esc_pressed ~= 0 then
+		return winapi.DRAGDROP_S_CANCEL
+	end
+	if bit.band(key_state, winapi.MK_LBUTTON) == 0 then
+		return winapi.DRAGDROP_S_DROP
+	end
+	return 0
+end
+
+local function GiveFeedback(self, dwEffect)
+	return winapi.DRAGDROP_S_USEDEFAULTCURSORS
+end
+
+function window:start_drag()
+	local data_object = ffi.new'IDataObject'
+	local drop_source = ffi.new'IDropSource'
+	drop_source.QueryContinueDrag = QueryContinueDrag
+	drop_source.GiveFeedback = GiveFeedback
+	setbackend(drop_source, self)
+
+	--local ok_effects =
+	--local effect =
+	winapi.DoDragDrop(data_object, drop_source, ok_effects, effect)
+end
+
+--IDropTarget ----------------------------------------------------------------
+
+local effects = {
+	copy = winapi.DROPEFFECT_COPY,
+	link = winapi.DROPEFFECT_LINK,
+	none = winapi.DROPEFFECT_NONE,
+	abort = winapi.DROPEFFECT_NONE,
+}
+
+local function drag_result(res, peffect)
+	peffect[0] = effects[res]
+	return res == 'abort' and 1 or 0
+end
+
+local function drag_payload(idataobject)
+
+	--get an enumerator
+	local ienum = ffi.new'IEnumFORMATETC*[1]'
+	winapi.checkz(idataobject.lpVtbl.EnumFormatEtc(idataobject,
+		winapi.DATADIR_GET, ienum))
+	ienum = ienum[0]
+
+	--get the data
+	local t = {}
+	local etc = ffi.new'FORMATETC'
+	local stg = ffi.new'STGMEDIUM'
+
+	while ienum.lpVtbl.Next(ienum, 1, etc, nil) == 0 do
+
+		local format = clipboard_formats[etc.cfFormat]
+
+		if format and not t[format] then
+			winapi.checkz(idataobject.lpVtbl.GetData(idataobject, etc, stg))
+
+			if stg.tymed == winapi.TYMED_HGLOBAL then
+				local data
+				if format == 'text' then
+					local buf = winapi.GlobalLock(stg.hGlobal)
+
+					data = winapi.mbs(ffi.cast('WCHAR*', buf))
+
+					winapi.GlobalUnlock(stg.hGlobal)
+					winapi.ReleaseStgMedium(stg)
+
+				elseif format == 'files' then
+
+				end
+				t[format] = data
+			end
+		end
+	end
+
+	--release the enumerator
+	ienum.lpVtbl.Release(ienum)
+
+	return t
+end
+
+local function DragEnter(self, idataobject, key_state, x, y, peffect)
+	local backend = backend(self)
+	backend._drag_payload = drag_payload(idataobject)
+	return drag_result(backend.frontend:_backend_dragging('enter',
+		backend._drag_payload, x, y), peffect)
+end
+
+local function DragOver(self, key_state, x, y, peffect)
+	local backend = backend(self)
+	return drag_result(backend.frontend:_backend_dragging('hover',
+		backend._drag_payload, x, y), peffect)
+end
+
+local function Drop(self, idataobject, key_state, x, y, peffect)
+	local backend = backend(self)
+	local ret = drag_result(backend.frontend:_backend_dragging('drop',
+		backend._drag_payload, x, y), peffect)
+	backend._drag_payload = nil
+	return ret
+end
+
+local function DragLeave(self)
+	local backend = backend(self)
+	backend.frontend:_backend_dragging'exit'
+	backend._drag_payload = nil
+	return 0
+end
+
+if ffi.abi'64bit' then
+	--TODO: wrap with cbframe
+	DragEnter = nil
+	DragOver = nil
+	Drop = nil
+end
+
+local dtvtbl = ffi.new'IDropTargetVtbl'
+dtvtbl.QueryInterface = QueryInterface
+dtvtbl.AddRef = AddRef
+dtvtbl.Release = Release
+dtvtbl.DragEnter = DragEnter
+dtvtbl.DragOver = DragOver
+dtvtbl.DragLeave = DragLeave
+dtvtbl.Drop = Drop
+
+function window:_init_drop_target()
+	local dt = ffi.new'IDropTarget'
+	dt.lpVtbl = dtvtbl
+	dt.refcount = 0
+	setbackend(dt, self)
+	winapi.RegisterDragDrop(self.win.hwnd, dt)
+	self._drop_target = dt
+end
+
+function window:_free_drop_target()
+	winapi.RevokeDragDrop(self.win.hwnd)
 end
 
 --buttons --------------------------------------------------------------------

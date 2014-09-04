@@ -19,6 +19,23 @@ local function indexof(dv, t)
 	end
 end
 
+local function optarg(opt, true_arg, false_arg, nil_arg)
+	opt = glue.index(opt)
+	return function(arg)
+		if arg == true then
+			return true_arg
+		elseif arg == false then
+			return false_arg
+		elseif arg == nil then
+			return nil_arg
+		elseif opt[arg] then
+			return arg
+		else
+			error('invalid argument', 2)
+		end
+	end
+end
+
 --backends -------------------------------------------------------------------
 
 --default backends for each OS
@@ -373,7 +390,6 @@ defaults.normal = {
 	activable = true, --only for 'toolbox' frames
 	autoquit = false, --quit the app on closing
 	edgesnapping = 'screen',
-	hide_on_deactivate = false,
 }
 
 defaults.none = glue.merge({
@@ -387,7 +403,6 @@ defaults.toolbox = glue.merge({
 	maximizable = false,
 	fullscreenable = false,
 	edgesnapping = 'parent siblings screen',
-	hide_on_deactivate = true,
 }, defaults.normal)
 
 function app:window(t)
@@ -462,7 +477,6 @@ function window:_new(app, backend_class, useropt)
 	self._activable = opt.activable
 	self._autoquit = opt.autoquit
 	self:edgesnapping(opt.edgesnapping)
-	self._hide_on_deactivate = opt.hide_on_deactivate
 
 	self.app:_window_created(self)
 	self:_event'created'
@@ -1007,8 +1021,6 @@ function window:autoquit(autoquit)
 		self._autoquit = autoquit
 	end
 end
-
-function window:hide_on_deactivate() self:_check(); return self._hide_on_deactivate end
 
 --parent ---------------------------------------------------------------------
 
@@ -1591,6 +1603,20 @@ function app:setclipboard(data, format)
 		error'invalid argument'
 	end
 	return self.backend:set_clipboard(t)
+end
+
+--drag & drop ----------------------------------------------------------------
+
+function window:_backend_drop_files(x, y, files)
+	self:_event('dropfiles', x, y, files)
+end
+
+local effect_arg = optarg({'copy', 'link', 'none', 'abort'}, 'copy', 'abort', 'abort')
+
+function window:_backend_dragging(how, data, x, y)
+	local effect = effect_arg(self:_handle('dragging', how, data, x, y))
+	self:_fire('dragging', how, data, x, y, effect)
+	return effect
 end
 
 --buttons --------------------------------------------------------------------

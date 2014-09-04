@@ -7,6 +7,7 @@ local ffi = require'ffi'
 local bit = require'bit'
 local box2d = require'box2d'
 local bitmap = require'bitmap'
+local pp = require'pp'
 
 --local objc = require'objc'
 --objc.debug.logtopics.refcount = true
@@ -1019,16 +1020,6 @@ add('enabled', function()
 	app:run()
 end)
 
-add('test', function()
-	local win1 = app:window(winpos{x = 100, y = 100, w = 500, h = 300, frame = 'normal'})
-	local win2 = app:window(winpos{x = 300, y = 150, w = 200, h = 300, frame = 'toolbox', parent = win1, topmost = false})
-	print('win1', win1)
-	print('win2', win2)
-	win1.event = print
-	win2.event = print
-	app:run()
-end)
-
 --positioning ----------------------------------------------------------------
 
 --test that initial coordinates and size are set correctly.
@@ -1695,6 +1686,34 @@ add('input-click-area', function()
 	assert(h > 0 and h < 100)
 end)
 
+--mousemove() event works inside the client area of the active window.
+--mousemove() event continues outside the client area while at least one
+--mouse button is held.
+add('input-mousemove', function()
+	local win1 = app:window{x = 100, y = 100, w = 300, h = 200}
+	local win2 = app:window{x = 150, y = 150, w = 300, h = 200}
+	function win1:mousemove(x, y)
+		print('win1 mousemove', x, y)
+	end
+	function win2:mousemove(x, y)
+		print('win2 mousemove', x, y)
+	end
+	app:run()
+end)
+
+--mouseenter() and mouseleave() events work.
+--mouseenter() and mouseleave() events are muted while buttons are pressed.
+--the order of events between windows is undefined.
+add('input-mouseenter', function()
+	local win1 = app:window{x = 100, y = 100, w = 300, h = 200}
+	local win2 = app:window{x = 150, y = 150, w = 300, h = 200}
+	function win1:mouseenter() print('win1 mouseenter') end
+	function win1:mouseleave() print('win1 mouseleave') end
+	function win2:mouseenter() print('win2 mouseenter') end
+	function win2:mouseleave() print('win2 mouseleave') end
+	app:run()
+end)
+
 add('input', function()
 	local win1 = app:window(winpos())
 	local win2 = app:window(winpos())
@@ -2273,7 +2292,7 @@ add('dialog-open-custom', function()
 		filetypes = {'png', 'jpeg'}, --only if files = true
 		multiselect = true,
 	}
-	require'pp'(paths)
+	pp(paths)
 end)
 
 add('dialog-save-default', function()
@@ -2334,7 +2353,7 @@ add('clipboard-inspect', function()
 
 	for i,name in ipairs(app:clipboard()) do
 		print(name)
-		require'pp'(app:clipboard(name))
+		pp(app:clipboard(name))
 	end
 
 	local bmp = app:clipboard'bitmap'
@@ -2359,9 +2378,29 @@ add('clipboard-inspect', function()
 
 end)
 
+--drag & drop ----------------------------------------------------------------
+
+add('drop-files', function()
+	local win = app:window(winpos())
+	function win:dropfiles(x, y, files)
+		pp(x, y, files)
+	end
+	app:run()
+end)
+
+add('dragging', function()
+	local win = app:window(winpos())
+	function win:dragging(...)
+		pp(...)
+		return true
+	end
+	app:run()
+end)
+
 --run tests ------------------------------------------------------------------
 
 local name = ...
+name = 'dragging'
 if not name then
 	print(string.format('Usage: %s name | prefix*', arg[0]))
 	print'Available tests:'
