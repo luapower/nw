@@ -2389,10 +2389,17 @@ add('drop-files', function()
 end)
 
 add('dragging', function()
-	local win = app:window(winpos())
-	function win:dragging(...)
-		pp(...)
-		return true
+	local t = {'abort', 'none', 'copy', 'link'}
+	local win = app:window(winpos{x = 100, y = 100, w = #t * 100, h = 100})
+	function win:dragging(how, data, x, y)
+		print(how, x, y)
+		pp(data)
+		if x then
+			local ret = t[math.floor((x % (100 * #t)) / 100) + 1]
+			print(ret)
+			return ret
+		end
+		--return true
 	end
 	app:run()
 end)

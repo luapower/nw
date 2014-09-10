@@ -2112,24 +2112,24 @@ local function drag_payload(idataobject)
 
 		local format = clipboard_formats[etc.cfFormat]
 
-		if format and not t[format] then
-			winapi.checkz(idataobject.lpVtbl.GetData(idataobject, etc, stg))
+		if format and not t[format] then --take only the first item for each format
 
-			if stg.tymed == winapi.TYMED_HGLOBAL then
-				local data
-				if format == 'text' then
+			glue.fcall(function(finally)
+				winapi.checkz(idataobject.lpVtbl.GetData(idataobject, etc, stg))
+				finally(function() winapi.ReleaseStgMedium(stg) end)
+				if stg.tymed == winapi.TYMED_HGLOBAL then
+					local data
 					local buf = winapi.GlobalLock(stg.hGlobal)
-
-					data = winapi.mbs(ffi.cast('WCHAR*', buf))
-
-					winapi.GlobalUnlock(stg.hGlobal)
-					winapi.ReleaseStgMedium(stg)
-
-				elseif format == 'files' then
-
+					finally(function() winapi.GlobalUnlock(stg.hGlobal) end)
+					if format == 'text' then
+						data = winapi.mbs(ffi.cast('WCHAR*', buf))
+					elseif format == 'files' then
+						local hdrop = ffi.cast('HDROP', buf)
+						data = winapi.DragQueryFiles(hdrop)
+					end
+					t[format] = data
 				end
-				t[format] = data
-			end
+			end)
 		end
 	end
 
@@ -2142,18 +2142,21 @@ end
 local function DragEnter(self, idataobject, key_state, x, y, peffect)
 	local backend = backend(self)
 	backend._drag_payload = drag_payload(idataobject)
+	x, y = backend:to_client(x, y)
 	return drag_result(backend.frontend:_backend_dragging('enter',
 		backend._drag_payload, x, y), peffect)
 end
 
 local function DragOver(self, key_state, x, y, peffect)
 	local backend = backend(self)
+	x, y = backend:to_client(x, y)
 	return drag_result(backend.frontend:_backend_dragging('hover',
 		backend._drag_payload, x, y), peffect)
 end
 
 local function Drop(self, idataobject, key_state, x, y, peffect)
 	local backend = backend(self)
+	x, y = backend:to_client(x, y)
 	local ret = drag_result(backend.frontend:_backend_dragging('drop',
 		backend._drag_payload, x, y), peffect)
 	backend._drag_payload = nil
