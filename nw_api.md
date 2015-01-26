@@ -1,5 +1,6 @@
 ---
-project:   nw api
+project:   nw
+title:     nw api
 tagline:   native widgets API
 ---
 
