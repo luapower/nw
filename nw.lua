@@ -12,12 +12,7 @@ local nw = {}
 --helpers --------------------------------------------------------------------
 
 local assert = glue.assert --assert with string.format
-
-local function indexof(dv, t)
-	for i,v in ipairs(t) do
-		if v == dv then return i end
-	end
-end
+local indexof = glue.indexof
 
 local function optarg(opt, true_arg, false_arg, nil_arg)
 	opt = glue.index(opt)
