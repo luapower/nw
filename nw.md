@@ -1,7 +1,7 @@
 ---
 project:   nw
 tagline:   native widgets
-platforms: mingw32, mingw64
+platforms: mingw32, mingw64, osx32, osx64
 ---
 
 #### NOTE: work-in-progress (to-be-released soon)
