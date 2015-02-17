@@ -4,7 +4,7 @@ tagline:   native widgets
 platforms: mingw32, mingw64, osx32, osx64
 ---
 
-#### NOTE: work-in-progress (to-be-released soon)
+<warn>NOTE: work-in-progress (to-be-released soon)</warn>
 
 ## `local nw = require'nw'`
 
@@ -12,7 +12,7 @@ Cross-platform library for displaying and manipulating native windows, drawing i
 using [cairo] or [opengl], and accessing keyboard, mouse and touchpad events in a consistent and
 well-specified manner across Windows, Linux and OS X.
 
-Jump to: [Quick Example](#quick-example) | [Features](#features) | [Behavior](#behavior)
+## API
 
 -------------------------------------------- -----------------------------------------------------------------------------
 __application loop__
