@@ -5,7 +5,7 @@
 local ffi = require'ffi'
 local glue = require'glue'
 local box2d = require'box2d'
-require'strict'
+--require'strict'
 
 local nw = {}
 
@@ -1275,7 +1275,7 @@ end
 
 local menu = glue.update({}, object)
 
-function wrap_menu(backend, menutype)
+local function wrap_menu(backend, menutype)
 	if backend.frontend then
 		return backend.frontend --already wrapped
 	end

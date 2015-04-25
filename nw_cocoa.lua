@@ -2268,7 +2268,7 @@ end
 --clipboard ------------------------------------------------------------------
 
 --make a NSImage from a bgra8 bitmap.
-function bitmap_to_nsimage(bitmap)
+local function bitmap_to_nsimage(bitmap)
 
 	assert(bitmap.format == 'bgra8', 'invalid bitmap format')
 
@@ -2299,7 +2299,7 @@ function bitmap_to_nsimage(bitmap)
 end
 
 --make a rgba8 bitmap from a NSImage.
-function nsimage_to_bitmap(nsimage)
+local function nsimage_to_bitmap(nsimage)
 
 	local sz = nsimage:size()
 	local w, h = sz.width, sz.height
