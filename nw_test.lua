@@ -1070,8 +1070,9 @@ end)
 
 --create a window off-screen. move a window off-screen.
 --NOTE: Windows can create windows off-screen but can't move them off-screen.
---NOTE: OSX can create/move windows off-screen when hidden, but it repositions
---them on the next show().
+--NOTE: OSX can create and move windows off-screen when hidden, but
+--it repositions them on the next show().
+--NOTE: X moves windows on-screen automatically.
 --NOTE: OSX can always create/move frameless windows off-screen.
 --These differences were not leveled out between platforms.
 add('pos-out', function()
@@ -2404,10 +2405,23 @@ add('dragging', function()
 	app:run()
 end)
 
+--xcb dev tests --------------------------------------------------------------
+
+add('xcb', function()
+	local win1 = app:window{w = 500, h = 300,
+		title = 'Hello 1',}
+	local win2 = app:window{x = -100, y = 100, w = 300, h = 400,
+		title = 'Hello 2',}
+	function win1:event(...) print('win1', ...) end
+	function win2:event(...) print('win2', ...) end
+	app:run()
+end)
+
+
 --run tests ------------------------------------------------------------------
 
 local name = ...
-name = 'dragging'
+--name = 'dragging'
 if not name then
 	print(string.format('Usage: %s name | prefix*', arg[0]))
 	print'Available tests:'
