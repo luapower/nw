@@ -5,7 +5,7 @@
 local ffi = require'ffi'
 local glue = require'glue'
 local box2d = require'box2d'
---require'strict'
+require'strict'
 
 local nw = {}
 

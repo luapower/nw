@@ -125,7 +125,7 @@ local timebase
 function app:timediff(start_time, end_time)
 	if not timebase then
 		timebase = ffi.new'mach_timebase_info_data_t'
-		objc.mach_timebase_info(timebase)
+		assert(objc.mach_timebase_info(timebase) == 0)
 	end
 	return tonumber(end_time - start_time) * timebase.numer / timebase.denom / 10^6
 end

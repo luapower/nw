@@ -7,11 +7,15 @@ local bit = require'bit'
 local glue = require'glue'
 local box2d = require'box2d'
 local xcb = require'xcb'
+local pthread = require'pthread'
+local state = require'luastate'
+
+local pp = require'pp'
+local reflect = require'ffi_reflect'
+
 local C = xcb.C
 local cast = ffi.cast
 local free = ffi.C.free
-local pp = require'pp'
-local reflect = require'ffi_reflect'
 
 local nw = {name = 'xcb'}
 
@@ -28,62 +32,83 @@ nw.min_os = 'X 11.0'
 local app = {}
 nw.app = app
 
+local c --xcb connection
+local atoms, atom --atom APIs
+local winmap = {} --{xcb_window_t -> window object}
+
 function app:new(frontend)
 	self = glue.inherit({frontend = frontend}, self)
-	self.c = C.xcb_connect(nil, nil)
-	self.atoms, self.atom = xcb.atom_map(self.c)
+	c = C.xcb_connect(nil, nil)
+	atoms, atom = xcb.atom_map(c)
 	return self
 end
 
 --message loop ---------------------------------------------------------------
 
-local ev = {}
+local ev = {} --{xcb_event_code = event_handler}
+
+local peeked_event
 
 function app:run()
-	local pe = self._peeked_event
 	local e
-	while not self._stopped or pe do
-		if pe then
-			e = pe
-			self._peeked_event = nil
+	while true do
+		if peeked_event then
+			e, peeked_event = peeked_event, nil
 		else
-			e = C.xcb_wait_for_event(self.c)
+			e = C.xcb_wait_for_event(c)
 			if e == nil then break end
 		end
 		local v = bit.band(e.response_type, bit.bnot(0x80))
 		local f = ev[v]
-		if f then f(e) end
+		if f then
+			local ok, err = xpcall(f, debug.traceback, e)
+			if not ok then
+				free(e)
+				error(err, 2)
+			elseif err == 'stop' then --stop the loop
+				free(e)
+				return
+			end
+		end
 		free(e)
 	end
 end
 
-function app:_peek_event()
-	if not self._peeked_event then
-		local e = C.xcb_poll_for_event(self.c)
+local function peek_event()
+	if not peeked_event then
+		local e = C.xcb_poll_for_event(c)
 		if e == nil then return end
-		self._peeked_event = e
-		local v = bit.band(e.response_type, bit.bnot(0x80))
-		local f = ev[v]
-		if f then f(e) end
+		peeked_event = e
 	end
-	return self._peeked_event
+	return peeked_event
 end
 
 function app:stop()
-	self._stopped = true
-	--TODO: post quit message instead of this flag
-	--[[
-	local w = next(win_map)
+	local win, winobj = next(winmap) --any window will do
+	local dummy_win
+	if not win or winobj.frontend:dead() then
+		--create a dummy window so we can send a message to it, which is
+		--the only way to unblock the event loop.
+		win = C.xcb_generate_id(c)
+		local screen = C.xcb_setup_roots_iterator(C.xcb_get_setup(c)).data
+		C.xcb_create_window_checked(c, C.XCB_COPY_FROM_PARENT, win,
+			screen.root, 0, 0, 1, 1, 0,
+			C.XCB_WINDOW_CLASS_INPUT_ONLY,
+			screen.root_visual, 0, nil)
+		dummy_win = true
+	end
+	--send a custom "stop loop" event to any window
 	local e = ffi.new'xcb_client_message_event_t'
 	e.response_type = C.XCB_CLIENT_MESSAGE
-	e.window = w
+	e.window = win
 	e.format = 32
 	e.sequence = 0
-	e.type = self.atom'WM_PROTOCOLS'
-	e.data.data32[0] = self.atom'WM_DELETE_WINDOW'
-	e.data.data32[1] = C.XCB_CURRENT_TIME
-	C.xcb_send_event(self.c, 0, w, C.XCB_EVENT_MASK_NO_EVENT, e)
-	]]
+	e.type = atom'NW_STOP'
+	C.xcb_send_event_checked(c, 0, win, 0, cast('char*', e))
+	if dummy_win then
+		C.xcb_destroy_window(c, win)
+	end
+	C.xcb_flush(c)
 end
 
 --time -----------------------------------------------------------------------
@@ -99,7 +124,33 @@ end
 
 --timers ---------------------------------------------------------------------
 
+local timer_thread
+local timer_state
+
+local function start_timer_thread()
+	if timer_thread then return end
+	timer_state = luastate.open()
+	timer_state:openlibs()
+	timer_state:push(function()
+	   local ffi = require'ffi'
+	   local cast = ffi.cast
+	   local function worker()
+	   	--
+	   end
+	   local worker_cb = cast('void *(*)(void *)', worker)
+	   return tonumber(cast('intptr_t', worker_cb))
+	end)
+	local worker_cb_ptr = cast('void*', timer_state:call())
+	local timer_thread = pthread.new(worker_cb_ptr)
+end
+
+local function stop_timer_thread()
+	timer_thread:join()
+	timer_state:close()
+end
+
 function app:runevery(seconds, func)
+	--init_timer_thread()
 	func()
 end
 
@@ -108,13 +159,11 @@ end
 local window = {}
 app.window = window
 
-local win_map = {} --{xcb_window_t -> window object}
-
 function window:new(app, frontend, t)
 	self = glue.inherit({app = app, frontend = frontend, c = app.c,
 		atom = app.atom, atoms = app.atoms}, self)
 
-	self.win = C.xcb_generate_id(self.c)
+	self.win = C.xcb_generate_id(c)
 
 	local mask = bit.bor(
 		C.XCB_CW_EVENT_MASK,
@@ -153,10 +202,10 @@ function window:new(app, frontend, t)
 		)
 	)
 
-	local screen = C.xcb_setup_roots_iterator(C.xcb_get_setup(self.c)).data
+	local screen = C.xcb_setup_roots_iterator(C.xcb_get_setup(c)).data
 
 	C.xcb_create_window_checked(
-		self.c,
+		c,
 		C.XCB_COPY_FROM_PARENT,          -- depth
 		self.win,                        -- window id
 		screen.root,                     -- parent window
@@ -169,29 +218,29 @@ function window:new(app, frontend, t)
 
 	--set WM_PROTOCOLS = WM_DELETE_WINDOW indicates that the connection
 	--should survive the closing of a top-level window.
-	local a = self.atoms('WM_PROTOCOLS', 'WM_DELETE_WINDOW')
-	C.xcb_change_property(self.c, C.XCB_PROP_MODE_REPLACE, self.win,
+	local a = atoms('WM_PROTOCOLS', 'WM_DELETE_WINDOW')
+	C.xcb_change_property(c, C.XCB_PROP_MODE_REPLACE, self.win,
 		a.WM_PROTOCOLS, C.XCB_ATOM_ATOM, 32, 1, ffi.new('int32_t[1]', a.WM_DELETE_WINDOW))
 
 	if t.title then
-		C.xcb_change_property(self.c, C.XCB_PROP_MODE_REPLACE, self.win,
+		C.xcb_change_property(c, C.XCB_PROP_MODE_REPLACE, self.win,
 			C.XCB_ATOM_WM_NAME, C.XCB_ATOM_STRING, 8, #t.title, t.title)
 	end
 
 	if t.visible then
-		C.xcb_map_window(self.c, self.win)
+		C.xcb_map_window(c, self.win)
 	end
 
 	--NOTE: setting the window's position only works after the window is mapped.
 	if t.x or t.y then
 	 	local xy = ffi.new('int32_t[2]', t.x, t.y)
-		C.xcb_configure_window(self.c, self.win,
+		C.xcb_configure_window(c, self.win,
 			bit.bor(C.XCB_CONFIG_WINDOW_X, C.XCB_CONFIG_WINDOW_Y), xy)
 	end
 
-	C.xcb_flush(self.c)
+	C.xcb_flush(c)
 
-	win_map[self.win] = self
+	winmap[self.win] = self
 
 	--[[
 	local framed = t.frame == 'normal' or t.frame == 'toolbox'
@@ -230,20 +279,26 @@ end
 
 ev[C.XCB_CLIENT_MESSAGE] = function(e)
 	e = cast('xcb_client_message_event_t*', e)
-	local self = win_map[e.window]
-	if not self then return end
-	if e.data.data32[0] ~= self.atom'WM_DELETE_WINDOW' then return end --close
 
-	if self.frontend:_backend_closing() then
-		self:forceclose()
+	if e.type == atom'NW_STOP' then --stop app loop
+		return 'stop'
+	end
+
+	local self = winmap[e.window]
+	if not self then return end
+
+	if e.data.data32[0] == atom'WM_DELETE_WINDOW' then --close window
+		if self.frontend:_backend_closing() then
+			self:forceclose()
+		end
 	end
 end
 
 function window:forceclose()
-	C.xcb_destroy_window_checked(self.c, self.win)
-	C.xcb_flush(self.c)
+	C.xcb_destroy_window_checked(c, self.win)
+	C.xcb_flush(c)
 	self.frontend:_backend_closed()
-	win_map[self.win] = nil
+	winmap[self.win] = nil
 end
 
 --activation -----------------------------------------------------------------
@@ -277,11 +332,11 @@ function window:visible()
 end
 
 function window:show()
-	C.xcb_map_window_checked(self.c, self.win)
+	C.xcb_map_window_checked(c, self.win)
 end
 
 function window:hide()
-	C.xcb_unmap_window_checked(self.c, self.win)
+	C.xcb_unmap_window_checked(c, self.win)
 end
 
 --state/minimizing -----------------------------------------------------------
@@ -358,8 +413,8 @@ local function translate(c, src_win, dst_win, x, y)
 end
 
 function window:get_normal_rect()
-	local cookie = C.xcb_get_window_attributes(self.c, self.win)
-	local reply = C.xcb_get_window_attributes_reply(self.c, cookie, nil)
+	local cookie = C.xcb_get_window_attributes(c, self.win)
+	local reply = C.xcb_get_window_attributes_reply(c, cookie, nil)
 	local x, y, w, h =
 		reply.visual.x,
 		reply.visual.y,
@@ -372,15 +427,15 @@ end
 function window:set_normal_rect(x, y, w, h)
  	local xy = ffi.new('uint32_t[2]', x, y)
  	local wh = ffi.new('uint32_t[2]', w, h)
-	C.xcb_configure_window_checked(self.c, self.win,
+	C.xcb_configure_window_checked(c, self.win,
 		bit.bor(C.XCB_CONFIG_WINDOW_X, C.XCB_CONFIG_WINDOW_Y), xy)
-	C.xcb_configure_window_checked(self.c, self.win,
+	C.xcb_configure_window_checked(c, self.win,
 		bit.bor(C.XCB_CONFIG_WINDOW_WIDTH, C.XCB_CONFIG_WINDOW_HEIGHT), wh)
 end
 
 function window:get_frame_rect()
 	local x, y, w, h = self:get_normal_rect()
-	x, y = translate(self.c, self.win, 0, x, y)
+	x, y = translate(c, self.win, 0, x, y)
 	return x, y, w, h
 end
 
@@ -425,7 +480,7 @@ function window:get_title()
 end
 
 function window:set_title(title)
-	return C.xcb_change_property_checked(self.c, C.XCB_PROP_MODE_REPLACE, self.w,
+	return C.xcb_change_property_checked(c, C.XCB_PROP_MODE_REPLACE, self.w,
 		C.XCB_ATOM_WM_NAME, C.XCB_ATOM_STRING, 8, #title, title)
 end
 
@@ -484,7 +539,7 @@ end
 
 ev[C.XCB_KEY_PRESS] = function(e)
 	local e = cast('xcb_key_press_event_t*', e)
-	local self = win_map[e.event]
+	local self = winmap[e.event]
 	if not self then return end
 	if self._keypressed then
 		self._keypressed = false
@@ -499,18 +554,17 @@ end
 
 ev[C.XCB_KEY_RELEASE] = function(e)
 	local e = cast('xcb_key_press_event_t*', e)
-	local self = win_map[e.event]
+	local self = winmap[e.event]
 	if not self then return end
 	local key = e.detail
 
 	--peek next message to distinguish between key release and key repeat
- 	local e1 = self.app:_peek_event()
+ 	local e1 = peek_event()
  	if e1 then
  		local v = bit.band(e1.response_type, bit.bnot(0x80))
  		if v == C.XCB_KEY_PRESS then
 			local e1 = cast('xcb_key_press_event_t*', e1)
  			if e1.time == e.time and e1.detail == e.detail then
-				print'reeeeeeeepeat'
 				self.frontend:_backend_keypress(key)
 				self._keypressed = true --key press barrier
  			end
@@ -536,7 +590,7 @@ local btns = {'left', 'middle', 'right'}
 
 ev[C.XCB_BUTTON_PRESS] = function(e)
 	e = cast('xcb_button_press_event_t*', e)
-	local self = win_map[e.event]
+	local self = winmap[e.event]
 	if not self then return end
 
 	local btn = btns[e.detail]
@@ -547,7 +601,7 @@ end
 
 ev[C.XCB_BUTTON_RELEASE] = function(e)
 	e = cast('xcb_button_press_event_t*', e)
-	local self = win_map[e.event]
+	local self = winmap[e.event]
 	if not self then return end
 
 	local btn = btns[e.detail]
@@ -588,7 +642,7 @@ end
 ev[C.XCB_EXPOSE] = function(e)
 	local e = cast('xcb_expose_event_t*', e)
 	if e.count ~= 0 then return end --subregion rendering
-	local self = win_map[e.window]
+	local self = winmap[e.window]
 	if not self then return end
 
 	self:invalidate()
@@ -626,9 +680,9 @@ glue.autoload(window, {
 
 function window:getcairoview()
 	if self._layered then
-		return self.cairoview
+		return cairoview
 	else
-		return self.cairoview2
+		return cairoview2
 	end
 end
 
