@@ -173,6 +173,9 @@ add('os', function()
 		assert(nw:os'WINDOWS 5.0.sp1')
 		assert(not nw:os'WINDOWS 55.0.sp1')
 		assert(not nw:os'Window')
+	elseif ffi.os == 'Linux' then
+		assert(nw:os'linux')
+		assert(nw:os'Linux')
 	end
 	print'ok'
 end)
@@ -465,7 +468,7 @@ add('init-defaults', function()
 	assert(win:resizeable())
 	assert(win:fullscreenable())
 	assert(not win:autoquit())
-	assert(not win:edgesnapping())
+	assert(win:edgesnapping() == 'screen')
 end)
 
 --window closing -------------------------------------------------------------
@@ -561,9 +564,15 @@ add('close-children', function()
 	app:autoquit(false)
 	local win1 = app:window(winpos{title = 'win1'})
 	local win2 = app:window(winpos{title = 'win2', parent = win1})
+	function win1:closed() print'win1 closed' end
+	function win2:closed() print'win2 closed' end
 	win1:close()
-	assert(win1:dead())
-	assert(win2:dead())
+	app:runafter(0, function()
+		assert(win1:dead())
+		assert(win2:dead())
+		app:quit()
+	end)
+	app:run()
 	print'ok'
 end)
 
@@ -2414,6 +2423,7 @@ add('xcb', function()
 		title = 'Hello 2',}
 	function win1:event(...) print('win1', ...) end
 	function win2:event(...) print('win2', ...) end
+	app:runevery(1, function() win1:activate() end)
 	app:run()
 end)
 

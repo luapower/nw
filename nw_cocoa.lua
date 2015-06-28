@@ -121,13 +121,14 @@ function app:time()
 	return objc.mach_absolute_time()
 end
 
-local timebase
+local tbf
 function app:timediff(start_time, end_time)
-	if not timebase then
-		timebase = ffi.new'mach_timebase_info_data_t'
+	if not tbf then
+		local timebase = ffi.new'mach_timebase_info_data_t'
 		assert(objc.mach_timebase_info(timebase) == 0)
+		tbf = timebase.numer / timebase.denom / 10^6
 	end
-	return tonumber(end_time - start_time) * timebase.numer / timebase.denom / 10^6
+	return tonumber(end_time - start_time) * tbf
 end
 
 --timers ---------------------------------------------------------------------

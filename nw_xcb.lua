@@ -1,5 +1,5 @@
 
---native widgets - winapi backend.
+--native widgets - XCB backend.
 --Written by Cosmin Apreutesei. Public domain.
 
 local ffi = require'ffi'
@@ -7,11 +7,9 @@ local bit = require'bit'
 local glue = require'glue'
 local box2d = require'box2d'
 local xcb = require'xcb'
-local pthread = require'pthread'
-local state = require'luastate'
-
+local time = require'time'
+local heap = require'heap'
 local pp = require'pp'
-local reflect = require'ffi_reflect'
 
 local C = xcb.C
 local cast = ffi.cast
@@ -22,10 +20,10 @@ local nw = {name = 'xcb'}
 --os version -----------------------------------------------------------------
 
 function nw:os(ver)
-	return 'X 11.0' --TODO
+	return 'Linux 11.0' --11.0 is the X version
 end
 
-nw.min_os = 'X 11.0'
+nw.min_os = 'Linux 11.0'
 
 --app object -----------------------------------------------------------------
 
@@ -34,7 +32,11 @@ nw.app = app
 
 local c --xcb connection
 local atoms, atom --atom APIs
+
 local winmap = {} --{xcb_window_t -> window object}
+local function getwin(win)
+	return winmap[glue.ptr(win)]
+end
 
 function app:new(frontend)
 	self = glue.inherit({frontend = frontend}, self)
@@ -49,31 +51,6 @@ local ev = {} --{xcb_event_code = event_handler}
 
 local peeked_event
 
-function app:run()
-	local e
-	while true do
-		if peeked_event then
-			e, peeked_event = peeked_event, nil
-		else
-			e = C.xcb_wait_for_event(c)
-			if e == nil then break end
-		end
-		local v = bit.band(e.response_type, bit.bnot(0x80))
-		local f = ev[v]
-		if f then
-			local ok, err = xpcall(f, debug.traceback, e)
-			if not ok then
-				free(e)
-				error(err, 2)
-			elseif err == 'stop' then --stop the loop
-				free(e)
-				return
-			end
-		end
-		free(e)
-	end
-end
-
 local function peek_event()
 	if not peeked_event then
 		local e = C.xcb_poll_for_event(c)
@@ -81,6 +58,42 @@ local function peek_event()
 		peeked_event = e
 	end
 	return peeked_event
+end
+
+--how much to wait before polling again.
+--checking more often increases CPU usage!
+app._poll_interval = 0.015
+
+function app:run()
+	local e
+	while true do
+		while true do
+			if peeked_event then
+				e, peeked_event = peeked_event, nil
+			else
+				--e = C.xcb_wait_for_event(c)
+				e = C.xcb_poll_for_event(c)
+				if e == nil then
+					self:_check_timers()
+					time.sleep(self._poll_interval)
+					break
+				end
+			end
+			local v = bit.band(e.response_type, bit.bnot(0x80))
+			local f = ev[v]
+			if f then
+				local ok, ret = xpcall(f, debug.traceback, e)
+				if not ok then
+					free(e)
+					error(ret, 2)
+				elseif ret == 'stop' then --stop the loop
+					free(e)
+					return
+				end
+			end
+			free(e)
+		end
+	end
 end
 
 function app:stop()
@@ -104,7 +117,7 @@ function app:stop()
 	e.format = 32
 	e.sequence = 0
 	e.type = atom'NW_STOP'
-	C.xcb_send_event_checked(c, 0, win, 0, cast('char*', e))
+	C.xcb_send_event_checked(c, 0, win, 0, cast('const char*', e))
 	if dummy_win then
 		C.xcb_destroy_window(c, win)
 	end
@@ -114,50 +127,84 @@ end
 --time -----------------------------------------------------------------------
 
 function app:time()
-	return 0 --TODO
+	return time.clock()
 end
 
-local qpf
 function app:timediff(start_time, end_time)
-	return start_time - end_time --TODO
+	return end_time - start_time
 end
 
 --timers ---------------------------------------------------------------------
 
-local timer_thread
-local timer_state
+local timers
 
-local function start_timer_thread()
-	if timer_thread then return end
-	timer_state = luastate.open()
-	timer_state:openlibs()
-	timer_state:push(function()
-	   local ffi = require'ffi'
-	   local cast = ffi.cast
-	   local function worker()
-	   	--
-	   end
-	   local worker_cb = cast('void *(*)(void *)', worker)
-	   return tonumber(cast('intptr_t', worker_cb))
-	end)
-	local worker_cb_ptr = cast('void*', timer_state:call())
-	local timer_thread = pthread.new(worker_cb_ptr)
-end
-
-local function stop_timer_thread()
-	timer_thread:join()
-	timer_state:close()
+function app:_check_timers()
+	while timers:length() > 0 do
+		local t = timers:peek()
+		local now = time.clock()
+		if now + self._poll_interval / 2 > t.time then
+			if t.func() == false then
+				timers:pop()
+			else
+				t.time = now + t.interval
+				timers:replace(1, t)
+			end
+		else
+			break
+		end
+	end
 end
 
 function app:runevery(seconds, func)
-	--init_timer_thread()
-	func()
+	if not timers then
+		local function cmp(t1, t2)
+			return t1.time < t2.time
+		end
+		timers = heap.valueheap{cmp = cmp}
+	end
+	timers:push({time = time.clock() + seconds, interval = seconds, func = func})
 end
 
 --windows --------------------------------------------------------------------
 
 local window = {}
 app.window = window
+
+local function atom_arg(s)
+	return type(s) == 'string' and atom(s) or s
+end
+
+function window:_set_atom_prop(name, val)
+	C.xcb_change_property_checked(c, C.XCB_PROP_MODE_REPLACE, self.win,
+		atom_arg(name), C.XCB_ATOM_ATOM, 32, 1, ffi.new('int32_t[1]', atom_arg(val)))
+end
+
+function window:_get_string_prop(name)
+	local cookie = C.xcb_get_property(c, 0, self.win,
+		atom_arg(name), C.XCB_ATOM_STRING, 0, 0)
+	local reply = C.xcb_get_property_reply(c, cookie, nil)
+	local len = C.xcb_get_property_value_length(reply)
+	local val = C.xcb_get_property_value(reply)
+	local s = ffi.string(val, len)
+	free(reply)
+	return s
+end
+
+function window:_set_string_prop(name, val, sz)
+	C.xcb_change_property_checked(c, C.XCB_PROP_MODE_REPLACE, self.win,
+		atom_arg(name), C.XCB_ATOM_STRING, 8, sz or #val, val)
+end
+
+function window:_send_message(win, type)
+	local e = ffi.new'xcb_client_message_event_t'
+	e.window = win
+	e.response_type = C.XCB_CLIENT_MESSAGE
+	e.format = 32
+	e.sequence = 0
+	e.type = atom'NW_STOP'
+	C.xcb_send_event_checked(c, 0, win, 0, cast('const char*', e))
+	C.xcb_flush(c)
+end
 
 function window:new(app, frontend, t)
 	self = glue.inherit({app = app, frontend = frontend, c = app.c,
@@ -203,12 +250,13 @@ function window:new(app, frontend, t)
 	)
 
 	local screen = C.xcb_setup_roots_iterator(C.xcb_get_setup(c)).data
+	local parent = t.parent and t.parent.backend.win or screen.root
 
 	C.xcb_create_window_checked(
 		c,
 		C.XCB_COPY_FROM_PARENT,          -- depth
 		self.win,                        -- window id
-		screen.root,                     -- parent window
+		parent,                          -- parent window
 		0, 0,                            -- x, y (ignored)
 		t.w, t.h,
 		0,                               -- border width (ignored)
@@ -216,15 +264,11 @@ function window:new(app, frontend, t)
 		screen.root_visual,              -- visual
 		mask, val)                       -- event mask and value
 
-	--set WM_PROTOCOLS = WM_DELETE_WINDOW indicates that the connection
-	--should survive the closing of a top-level window.
-	local a = atoms('WM_PROTOCOLS', 'WM_DELETE_WINDOW')
-	C.xcb_change_property(c, C.XCB_PROP_MODE_REPLACE, self.win,
-		a.WM_PROTOCOLS, C.XCB_ATOM_ATOM, 32, 1, ffi.new('int32_t[1]', a.WM_DELETE_WINDOW))
+	--indicate that the connection should survive the closing of a top-level window.
+	self:_set_atom_prop('WM_PROTOCOLS', 'WM_DELETE_WINDOW')
 
 	if t.title then
-		C.xcb_change_property(c, C.XCB_PROP_MODE_REPLACE, self.win,
-			C.XCB_ATOM_WM_NAME, C.XCB_ATOM_STRING, 8, #t.title, t.title)
+		self:set_title(t.title)
 	end
 
 	if t.visible then
@@ -240,7 +284,7 @@ function window:new(app, frontend, t)
 
 	C.xcb_flush(c)
 
-	winmap[self.win] = self
+	winmap[glue.ptr(self.win)] = self
 
 	--[[
 	local framed = t.frame == 'normal' or t.frame == 'toolbox'
@@ -284,7 +328,7 @@ ev[C.XCB_CLIENT_MESSAGE] = function(e)
 		return 'stop'
 	end
 
-	local self = winmap[e.window]
+	local self = getwin(e.window)
 	if not self then return end
 
 	if e.data.data32[0] == atom'WM_DELETE_WINDOW' then --close window
@@ -298,7 +342,7 @@ function window:forceclose()
 	C.xcb_destroy_window_checked(c, self.win)
 	C.xcb_flush(c)
 	self.frontend:_backend_closed()
-	winmap[self.win] = nil
+	winmap[glue.ptr(self.win)] = nil
 end
 
 --activation -----------------------------------------------------------------
@@ -309,6 +353,7 @@ end
 --window: self.frontend:_backend_deactivated()
 
 function app:activate()
+
 end
 
 function app:active_window()
@@ -319,10 +364,16 @@ function app:active()
 end
 
 function window:activate()
+	C.xcb_set_input_focus_checked(c, C.XCB_INPUT_FOCUS_NONE,
+		self.win, C.XCB_CURRENT_TIME)
+	C.xcb_flush(c)
 end
 
 function window:active()
-	return true
+	local cookie = C.xcb_get_input_focus(c, C.XCB_INPUT_FOCUS_NONE,
+		self.win, C.XCB_CURRENT_TIME)
+	local reply = C.xcb_get_input_focus_reply(c, cookie, nil)
+	return getwin(reply.focus)
 end
 
 --state/visibility -----------------------------------------------------------
@@ -333,19 +384,42 @@ end
 
 function window:show()
 	C.xcb_map_window_checked(c, self.win)
+	C.xcb_flush(c)
 end
 
 function window:hide()
 	C.xcb_unmap_window_checked(c, self.win)
+	C.xcb_flush(c)
 end
 
 --state/minimizing -----------------------------------------------------------
+
+function window:_set_wm_state(name, val)
+	local event = ffi.new'xcb_client_message_event_t'
+	event.response_type = C.XCB_CLIENT_MESSAGE
+	event.format = 32
+	event.window = self.win
+	event.type = atom(QXcbAtom::_NET_WM_STATE);
+	event.data.data32[0] = 1 --1:set, 0:get
+	event.data.data32[1] = atom_arg(name)
+	event.data.data32[2] = atom_arg(val)
+	event.data.data32[3] = 0
+	event.data.data32[4] = 0
+	if (!xcbScreen())
+	  return
+	C.xcb_send_event(c, 0, xcbScreen()->root(),
+		bit.bor(
+			C.XCB_EVENT_MASK_STRUCTURE_NOTIFY,
+			C.XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT
+		), e))
+end
 
 function window:minimized()
 	return false
 end
 
 function window:minimize()
+
 end
 
 --state/maximizing -----------------------------------------------------------
@@ -431,6 +505,7 @@ function window:set_normal_rect(x, y, w, h)
 		bit.bor(C.XCB_CONFIG_WINDOW_X, C.XCB_CONFIG_WINDOW_Y), xy)
 	C.xcb_configure_window_checked(c, self.win,
 		bit.bor(C.XCB_CONFIG_WINDOW_WIDTH, C.XCB_CONFIG_WINDOW_HEIGHT), wh)
+	C.xcb_flush(c)
 end
 
 function window:get_frame_rect()
@@ -477,11 +552,11 @@ end
 --titlebar -------------------------------------------------------------------
 
 function window:get_title()
+	return self:_get_string_prop(C.XCB_ATOM_WM_NAME)
 end
 
 function window:set_title(title)
-	return C.xcb_change_property_checked(c, C.XCB_PROP_MODE_REPLACE, self.w,
-		C.XCB_ATOM_WM_NAME, C.XCB_ATOM_STRING, 8, #title, title)
+	self:_set_string_prop(C.XCB_ATOM_WM_NAME, title)
 end
 
 --z-order --------------------------------------------------------------------
@@ -539,7 +614,7 @@ end
 
 ev[C.XCB_KEY_PRESS] = function(e)
 	local e = cast('xcb_key_press_event_t*', e)
-	local self = winmap[e.event]
+	local self = getwin(e.event)
 	if not self then return end
 	if self._keypressed then
 		self._keypressed = false
@@ -554,7 +629,7 @@ end
 
 ev[C.XCB_KEY_RELEASE] = function(e)
 	local e = cast('xcb_key_press_event_t*', e)
-	local self = winmap[e.event]
+	local self = getwin(e.event)
 	if not self then return end
 	local key = e.detail
 
@@ -590,7 +665,7 @@ local btns = {'left', 'middle', 'right'}
 
 ev[C.XCB_BUTTON_PRESS] = function(e)
 	e = cast('xcb_button_press_event_t*', e)
-	local self = winmap[e.event]
+	local self = getwin(e.event)
 	if not self then return end
 
 	local btn = btns[e.detail]
@@ -601,7 +676,7 @@ end
 
 ev[C.XCB_BUTTON_RELEASE] = function(e)
 	e = cast('xcb_button_press_event_t*', e)
-	local self = winmap[e.event]
+	local self = getwin(e.event)
 	if not self then return end
 
 	local btn = btns[e.detail]
@@ -642,13 +717,17 @@ end
 ev[C.XCB_EXPOSE] = function(e)
 	local e = cast('xcb_expose_event_t*', e)
 	if e.count ~= 0 then return end --subregion rendering
-	local self = winmap[e.window]
+	local self = getwin(e.window)
 	if not self then return end
 
 	self:invalidate()
 end
 
 function window:bitmap()
+	if not self._bitmap then
+		--
+	end
+	return self._bitmap
 end
 
 function window:invalidate()
