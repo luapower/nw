@@ -2423,7 +2423,7 @@ add('xcb', function()
 		title = 'Hello 2',}
 	function win1:event(...) print('win1', ...) end
 	function win2:event(...) print('win2', ...) end
-	app:runevery(1, function() win1:activate() end)
+	--app:runafter(1, function() win1:minimize() print(win1:minimized()) end)
 	app:run()
 end)
 

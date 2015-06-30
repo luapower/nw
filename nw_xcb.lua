@@ -7,6 +7,7 @@ local bit = require'bit'
 local glue = require'glue'
 local box2d = require'box2d'
 local xcb = require'xcb'
+require'xcb_icccm_h'
 local time = require'time'
 local heap = require'heap'
 local pp = require'pp'
@@ -25,23 +26,250 @@ end
 
 nw.min_os = 'Linux 11.0'
 
+--xcb state ------------------------------------------------------------------
+
+local c, screen --xcb connection and default screen
+local atom --atom resolver
+
+local function atom_resolver()
+	local resolve = glue.memoize(function(s)
+		local cookie = C.xcb_intern_atom(c, 0, #s, s)
+		local reply = C.xcb_intern_atom_reply(c, cookie, nil)
+		return reply.atom
+	end)
+	return function(s)
+		if type(s) ~= 'string' then return s end --pass through
+		return resolve(s)
+	end
+end
+
+local function atom_list(...)
+	local n = select('#', ...)
+	local atoms = ffi.new('xcb_atom_t[?]', n)
+	for i = 1,n do
+		local v = select(i,...)
+		atoms[i-1] = atom(v)
+	end
+	return atoms, n
+end
+
+local function list_props(win)
+	local cookie = C.xcb_list_properties(c, win)
+	local reply = C.xcb_list_properties_reply(c, cookie, nil)
+end
+
+local function delete_prop(win, prop)
+	C.xcb_delete_property_checked(c, win, atom(prop))
+	C.xcb_flush(c)
+end
+
+local prop_formats = {
+	[C.XCB_ATOM_ATOM] = 32,
+	[C.XCB_ATOM_WINDOW] = 32,
+	[C.XCB_ATOM_STRING] = 8,
+	[C.XCB_ATOM_WM_HINTS] = 32,
+}
+local function set_prop(win, prop, type, val, sz)
+	local format = assert(prop_formats[type])
+	C.xcb_change_property_checked(c, C.XCB_PROP_MODE_REPLACE, win,
+		atom(prop), type, format, sz, val)
+	C.xcb_flush(c)
+end
+
+local function get_prop(win, prop, type, decode, sz)
+	local cookie = C.xcb_get_property(c, 0, win, atom(prop), type, 0, sz or 0)
+	local reply = C.xcb_get_property_reply(c, cookie, nil)
+	if not reply then return end
+	if reply.format == 32 and reply.type == type then
+		local len = C.xcb_get_property_value_length(reply)
+		local val = C.xcb_get_property_value(reply)
+		local ret = decode(val, len)
+		free(reply)
+		return ret
+	else
+		free(reply)
+	end
+end
+
+local function set_string_prop(win, prop, val, sz)
+	set_prop(win, prop, C.XCB_ATOM_STRING, val, sz or #val)
+end
+
+local function get_string_prop(win, prop)
+	return get_prop(win, prop, C.XCB_ATOM_STRING, ffi.string)
+end
+
+local function set_atom_prop(win, prop, val)
+	set_prop(win, prop, C.XCB_ATOM_ATOM, atom_list(val))
+end
+
+local function set_atom_map_prop(win, prop, t)
+	local atoms, n = atom_list(unpack(glue.keys(t)))
+	if n == 0 then
+		delete_prop(win, prop)
+	else
+		set_prop(win, prop, C.XCB_ATOM_ATOM, atoms, n)
+	end
+end
+
+local function decode_atom_map(val, len)
+	local val = ffi.cast('xcb_atom_t*', val)
+	local t = {}
+	for i = 0, len-1 do
+		t[val[i]] = true
+	end
+	return t
+end
+local function get_atom_map_prop(win, prop)
+	return get_prop(win, prop, C.XCB_ATOM_ATOM, decode_atom_map, 1024)
+end
+
+local function decode_window(val, len)
+	if len == 0 then return end
+	return ffi.cast('xcb_window_t*', val)[0]
+end
+local function get_window_prop(win, prop)
+	return get_prop(win, prop, C.XCB_ATOM_WINDOW, decode_window, 1)
+end
+
+local function client_message_event(win, type, format)
+	local e = ffi.new'xcb_client_message_event_t'
+	e.window = win
+	e.response_type = C.XCB_CLIENT_MESSAGE
+	e.type = atom(type)
+	e.format = format
+	return e
+end
+
+local function atom_list_event(win, type, ...)
+	local e = client_message_event(win, type, 32)
+	for i = 1,5 do
+		local v = select(i, ...)
+		if v then
+			e.data.data32[i-1] = atom(v)
+		end
+	end
+	return e
+end
+
+local function send_client_message(win, e, propagate, mask)
+	C.xcb_send_event_checked(c, propagate, win, mask, cast('const char*', e))
+	C.xcb_flush(c)
+end
+
+local function send_client_message_to_root(e)
+	local mask = bit.bor(
+		C.XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY,
+		C.XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT)
+	send_client_message(screen.root, e, false, mask)
+end
+
+local function activate_window(win, focused_win)
+	local e = client_message_event(win, '_NET_ACTIVE_WINDOW', 32)
+	e.data.data32[0] = 1 --message comes from an app
+	e.data.data32[1] = 0 --TODO: current time?
+	e.data.data32[2] = focused_win or C.XCB_NONE
+	send_client_message_to_root(e)
+end
+
+local function set_netwm_state(win, set, atom1, atom2)
+	local e = atom_list_event(win, '_NET_WM_STATE', set and 1 or 0, atom1, atom2)
+	send_client_message_to_root(e)
+end
+
+local function get_netwm_states(win)
+	return get_atom_map_prop(win, '_NET_WM_STATE')
+end
+
+local function minimize(win)
+	local e = client_message_event(win, 'WM_CHANGE_STATE', 32)
+	e.data.data32[0] = C.XCB_ICCCM_WM_STATE_ICONIC
+	send_client_message_to_root(e)
+end
+
+local function xcb_iterator(iter_func, next_func)
+	local function next(state, last)
+		if last then
+			next_func(state)
+		end
+		if state.rem == 0 then return end
+		return state.data
+	end
+	return function(...)
+		local state = iter_func(...)
+		return next, state
+	end
+end
+
+local function decode_hints(val, len)
+	return ffi.new('xcb_icccm_wm_hints_t', ffi.cast('xcb_icccm_wm_hints_t*', val)[0])
+end
+local function get_wm_hints(win)
+	return get_prop(win, C.XCB_ATOM_WM_HINTS, C.XCB_ATOM_WM_HINTS,
+		decode_hints, C.XCB_ICCCM_NUM_WM_HINTS_ELEMENTS)
+	--local hints = ffi.new'xcb_icccm_wm_hints_t'
+	--local cookie = C.xcb_icccm_get_wm_hints(c, win)
+	--local n = C.xcb_icccm_get_wm_hints_reply(c, cookie, hints, nil)
+	--return hints
+end
+
+local function set_wm_hints(win, hints)
+	set_prop(win, C.XCB_ATOM_WM_HINTS, C.XCB_ATOM_WM_HINTS, hints,
+		C.XCB_ICCCM_NUM_WM_HINTS_ELEMENTS)
+	--C.xcb_icccm_set_wm_hints_checked(c, win, hints)
+end
+
+--TODO: always returns one screen
+local screen_iterator = xcb_iterator(
+	C.xcb_setup_roots_iterator, C.xcb_screen_next)
+
+local function screens()
+	return screen_iterator(C.xcb_get_setup(c))
+end
+
+local function get_screen(n)
+	local i = 0
+	for screen in screens() do
+		if i == n then
+			return screen
+		end
+		i = i + 1
+	end
+end
+
+local function xcb_connect(displayname)
+	local n = ffi.new'int[1]'
+	c = C.xcb_connect(displayname, n)
+	assert(C.xcb_connection_has_error(c) == 0)
+	return c, n[0]
+end
+
+local function xcb_init()
+	local n
+	c, n = xcb_connect()
+	atom = atom_resolver(c)
+	local screen_ptr = get_screen(n)
+	screen = ffi.new('xcb_screen_t', screen_ptr[0])
+end
+
+--window handle to window object mapping -------------------------------------
+
+--NOTE: xcb_window_t is an uint32_t so it comes from ffi as a Lua number
+--so it can be used as table key directly.
+
+local winmap = {} --{xcb_window_t -> window object}
+local function setwin(win, x) winmap[win] = x end
+local function getwin(win) return winmap[win] end
+local function nextwin() return next(winmap) end
+
 --app object -----------------------------------------------------------------
 
 local app = {}
 nw.app = app
 
-local c --xcb connection
-local atoms, atom --atom APIs
-
-local winmap = {} --{xcb_window_t -> window object}
-local function getwin(win)
-	return winmap[glue.ptr(win)]
-end
-
 function app:new(frontend)
 	self = glue.inherit({frontend = frontend}, self)
-	c = C.xcb_connect(nil, nil)
-	atoms, atom = xcb.atom_map(c)
+	xcb_init()
 	return self
 end
 
@@ -62,20 +290,30 @@ end
 
 --how much to wait before polling again.
 --checking more often increases CPU usage!
-app._poll_interval = 0.015
+app._poll_interval = 0.02
+
+local last_poll_time
+
+function app:_sleep()
+	local busy_interval = time.clock() - last_poll_time
+	local sleep_interval = self._poll_interval - busy_interval
+	if sleep_interval > 0 then
+		time.sleep(sleep_interval)
+	end
+end
 
 function app:run()
 	local e
 	while true do
+		last_poll_time = time.clock()
 		while true do
 			if peeked_event then
 				e, peeked_event = peeked_event, nil
 			else
-				--e = C.xcb_wait_for_event(c)
 				e = C.xcb_poll_for_event(c)
 				if e == nil then
 					self:_check_timers()
-					time.sleep(self._poll_interval)
+					self:_sleep()
 					break
 				end
 			end
@@ -97,13 +335,12 @@ function app:run()
 end
 
 function app:stop()
-	local win, winobj = next(winmap) --any window will do
+	local win, winobj = nextwin() --any window will do
 	local dummy_win
 	if not win or winobj.frontend:dead() then
 		--create a dummy window so we can send a message to it, which is
 		--the only way to unblock the event loop.
 		win = C.xcb_generate_id(c)
-		local screen = C.xcb_setup_roots_iterator(C.xcb_get_setup(c)).data
 		C.xcb_create_window_checked(c, C.XCB_COPY_FROM_PARENT, win,
 			screen.root, 0, 0, 1, 1, 0,
 			C.XCB_WINDOW_CLASS_INPUT_ONLY,
@@ -111,13 +348,7 @@ function app:stop()
 		dummy_win = true
 	end
 	--send a custom "stop loop" event to any window
-	local e = ffi.new'xcb_client_message_event_t'
-	e.response_type = C.XCB_CLIENT_MESSAGE
-	e.window = win
-	e.format = 32
-	e.sequence = 0
-	e.type = atom'NW_STOP'
-	C.xcb_send_event_checked(c, 0, win, 0, cast('const char*', e))
+	send_client_message(win, 'NW_STOP')
 	if dummy_win then
 		C.xcb_destroy_window(c, win)
 	end
@@ -136,7 +367,10 @@ end
 
 --timers ---------------------------------------------------------------------
 
-local timers
+local function cmp(t1, t2)
+	return t1.time < t2.time
+end
+local timers = heap.valueheap{cmp = cmp}
 
 function app:_check_timers()
 	while timers:length() > 0 do
@@ -156,12 +390,6 @@ function app:_check_timers()
 end
 
 function app:runevery(seconds, func)
-	if not timers then
-		local function cmp(t1, t2)
-			return t1.time < t2.time
-		end
-		timers = heap.valueheap{cmp = cmp}
-	end
 	timers:push({time = time.clock() + seconds, interval = seconds, func = func})
 end
 
@@ -170,45 +398,8 @@ end
 local window = {}
 app.window = window
 
-local function atom_arg(s)
-	return type(s) == 'string' and atom(s) or s
-end
-
-function window:_set_atom_prop(name, val)
-	C.xcb_change_property_checked(c, C.XCB_PROP_MODE_REPLACE, self.win,
-		atom_arg(name), C.XCB_ATOM_ATOM, 32, 1, ffi.new('int32_t[1]', atom_arg(val)))
-end
-
-function window:_get_string_prop(name)
-	local cookie = C.xcb_get_property(c, 0, self.win,
-		atom_arg(name), C.XCB_ATOM_STRING, 0, 0)
-	local reply = C.xcb_get_property_reply(c, cookie, nil)
-	local len = C.xcb_get_property_value_length(reply)
-	local val = C.xcb_get_property_value(reply)
-	local s = ffi.string(val, len)
-	free(reply)
-	return s
-end
-
-function window:_set_string_prop(name, val, sz)
-	C.xcb_change_property_checked(c, C.XCB_PROP_MODE_REPLACE, self.win,
-		atom_arg(name), C.XCB_ATOM_STRING, 8, sz or #val, val)
-end
-
-function window:_send_message(win, type)
-	local e = ffi.new'xcb_client_message_event_t'
-	e.window = win
-	e.response_type = C.XCB_CLIENT_MESSAGE
-	e.format = 32
-	e.sequence = 0
-	e.type = atom'NW_STOP'
-	C.xcb_send_event_checked(c, 0, win, 0, cast('const char*', e))
-	C.xcb_flush(c)
-end
-
 function window:new(app, frontend, t)
-	self = glue.inherit({app = app, frontend = frontend, c = app.c,
-		atom = app.atom, atoms = app.atoms}, self)
+	self = glue.inherit({app = app, frontend = frontend}, self)
 
 	self.win = C.xcb_generate_id(c)
 
@@ -249,7 +440,6 @@ function window:new(app, frontend, t)
 		)
 	)
 
-	local screen = C.xcb_setup_roots_iterator(C.xcb_get_setup(c)).data
 	local parent = t.parent and t.parent.backend.win or screen.root
 
 	C.xcb_create_window_checked(
@@ -264,8 +454,11 @@ function window:new(app, frontend, t)
 		screen.root_visual,              -- visual
 		mask, val)                       -- event mask and value
 
-	--indicate that the connection should survive the closing of a top-level window.
-	self:_set_atom_prop('WM_PROTOCOLS', 'WM_DELETE_WINDOW')
+	set_atom_map_prop(self.win, 'WM_PROTOCOLS', {
+		WM_DELETE_WINDOW = true, --don't close the connection when a window is closed
+		WM_TAKE_FOCUS = true,    --allow focusing the window programatically
+		_NET_WM_PING = true,     --respond to ping events
+	})
 
 	if t.title then
 		self:set_title(t.title)
@@ -277,14 +470,14 @@ function window:new(app, frontend, t)
 
 	--NOTE: setting the window's position only works after the window is mapped.
 	if t.x or t.y then
-	 	local xy = ffi.new('int32_t[2]', t.x, t.y)
-		C.xcb_configure_window(c, self.win,
+		local xy = ffi.new('int32_t[2]', t.x, t.y)
+		C.xcb_configure_window_checked(c, self.win,
 			bit.bor(C.XCB_CONFIG_WINDOW_X, C.XCB_CONFIG_WINDOW_Y), xy)
 	end
 
 	C.xcb_flush(c)
 
-	winmap[glue.ptr(self.win)] = self
+	setwin(self.win, self)
 
 	--[[
 	local framed = t.frame == 'normal' or t.frame == 'toolbox'
@@ -342,7 +535,7 @@ function window:forceclose()
 	C.xcb_destroy_window_checked(c, self.win)
 	C.xcb_flush(c)
 	self.frontend:_backend_closed()
-	winmap[glue.ptr(self.win)] = nil
+	setwin(self.win, nil)
 end
 
 --activation -----------------------------------------------------------------
@@ -357,6 +550,8 @@ function app:activate()
 end
 
 function app:active_window()
+	local win = get_window_prop(screen.root, '_NET_ACTIVE_WINDOW')
+	return getwin(win)
 end
 
 function app:active()
@@ -364,16 +559,14 @@ function app:active()
 end
 
 function window:activate()
+	--TODO: try activate_window() instead? what's the diff?
 	C.xcb_set_input_focus_checked(c, C.XCB_INPUT_FOCUS_NONE,
 		self.win, C.XCB_CURRENT_TIME)
 	C.xcb_flush(c)
 end
 
 function window:active()
-	local cookie = C.xcb_get_input_focus(c, C.XCB_INPUT_FOCUS_NONE,
-		self.win, C.XCB_CURRENT_TIME)
-	local reply = C.xcb_get_input_focus_reply(c, cookie, nil)
-	return getwin(reply.focus)
+	return app:active_window() == self
 end
 
 --state/visibility -----------------------------------------------------------
@@ -394,49 +587,46 @@ end
 
 --state/minimizing -----------------------------------------------------------
 
-function window:_set_wm_state(name, val)
-	local event = ffi.new'xcb_client_message_event_t'
-	event.response_type = C.XCB_CLIENT_MESSAGE
-	event.format = 32
-	event.window = self.win
-	event.type = atom(QXcbAtom::_NET_WM_STATE);
-	event.data.data32[0] = 1 --1:set, 0:get
-	event.data.data32[1] = atom_arg(name)
-	event.data.data32[2] = atom_arg(val)
-	event.data.data32[3] = 0
-	event.data.data32[4] = 0
-	if (!xcbScreen())
-	  return
-	C.xcb_send_event(c, 0, xcbScreen()->root(),
-		bit.bor(
-			C.XCB_EVENT_MASK_STRUCTURE_NOTIFY,
-			C.XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT
-		), e))
-end
-
 function window:minimized()
-	return false
+	local hints = get_wm_hints(self.win)
+	return bit.band(hints.initial_state, C.XCB_ICCCM_WM_STATE_ICONIC) ~= 0
 end
 
 function window:minimize()
-
+	minimize(self.win)
+	--local hints = ffi.new'xcb_icccm_wm_hints_t'
+	--hints.initial_state = bit.bor(hints.initial_state, C.XCB_ICCCM_WM_STATE_ICONIC)
+	--C.xcb_icccm_wm_hints_set_iconic(hints)
+	--set_wm_hints(self.win, hints)
 end
 
 --state/maximizing -----------------------------------------------------------
 
 function window:maximized()
-	return false
+	local states = get_netwm_states(self.win)
+	return
+		states[atom'_NET_WM_STATE_MAXIMIZED_HORZ'] and
+		states[atom'_NET_WM_STATE_MAXIMIZED_VERT']
 end
 
 function window:maximize()
+	set_netwm_state(self.win, true,
+		'_NET_WM_STATE_MAXIMIZED_HORZ',
+		'_NET_WM_STATE_MAXIMIZED_VERT')
 end
 
 --state/restoring ------------------------------------------------------------
 
 function window:restore()
+	set_netwm_state(self.win, false,
+		'_NET_WM_STATE_MAXIMIZED_HORZ',
+		'_NET_WM_STATE_MAXIMIZED_VERT')
 end
 
 function window:shownormal()
+	set_netwm_state(self.win, false,
+		'_NET_WM_STATE_MAXIMIZED_HORZ',
+		'_NET_WM_STATE_MAXIMIZED_VERT')
 end
 
 --state/changed event --------------------------------------------------------
@@ -446,10 +636,15 @@ end
 --state/fullscreen -----------------------------------------------------------
 
 function window:fullscreen()
-	return self._fullscreen
+	return get_netwm_states(self.win)[atom'_NET_WM_STATE_FULLSCREEN']
 end
 
 function window:enter_fullscreen()
+	set_netwm_state(self.win, true, '_NET_WM_STATE_FULLSCREEN')
+end
+
+function window:exit_fullscreen()
+	set_netwm_state(self.win, false, '_NET_WM_STATE_FULLSCREEN')
 end
 
 --state/enabled --------------------------------------------------------------
@@ -552,19 +747,21 @@ end
 --titlebar -------------------------------------------------------------------
 
 function window:get_title()
-	return self:_get_string_prop(C.XCB_ATOM_WM_NAME)
+	return get_string_prop(self.win, C.XCB_ATOM_WM_NAME)
 end
 
 function window:set_title(title)
-	self:_set_string_prop(C.XCB_ATOM_WM_NAME, title)
+	set_string_prop(self.win, C.XCB_ATOM_WM_NAME, title)
 end
 
 --z-order --------------------------------------------------------------------
 
 function window:get_topmost()
+	return get_netwm_states(self.win)[atom'_NET_WM_STATE_ABOVE']
 end
 
 function window:set_topmost(topmost)
+	set_netwm_state(self.win, topmost, atom'_NET_WM_STATE_ABOVE')
 end
 
 function window:set_zorder(mode, relto)
@@ -572,35 +769,36 @@ end
 
 --displays -------------------------------------------------------------------
 
-function app:_display(monitor)
+function app:_display(screen)
 	return self.frontend:_display{
-		x = info.monitor_rect.x,
-		y = info.monitor_rect.y,
-		w = info.monitor_rect.w,
-		h = info.monitor_rect.h,
-		client_x = info.work_rect.x,
-		client_y = info.work_rect.y,
-		client_w = info.work_rect.w,
-		client_h = info.work_rect.h,
+		x = 0, --TODO
+		y = 0,
+		w = screen.width_in_pixels,
+		h = screen.height_in_pixels,
+		client_x = 0, --TODO
+		client_y = 0,
+		client_w = 0,
+		client_h = 0,
 	}
 end
 
 function app:displays()
-	local monitors = winapi.EnumDisplayMonitors()
-	local displays = {}
-	for i = 1, #monitors do
-		table.insert(displays, self:_display(monitors[i])) --invalid displays are skipped
+	local t = {}
+	for screen in screens() do
+		t[#t+1] = self:_display(screen)
 	end
-	return displays
+	return t
 end
 
 function app:active_display()
 end
 
 function app:display_count()
+	return C.xcb_setup_roots_length(C.xcb_get_setup(c))
 end
 
 function window:display()
+	--
 end
 
 --self.app.frontend:_backend_displays_changed()
