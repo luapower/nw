@@ -7,7 +7,7 @@ local bit = require'bit'
 local glue = require'glue'
 local box2d = require'box2d'
 local xcb = require'xcb'
-require'xcb_icccm_h'
+require'xcb_icccm_h' --wm_hints (minimization)
 local time = require'time'
 local heap = require'heap'
 local pp = require'pp'
@@ -30,6 +30,14 @@ nw.min_os = 'Linux 11.0'
 
 local c, screen --xcb connection and default screen
 local atom --atom resolver
+
+local function check(cookie)
+	local err = C.xcb_request_check(c, cookie)
+	if err == nil then return cookie end
+	local code = err.error_code
+	free(err)
+	error('XCB error: '..code)
+end
 
 local function atom_resolver()
 	local resolve = glue.memoize(function(s)
@@ -59,21 +67,16 @@ local function list_props(win)
 end
 
 local function delete_prop(win, prop)
-	C.xcb_delete_property_checked(c, win, atom(prop))
-	C.xcb_flush(c)
+	C.xcb_delete_property(c, win, atom(prop))
 end
 
 local prop_formats = {
-	[C.XCB_ATOM_ATOM] = 32,
-	[C.XCB_ATOM_WINDOW] = 32,
 	[C.XCB_ATOM_STRING] = 8,
-	[C.XCB_ATOM_WM_HINTS] = 32,
 }
 local function set_prop(win, prop, type, val, sz)
-	local format = assert(prop_formats[type])
-	C.xcb_change_property_checked(c, C.XCB_PROP_MODE_REPLACE, win,
+	local format = prop_formats[type] or 32
+	C.xcb_change_property(c, C.XCB_PROP_MODE_REPLACE, win,
 		atom(prop), type, format, sz, val)
-	C.xcb_flush(c)
 end
 
 local function get_prop(win, prop, type, decode, sz)
@@ -124,6 +127,11 @@ local function get_atom_map_prop(win, prop)
 	return get_prop(win, prop, C.XCB_ATOM_ATOM, decode_atom_map, 1024)
 end
 
+local function set_cardinal_prop(win, prop, val)
+	local buf = ffi.new('int32_t[1]', val)
+	set_prop(win, prop, C.XCB_ATOM_CARDINAL, buf, 1)
+end
+
 local function decode_window(val, len)
 	if len == 0 then return end
 	return ffi.cast('xcb_window_t*', val)[0]
@@ -153,8 +161,7 @@ local function atom_list_event(win, type, ...)
 end
 
 local function send_client_message(win, e, propagate, mask)
-	C.xcb_send_event_checked(c, propagate, win, mask, cast('const char*', e))
-	C.xcb_flush(c)
+	C.xcb_send_event(c, propagate or false, win, mask or 0, cast('const char*', e))
 end
 
 local function send_client_message_to_root(e)
@@ -207,16 +214,11 @@ end
 local function get_wm_hints(win)
 	return get_prop(win, C.XCB_ATOM_WM_HINTS, C.XCB_ATOM_WM_HINTS,
 		decode_hints, C.XCB_ICCCM_NUM_WM_HINTS_ELEMENTS)
-	--local hints = ffi.new'xcb_icccm_wm_hints_t'
-	--local cookie = C.xcb_icccm_get_wm_hints(c, win)
-	--local n = C.xcb_icccm_get_wm_hints_reply(c, cookie, hints, nil)
-	--return hints
 end
 
 local function set_wm_hints(win, hints)
 	set_prop(win, C.XCB_ATOM_WM_HINTS, C.XCB_ATOM_WM_HINTS, hints,
 		C.XCB_ICCCM_NUM_WM_HINTS_ELEMENTS)
-	--C.xcb_icccm_set_wm_hints_checked(c, win, hints)
 end
 
 --TODO: always returns one screen
@@ -237,6 +239,32 @@ local function get_screen(n)
 	end
 end
 
+local depths = xcb_iterator(
+	C.xcb_screen_allowed_depths_iterator, C.xcb_depth_next)
+
+local visuals = xcb_iterator(
+	C.xcb_depth_visuals_iterator, C.xcb_visualtype_next)
+
+local visual_map = glue.memoize(function(screen)
+	local t = {}
+	for depth in depths(screen) do
+		for visual in visuals(depth) do
+			t[visual.visual_id] = visual
+		end
+	end
+	return t
+end)
+
+local function visual(visual_id, screen_)
+	return visual_map(screen_ or screen)[visual_id]
+end
+
+local function xcb_has_shm()
+	local cookie = C.xcb_shm_query_version(c)
+	local reply = C.xcb_shm_query_version_reply(c, cookie, nil)
+	return reply ~= nil and reply.shared_pixmaps ~= 0
+end
+
 local function xcb_connect(displayname)
 	local n = ffi.new'int[1]'
 	c = C.xcb_connect(displayname, n)
@@ -248,8 +276,7 @@ local function xcb_init()
 	local n
 	c, n = xcb_connect()
 	atom = atom_resolver(c)
-	local screen_ptr = get_screen(n)
-	screen = ffi.new('xcb_screen_t', screen_ptr[0])
+	screen = get_screen(n)
 end
 
 --window handle to window object mapping -------------------------------------
@@ -277,12 +304,20 @@ end
 
 local ev = {} --{xcb_event_code = event_handler}
 
+local function check_errors(e)
+	if e.response_type ~= 0 then return end --not an error
+	local code = e.error_code
+	free(e)
+	error('XCB error: '..code)
+end
+
 local peeked_event
 
 local function peek_event()
 	if not peeked_event then
 		local e = C.xcb_poll_for_event(c)
 		if e == nil then return end
+		check_errors(e)
 		peeked_event = e
 	end
 	return peeked_event
@@ -315,6 +350,8 @@ function app:run()
 					self:_check_timers()
 					self:_sleep()
 					break
+				else
+					check_errors(e)
 				end
 			end
 			local v = bit.band(e.response_type, bit.bnot(0x80))
@@ -324,35 +361,41 @@ function app:run()
 				if not ok then
 					free(e)
 					error(ret, 2)
-				elseif ret == 'stop' then --stop the loop
-					free(e)
-					return
 				end
 			end
 			free(e)
+			if self._stop then
+				return --stop the loop
+			end
 		end
 	end
 end
 
-function app:stop()
+--[[
+function app:_send_custom_message(...)
 	local win, winobj = nextwin() --any window will do
 	local dummy_win
 	if not win or winobj.frontend:dead() then
 		--create a dummy window so we can send a message to it, which is
 		--the only way to unblock the event loop.
 		win = C.xcb_generate_id(c)
-		C.xcb_create_window_checked(c, C.XCB_COPY_FROM_PARENT, win,
+		check(C.xcb_create_window_checked(c, C.XCB_COPY_FROM_PARENT, win,
 			screen.root, 0, 0, 1, 1, 0,
 			C.XCB_WINDOW_CLASS_INPUT_ONLY,
-			screen.root_visual, 0, nil)
+			screen.root_visual, 0, nil))
 		dummy_win = true
 	end
 	--send a custom "stop loop" event to any window
-	send_client_message(win, 'NW_STOP')
+	send_client_message(win, atom_list_event(win, ...))
 	if dummy_win then
 		C.xcb_destroy_window(c, win)
 	end
 	C.xcb_flush(c)
+end
+]]
+
+function app:stop()
+	self._stop = true
 end
 
 --time -----------------------------------------------------------------------
@@ -395,73 +438,112 @@ end
 
 --windows --------------------------------------------------------------------
 
+--bind getpid() for setting _NET_WM_PID.
+ffi.cdef'int32_t getpid()'
+local getpid = ffi.C.getpid
+
 local window = {}
 app.window = window
 
 function window:new(app, frontend, t)
 	self = glue.inherit({app = app, frontend = frontend}, self)
 
-	self.win = C.xcb_generate_id(c)
+	--helper to populate the values array for xcb_create_window().
+	local mask = 0
+	local i, n = 0, 4
+	local values = ffi.new('uint32_t[?]', n)
+	local function addvalue(maskbit, value)
+		assert(i < n)          --increase n to add more values!
+		assert(maskbit > mask) --values must be added in enum order!
+		mask = bit.bor(mask, maskbit)
+		values[i] = value
+		i = i + 1
+	end
 
-	local mask = bit.bor(
-		C.XCB_CW_EVENT_MASK,
-		C.XCB_CW_BACK_PIXMAP
-	)
-   local val = ffi.new('uint32_t[2]',
-   	--XCB_CW_EVENT_MASK values
-   	C.XCB_NONE,
-   	--XCB_CW_BACK_PIXMAP values
-   	bit.bor(
-			C.XCB_EVENT_MASK_KEY_PRESS,
-			C.XCB_EVENT_MASK_KEY_RELEASE,
-			C.XCB_EVENT_MASK_BUTTON_PRESS,
-			C.XCB_EVENT_MASK_BUTTON_RELEASE,
-			C.XCB_EVENT_MASK_ENTER_WINDOW,
-			C.XCB_EVENT_MASK_LEAVE_WINDOW,
-			C.XCB_EVENT_MASK_POINTER_MOTION,
-			C.XCB_EVENT_MASK_POINTER_MOTION_HINT,
-			C.XCB_EVENT_MASK_BUTTON_1_MOTION,
-			C.XCB_EVENT_MASK_BUTTON_2_MOTION,
-			C.XCB_EVENT_MASK_BUTTON_3_MOTION,
-			C.XCB_EVENT_MASK_BUTTON_4_MOTION,
-			C.XCB_EVENT_MASK_BUTTON_5_MOTION,
-			C.XCB_EVENT_MASK_BUTTON_MOTION,
-			C.XCB_EVENT_MASK_KEYMAP_STATE,
-			C.XCB_EVENT_MASK_EXPOSURE,
-			C.XCB_EVENT_MASK_VISIBILITY_CHANGE,
-			C.XCB_EVENT_MASK_STRUCTURE_NOTIFY,
-			C.XCB_EVENT_MASK_RESIZE_REDIRECT,
-			C.XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY,
-			C.XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT,
-			C.XCB_EVENT_MASK_FOCUS_CHANGE,
-			C.XCB_EVENT_MASK_PROPERTY_CHANGE,
-			C.XCB_EVENT_MASK_COLOR_MAP_CHANGE,
-			C.XCB_EVENT_MASK_OWNER_GRAB_BUTTON
-		)
-	)
+	--say that we don't want the server to keep a pixmap for the window.
+	addvalue(C.XCB_CW_BACK_PIXMAP, C.XCB_BACK_PIXMAP_NONE)
+
+	--needed if we want to set a value for XCB_CW_COLORMAP too!
+	addvalue(C.XCB_CW_BORDER_PIXEL, 0)
+
+	--declare what events we want to receive.
+	addvalue(C.XCB_CW_EVENT_MASK, bit.bor(
+		C.XCB_EVENT_MASK_KEY_PRESS,
+		C.XCB_EVENT_MASK_KEY_RELEASE,
+		C.XCB_EVENT_MASK_BUTTON_PRESS,
+		C.XCB_EVENT_MASK_BUTTON_RELEASE,
+		C.XCB_EVENT_MASK_ENTER_WINDOW,
+		C.XCB_EVENT_MASK_LEAVE_WINDOW,
+		C.XCB_EVENT_MASK_POINTER_MOTION,
+		C.XCB_EVENT_MASK_POINTER_MOTION_HINT,
+		C.XCB_EVENT_MASK_BUTTON_1_MOTION,
+		C.XCB_EVENT_MASK_BUTTON_2_MOTION,
+		C.XCB_EVENT_MASK_BUTTON_3_MOTION,
+		C.XCB_EVENT_MASK_BUTTON_4_MOTION,
+		C.XCB_EVENT_MASK_BUTTON_5_MOTION,
+		C.XCB_EVENT_MASK_BUTTON_MOTION,
+		C.XCB_EVENT_MASK_KEYMAP_STATE,
+		C.XCB_EVENT_MASK_EXPOSURE,
+		C.XCB_EVENT_MASK_VISIBILITY_CHANGE,
+		C.XCB_EVENT_MASK_STRUCTURE_NOTIFY,
+		C.XCB_EVENT_MASK_RESIZE_REDIRECT,
+		C.XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY,
+		C.XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT,
+		C.XCB_EVENT_MASK_FOCUS_CHANGE,
+		C.XCB_EVENT_MASK_PROPERTY_CHANGE,
+		C.XCB_EVENT_MASK_COLOR_MAP_CHANGE,
+		C.XCB_EVENT_MASK_OWNER_GRAB_BUTTON
+	))
 
 	local parent = t.parent and t.parent.backend.win or screen.root
 
-	C.xcb_create_window_checked(
-		c,
-		C.XCB_COPY_FROM_PARENT,          -- depth
-		self.win,                        -- window id
-		parent,                          -- parent window
-		0, 0,                            -- x, y (ignored)
-		t.w, t.h,
-		0,                               -- border width (ignored)
-		C.XCB_WINDOW_CLASS_INPUT_OUTPUT, -- class
-		screen.root_visual,              -- visual
-		mask, val)                       -- event mask and value
+	--default depth and visual
+	local depth = C.XCB_COPY_FROM_PARENT
+	local visual = screen.root_visual
 
+	--check if screen has a 32bit depth visual and if it does,
+	--create a colormap for it and add it to the window values array.
+	--this allows us to create a 32bit-depth window (i.e. with alpha).
+	for d in depths(screen) do
+		if d.depth == 32 then
+			for v in visuals(d) do
+				visual = v.visual_id
+				depth = 32
+				local colormap = C.xcb_generate_id(c)
+				C.xcb_create_colormap(c, C.XCB_COLORMAP_ALLOC_NONE, colormap, parent, visual)
+				addvalue(C.XCB_CW_COLORMAP, colormap)
+				break
+			end
+			break
+		end
+	end
+
+	self.win = C.xcb_generate_id(c)
+
+	C.xcb_create_window(
+		c, depth, self.win, parent,
+		0, 0, --x, y (ignored, set later)
+		t.w, t.h,
+		0, --border width (ignored)
+		C.XCB_WINDOW_CLASS_INPUT_OUTPUT, --class
+		visual, mask, values)
+
+	--declare the X protocols that the window supports.
 	set_atom_map_prop(self.win, 'WM_PROTOCOLS', {
 		WM_DELETE_WINDOW = true, --don't close the connection when a window is closed
 		WM_TAKE_FOCUS = true,    --allow focusing the window programatically
 		_NET_WM_PING = true,     --respond to ping events
 	})
 
+	--set pid for _NET_WM_PING protocol to allow the user to kill a non-responsive process.
+	set_cardinal_prop(self.win, '_NET_WM_PID', getpid())
+
 	if t.title then
 		self:set_title(t.title)
+	end
+
+	if t.frame == 'toolbox' then
+		set_atom_prop(self.win, '_NET_WM_WINDOW_TYPE', '_NET_WM_WINDOW_TYPE_TOOLBAR')
 	end
 
 	if t.visible then
@@ -471,16 +553,22 @@ function window:new(app, frontend, t)
 	--NOTE: setting the window's position only works after the window is mapped.
 	if t.x or t.y then
 		local xy = ffi.new('int32_t[2]', t.x, t.y)
-		C.xcb_configure_window_checked(c, self.win,
+		C.xcb_configure_window(c, self.win,
 			bit.bor(C.XCB_CONFIG_WINDOW_X, C.XCB_CONFIG_WINDOW_Y), xy)
 	end
+
+	set_atom_map_prop(self.win, '_NET_WM_STATE', {
+		_NET_WM_STATE_ABOVE          = t.topmost or nil,
+		_NET_WM_STATE_MAXIMIZED_HORZ = t.maximized or nil,
+		_NET_WM_STATE_MAXIMIZED_VERT = t.maximized or nil,
+		_NET_WM_STATE_FULLSCREEN     = t.fullscreen or nil,
+	})
 
 	C.xcb_flush(c)
 
 	setwin(self.win, self)
 
 	--[[
-	local framed = t.frame == 'normal' or t.frame == 'toolbox'
 	self._layered = t.frame == 'none-transparent'
 
 	self.win = Window{
@@ -488,17 +576,14 @@ function window:new(app, frontend, t)
 		min_ch = t.min_ch,
 		max_cw = t.max_cw,
 		max_ch = t.max_ch,
-		maximized = t.maximized,
 		enabled = t.enabled,
 		--frame
 		border = framed,
 		frame = framed,
 		window_edge = framed, --must be off for frameless windows!
 		layered = self._layered,
-		tool_window = t.frame == 'toolbox',
 		owner = t.parent and t.parent.backend.win,
 		--behavior
-		topmost = t.topmost,
 		minimize_button = t.minimizable,
 		maximize_button = t.maximizable,
 		noclose = not t.closeable,
@@ -514,19 +599,27 @@ end
 
 --closing --------------------------------------------------------------------
 
+function window:_ping_event(e)
+	local reply = ffi.new('xcb_client_message_event_t', e[0])
+	reply.response_type = C.XCB_CLIENT_MESSAGE
+	reply.window = screen.root
+	send_client_message_to_root(reply) --pong!
+end
+
 ev[C.XCB_CLIENT_MESSAGE] = function(e)
 	e = cast('xcb_client_message_event_t*', e)
-
-	if e.type == atom'NW_STOP' then --stop app loop
-		return 'stop'
-	end
-
 	local self = getwin(e.window)
-	if not self then return end
-
-	if e.data.data32[0] == atom'WM_DELETE_WINDOW' then --close window
-		if self.frontend:_backend_closing() then
-			self:forceclose()
+	if not self then return end --not for us
+	local v = e.data.data32[0]
+	if e.type == atom'WM_PROTOCOLS' then
+		if v == atom'WM_DELETE_WINDOW' then
+			if self.frontend:_backend_closing() then
+				self:forceclose()
+			end
+		elseif v == atom'WM_TAKE_FOCUS' then
+			--ha?
+		elseif v == atom'_NET_WM_PING' then
+			self:_ping_event(e)
 		end
 	end
 end
@@ -588,16 +681,12 @@ end
 --state/minimizing -----------------------------------------------------------
 
 function window:minimized()
-	local hints = get_wm_hints(self.win)
-	return bit.band(hints.initial_state, C.XCB_ICCCM_WM_STATE_ICONIC) ~= 0
+	local hints = get_wm_hints(self.win) --TODO: returns nil
+	return hints and bit.band(hints.initial_state, C.XCB_ICCCM_WM_STATE_ICONIC) ~= 0
 end
 
 function window:minimize()
 	minimize(self.win)
-	--local hints = ffi.new'xcb_icccm_wm_hints_t'
-	--hints.initial_state = bit.bor(hints.initial_state, C.XCB_ICCCM_WM_STATE_ICONIC)
-	--C.xcb_icccm_wm_hints_set_iconic(hints)
-	--set_wm_hints(self.win, hints)
 end
 
 --state/maximizing -----------------------------------------------------------
@@ -684,11 +773,12 @@ end
 function window:get_normal_rect()
 	local cookie = C.xcb_get_window_attributes(c, self.win)
 	local reply = C.xcb_get_window_attributes_reply(c, cookie, nil)
+	local visual = visual(reply.visual)
 	local x, y, w, h =
-		reply.visual.x,
-		reply.visual.y,
-		reply.visual.width,
-		reply.visual.height
+		visual.x,
+		visual.y,
+		visual.width,
+		visual.height
 	free(reply)
 	return x, y, w, h
 end
@@ -908,7 +998,122 @@ end
 
 --bitmaps --------------------------------------------------------------------
 
---??
+--[[
+Things you need to know:
+- in X11 bitmaps are called pixmaps and 1-bit bitmaps are called bitmaps.
+- pixmaps are server-side bitmaps while images are client-side bitmaps.
+- you can't create a xcb_drawable_t, that's just an abstraction: instead,
+  any xcb_pixmap_t or xcb_window_t can be used where a xcb_drawable_t
+  is expected (they're all int32 ids btw).
+- the default screen visual has 24 depth, but a screen can have many visuals.
+  if it has a 32 depth visual, then we can make windows with alpha.
+- a window with alpha needs XCB_CW_COLORMAP which needs XCB_CW_BORDER_PIXEL.
+]]
+
+local function make_bitmap(w, h, win)
+
+	local stride = w * 4
+	local size = stride * h
+
+	local bitmap = {
+		w      = w,
+		h      = h,
+		stride = stride,
+		size   = size,
+		format = 'bgra8',
+	}
+
+	local paint, free
+
+	if false and xcb_has_shm() then
+
+		local shmid = shm.shmget(shm.IPC_PRIVATE, size, bit.bor(shm.IPC_CREAT, 0x1ff))
+		local data  = shm.shmat(shmid, 0, 0)
+
+		local shmseg  = C.xcb_generate_id(c)
+		C.xcb_shm_attach(c, shmseg, shmid, 0)
+		shm.shmctl(shmid, shm.IPC_RMID, 0)
+
+		local pix = C.xcb_generate_id(c)
+
+		C.xcb_shm_create_pixmap(c, pix, self.win, w, h, depth_id, shmseg, 0)
+
+		C.xcb_flush(c)
+
+		bitmap.data = data
+
+		function paint()
+			C.xcb_copy_area(c, pix, win, gcontext, 0, 0, 0, 0, w, h)
+			C.xcb_flush(c)
+		end
+
+		function free()
+			C.xcb_shm_detach(c, shmseg)
+			shm.shmdt(data)
+			C.xcb_free_pixmap(c, pix)
+		end
+
+	else
+
+		local pix = C.xcb_generate_id(c)
+		C.xcb_create_pixmap(c, 32, pix, win, w, h)
+
+		local data = glue.malloc('char', size)
+		bitmap.data = data
+
+		local gc = C.xcb_generate_id(c)
+		C.xcb_create_gc(c, gc, win, 0, 0)
+
+		function paint()
+			print(w, h)
+			C.xcb_put_image(c, C.XCB_IMAGE_FORMAT_Z_PIXMAP,
+				win, gc, w, h, 0, 0, 0, 32, size, data)
+		end
+
+		function free()
+			C.xcb_free_gc(c, gc)
+			C.xcb_free_pixmap_checked(c, pix)
+			glue.free(data)
+			bitmap.data = nil
+		end
+
+	end
+
+	return bitmap, free, paint
+end
+
+--a dynamic bitmap is an API that creates a new bitmap everytime its size
+--changes. user supplies the :size() function, :get() gets the bitmap,
+--and :freeing(bitmap) is triggered before the bitmap is freed.
+local function dynbitmap(api, win)
+
+	api = api or {}
+
+	local w, h, bitmap, free, paint
+
+	function api:get()
+		local w1, h1 = api:size()
+		if w1 ~= w or h1 ~= h then
+			self:free()
+			bitmap, free, paint = make_bitmap(w1, h1, win)
+			w, h = w1, h1
+		end
+		return bitmap
+	end
+
+	function api:free()
+		if not free then return end
+		self:freeing(bitmap)
+		free()
+	end
+
+	function api:paint()
+		if not paint then return end
+		paint()
+	end
+
+	return api
+end
 
 --rendering ------------------------------------------------------------------
 
@@ -917,19 +1122,34 @@ ev[C.XCB_EXPOSE] = function(e)
 	if e.count ~= 0 then return end --subregion rendering
 	local self = getwin(e.window)
 	if not self then return end
-
 	self:invalidate()
 end
 
 function window:bitmap()
-	if not self._bitmap then
-		--
+	if not self._dynbitmap then
+		self._dynbitmap = dynbitmap({
+			size = function()
+				return self.frontend:size()
+			end,
+			freeing = function(_, bitmap)
+				self.frontend:_backend_free_bitmap(bitmap)
+			end,
+		}, self.win)
 	end
-	return self._bitmap
+	return self._dynbitmap:get()
 end
 
 function window:invalidate()
+	--let the user request the bitmap and draw on it.
 	self.frontend:_backend_repaint()
+	if not self._dynbitmap then return end
+	self._dynbitmap:paint()
+end
+
+function window:_free_bitmap()
+	 if not self._dynbitmap then return end
+	 self._dynbitmap:free()
+	 self._dynbitmap = nil
 end
 
 --views ----------------------------------------------------------------------

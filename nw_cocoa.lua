@@ -1778,16 +1778,14 @@ local function dynbitmap(api)
 	end
 
 	function api:free()
-		if free then
-			self:freeing(bitmap)
-			free()
-		end
+		if not free then return end
+		self:freeing(bitmap)
+		free()
 	end
 
 	function api:paint()
-		if paint then
-			paint()
-		end
+		if not paint then return end
+		paint()
 	end
 
 	return api
@@ -1832,10 +1830,8 @@ function window:_init_content_view()
 	self.nsview = RepaintView:alloc():initWithFrame(bounds)
 
 	function self.nsview.nw_repaint()
-
 		--let the user request the bitmap and draw on it.
 		self.frontend:_backend_repaint()
-
 		--paint the bitmap on the current graphics context.
 		self._dynbitmap:paint()
 	end
