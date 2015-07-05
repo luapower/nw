@@ -2,15 +2,21 @@
 --native widgets - XCB backend.
 --Written by Cosmin Apreutesei. Public domain.
 
+if not ... then require'nw_test'; return end
+
 local ffi = require'ffi'
 local bit = require'bit'
 local glue = require'glue'
 local box2d = require'box2d'
 local xcb = require'xcb'
+require'xcb_shm_h'
 require'xcb_icccm_h' --wm_hints (minimization)
 local time = require'time'
 local heap = require'heap'
 local pp = require'pp'
+local shm = require'shm'
+local ok, xcbshm = pcall(ffi.load, 'xcb-shm.so.0')
+xcbshm = ok and xcbshm
 
 local C = xcb.C
 local cast = ffi.cast
@@ -43,7 +49,9 @@ local function atom_resolver()
 	local resolve = glue.memoize(function(s)
 		local cookie = C.xcb_intern_atom(c, 0, #s, s)
 		local reply = C.xcb_intern_atom_reply(c, cookie, nil)
-		return reply.atom
+		local atom = reply.atom
+		free(reply)
+		return atom
 	end)
 	return function(s)
 		if type(s) ~= 'string' then return s end --pass through
@@ -61,9 +69,28 @@ local function atom_list(...)
 	return atoms, n
 end
 
+local atom_name = glue.memoize(function(atom)
+	local cookie = C.xcb_get_atom_name(c, atom)
+	local reply = C.xcb_get_atom_name_reply(c, cookie, nil)
+	if reply == nil then return end
+	local n = C.xcb_get_atom_name_name_length(reply)
+	local s = C.xcb_get_atom_name_name(reply)
+	local s = ffi.string(s, n)
+	free(reply)
+	return s
+end)
+
 local function list_props(win)
 	local cookie = C.xcb_list_properties(c, win)
 	local reply = C.xcb_list_properties_reply(c, cookie, nil)
+	local n = C.xcb_list_properties_atoms_length(reply)
+	local atomp = C.xcb_list_properties_atoms(reply)
+	local t = {}
+	for i=1,n do
+		t[i] = atom_name(atomp[i-1])
+	end
+	free(reply)
+	return t
 end
 
 local function delete_prop(win, prop)
@@ -79,16 +106,20 @@ local function set_prop(win, prop, type, val, sz)
 		atom(prop), type, format, sz, val)
 end
 
+local function pass(reply, ...)
+	free(reply)
+	return ...
+end
 local function get_prop(win, prop, type, decode, sz)
+	local format = prop_formats[type] or 32
 	local cookie = C.xcb_get_property(c, 0, win, atom(prop), type, 0, sz or 0)
 	local reply = C.xcb_get_property_reply(c, cookie, nil)
 	if not reply then return end
-	if reply.format == 32 and reply.type == type then
-		local len = C.xcb_get_property_value_length(reply)
+	if reply.format == format and reply.type == type then
 		local val = C.xcb_get_property_value(reply)
-		local ret = decode(val, len)
-		free(reply)
-		return ret
+		if val == nil then return end
+		local len = C.xcb_get_property_value_length(reply)
+		return pass(reply, decode(val, len))
 	else
 		free(reply)
 	end
@@ -140,24 +171,44 @@ local function get_window_prop(win, prop)
 	return get_prop(win, prop, C.XCB_ATOM_WINDOW, decode_window, 1)
 end
 
+local function decode_window_list(val, len)
+	val = ffi.cast('xcb_window_t*', val)
+	local t = {}
+	for i=1,len do
+		t[i] = val[i-1]
+	end
+	return t
+end
+local function get_window_list_prop(win, prop)
+	return get_prop(win, prop, C.XCB_ATOM_WINDOW, decode_window_list, 1024)
+end
+
 local function client_message_event(win, type, format)
 	local e = ffi.new'xcb_client_message_event_t'
 	e.window = win
 	e.response_type = C.XCB_CLIENT_MESSAGE
 	e.type = atom(type)
-	e.format = format
+	e.format = format or 32
 	return e
 end
 
-local function atom_list_event(win, type, ...)
-	local e = client_message_event(win, type, 32)
+local function list_event(win, type, datatype, val_func, ...)
+	local e = client_message_event(win, type)
 	for i = 1,5 do
 		local v = select(i, ...)
 		if v then
-			e.data.data32[i-1] = atom(v)
+			e.data[datatype][i-1] = val_func(v)
 		end
 	end
 	return e
+end
+
+local function int32_list_event(win, type, ...)
+	return list_event(win, type, 'data32', glue.pass)
+end
+
+local function atom_list_event(win, type, ...)
+	return list_event(win, type, 'data32', atom)
 end
 
 local function send_client_message(win, e, propagate, mask)
@@ -172,10 +223,10 @@ local function send_client_message_to_root(e)
 end
 
 local function activate_window(win, focused_win)
-	local e = client_message_event(win, '_NET_ACTIVE_WINDOW', 32)
-	e.data.data32[0] = 1 --message comes from an app
-	e.data.data32[1] = 0 --TODO: current time?
-	e.data.data32[2] = focused_win or C.XCB_NONE
+	local e = int32_list_event(win, '_NET_ACTIVE_WINDOW',
+		1, --message comes from an app
+		0, --timestamp
+		focused_win or C.XCB_NONE)
 	send_client_message_to_root(e)
 end
 
@@ -189,18 +240,19 @@ local function get_netwm_states(win)
 end
 
 local function minimize(win)
-	local e = client_message_event(win, 'WM_CHANGE_STATE', 32)
+	local e = client_message_event(win, 'WM_CHANGE_STATE')
 	e.data.data32[0] = C.XCB_ICCCM_WM_STATE_ICONIC
 	send_client_message_to_root(e)
 end
 
-local function xcb_iterator(iter_func, next_func)
+local function xcb_iterator(iter_func, next_func, val_func)
+	val_func = val_func or glue.pass
 	local function next(state, last)
 		if last then
 			next_func(state)
 		end
 		if state.rem == 0 then return end
-		return state.data
+		return val_func(state.data)
 	end
 	return function(...)
 		local state = iter_func(...)
@@ -208,17 +260,43 @@ local function xcb_iterator(iter_func, next_func)
 	end
 end
 
-local function decode_hints(val, len)
+local function decode_wm_hints(val, len)
 	return ffi.new('xcb_icccm_wm_hints_t', ffi.cast('xcb_icccm_wm_hints_t*', val)[0])
 end
 local function get_wm_hints(win)
 	return get_prop(win, C.XCB_ATOM_WM_HINTS, C.XCB_ATOM_WM_HINTS,
-		decode_hints, C.XCB_ICCCM_NUM_WM_HINTS_ELEMENTS)
+		decode_wm_hints, C.XCB_ICCCM_NUM_WM_HINTS_ELEMENTS)
 end
 
 local function set_wm_hints(win, hints)
 	set_prop(win, C.XCB_ATOM_WM_HINTS, C.XCB_ATOM_WM_HINTS, hints,
 		C.XCB_ICCCM_NUM_WM_HINTS_ELEMENTS)
+end
+
+local function decode_wm_size_hints(val, len)
+	return ffi.new('xcb_icccm_wm_size_hints_t', ffi.cast('xcb_icccm_wm_size_hints_t*', val)[0])
+end
+local function get_wm_normal_hints(win)
+	return get_prop(win, C.XCB_ATOM_WM_NORMAL_HINTS, C.XCB_ATOM_WM_SIZE_HINTS,
+		decode_wm_size_hints, C.XCB_ICCCM_NUM_WM_SIZE_HINTS_ELEMENTS)
+end
+
+local function set_wm_normal_hints(win, hints)
+	return set_prop(win, C.XCB_ATOM_WM_NORMAL_HINTS, C.XCB_ATOM_WM_SIZE_HINTS,
+		hints, C.XCB_ICCCM_NUM_WM_SIZE_HINTS_ELEMENTS)
+end
+
+local function str_tostring(str)
+	local s = C.xcb_str_name(str)
+	return ffi.string(s, str.name_len)
+end
+local extensions_iter = xcb_iterator(
+	C.xcb_list_extensions_names_iterator, C.xcb_str_next, str_tostring)
+local function xcb_extensions()
+	local cookie = C.xcb_list_extensions(c)
+	local reply = C.xcb_list_extensions_reply(c, cookie, nil)
+	--TODO: free reply
+	return extensions_iter(reply)
 end
 
 --TODO: always returns one screen
@@ -260,9 +338,89 @@ local function visual(visual_id, screen_)
 end
 
 local function xcb_has_shm()
-	local cookie = C.xcb_shm_query_version(c)
-	local reply = C.xcb_shm_query_version_reply(c, cookie, nil)
-	return reply ~= nil and reply.shared_pixmaps ~= 0
+	if not xcbshm then return end
+	local cookie = xcbshm.xcb_shm_query_version(c)
+	local reply = xcbshm.xcb_shm_query_version_reply(c, cookie, nil)
+	local ret = reply ~= nil and reply.shared_pixmaps ~= 0
+	free(reply)
+	return ret
+end
+
+local function query_tree(win)
+	local cookie = C.xcb_query_tree(c, win)
+	local reply = C.xcb_query_tree_reply(c, cookie, nil)
+	local winp = C.xcb_query_tree_children(reply)
+	local n = C.xcb_query_tree_children_length(reply)
+	local t = {}
+	for i=1,n do
+		t[i] = winp[i-1]
+	end
+	local t = {
+		root = reply.root,
+		parent = reply.parent ~= 0 and reply.parent or nil,
+		children = t,
+	}
+	free(reply)
+	return t
+end
+
+local xcb_net_supported_map = glue.memoize(function()
+	return get_atom_map_prop(screen.root, '_NET_SUPPORTED')
+end)
+
+local function xcb_net_supported(s)
+	return xcb_net_supported_map()[atom(s)]
+end
+
+--request frame extents estimation from the WM
+local function request_frame_extents(win)
+	local e = client_message_event(win, atom'_NET_REQUEST_FRAME_EXTENTS')
+	send_client_message_to_root(e)
+end
+
+local function decode_extents(val)
+	val = cast('int32_t*', val)
+	return val[0], val[2], val[1], val[3] --left, top, right, bottom
+end
+local function xcb_frame_extents(win)
+	if not xcb_net_supported'_NET_REQUEST_FRAME_EXTENTS' then
+		return 0, 0, 0, 0
+	end
+	return get_prop(win, atom'_NET_FRAME_EXTENTS', C.XCB_ATOM_CARDINAL, decode_extents, 4)
+end
+
+local function xcb_translate_coords(src_win, dst_win, x, y)
+	local cookie = C.xcb_translate_coordinates(c, src_win, dst_win, x, y)
+	local reply = C.xcb_translate_coordinates_reply(c, cookie, nil)
+	assert(reply ~= nil)
+	local x, y = reply.dst_x, reply.dst_y
+	free(reply)
+	return x, y
+end
+
+--check if a given screen has a visual for a target depth.
+local function xcb_find_visual(screen, depth)
+	for d in depths(screen) do
+		if d.depth == depth then
+			for v in visuals(d) do
+				if v.bits_per_rgb_value == 8 and v.blue_mask == 0xff then --BGRA8
+					return depth, v.visual_id
+				end
+			end
+		end
+	end
+end
+
+local function xcb_change_pos(win, cx, cy)
+	local xy = ffi.new('int32_t[2]', cx, cy)
+	C.xcb_configure_window(c, win,
+		bit.bor(C.XCB_CONFIG_WINDOW_X, C.XCB_CONFIG_WINDOW_Y), xy)
+end
+
+local function xcb_change_size(win, cw, ch)
+	local wh = ffi.new('int32_t[2]', cw, ch)
+	C.xcb_configure_window(c, self.win,
+		bit.bor(C.XCB_CONFIG_WINDOW_WIDTH, C.XCB_CONFIG_WINDOW_HEIGHT), wh)
 end
 
 local function xcb_connect(displayname)
@@ -300,27 +458,89 @@ function app:new(frontend)
 	return self
 end
 
+--check an X extension or return all extensions.
+local extensions = glue.memoize(function()
+	local t = {}
+	for x in xcb_extensions() do
+		t[x:lower():gsub('[- ]', '_')] = true
+	end
+	return t
+end)
+function app:ext(ext)
+	if ext then
+		return extensions()[ext:lower():gsub('[- ]', '_')]
+	end
+	return extensions()
+end
+
+function app:virtual_roots()
+	return get_window_list_prop(screen.root, '_NET_VIRTUAL_ROOTS')
+end
+
+local function atom_names(t)
+	local dt = {}
+	for atom in pairs(t) do
+		local name = atom_name(atom)
+		if name then
+			dt[name] = atom
+		end
+	end
+	return dt
+end
+
 --message loop ---------------------------------------------------------------
 
 local ev = {} --{xcb_event_code = event_handler}
 
-local function check_errors(e)
-	if e.response_type ~= 0 then return end --not an error
-	local code = e.error_code
-	free(e)
-	error('XCB error: '..code)
+local function check_event(e)
+	if e == nil then return end
+	if e.response_type == 0 then
+		e = ffi.cast('xcb_generic_error_t*', e)
+		local code = e.error_code
+		free(e)
+		error('XCB error: '..code)
+	end
+	return e, bit.band(e.response_type, bit.bnot(0x80))
 end
 
-local peeked_event
+local function xcb_poll(e)
+	return check_event(C.xcb_poll_for_event(c))
+end
+
+local function xcb_wait(e)
+	return check_event(C.xcb_wait_for_event(c))
+end
+
+local peeked_event, peeked_etype
 
 local function peek_event()
 	if not peeked_event then
-		local e = C.xcb_poll_for_event(c)
-		if e == nil then return end
-		check_errors(e)
-		peeked_event = e
+		peeked_event, peeked_etype = xcb_poll()
 	end
-	return peeked_event
+	return peeked_event, peeked_etype
+end
+
+function poll_event(wait)
+	local e, etype
+	if peeked_event then
+		e, etype = peeked_event, peeked_etype
+		peeked_event, peeked_etype = nil
+	else
+		local poll_or_wait = wait and xcb_wait or xcb_poll
+		e, etype = poll_or_wait()
+		if not e then return end
+	end
+	--print('EVENT', etype)
+	local f = ev[etype]
+	if f then
+		local ok, ret = xpcall(f, debug.traceback, e)
+		if not ok then
+			free(e)
+			error(ret, 2)
+		end
+	end
+	free(e)
+	return true
 end
 
 --how much to wait before polling again.
@@ -338,61 +558,15 @@ function app:_sleep()
 end
 
 function app:run()
-	local e
-	while true do
+	local e, etype
+	while not self._stop do
 		last_poll_time = time.clock()
-		while true do
-			if peeked_event then
-				e, peeked_event = peeked_event, nil
-			else
-				e = C.xcb_poll_for_event(c)
-				if e == nil then
-					self:_check_timers()
-					self:_sleep()
-					break
-				else
-					check_errors(e)
-				end
-			end
-			local v = bit.band(e.response_type, bit.bnot(0x80))
-			local f = ev[v]
-			if f then
-				local ok, ret = xpcall(f, debug.traceback, e)
-				if not ok then
-					free(e)
-					error(ret, 2)
-				end
-			end
-			free(e)
-			if self._stop then
-				return --stop the loop
-			end
+		if not poll_event() then
+			self:_check_timers()
+			self:_sleep()
 		end
 	end
 end
-
---[[
-function app:_send_custom_message(...)
-	local win, winobj = nextwin() --any window will do
-	local dummy_win
-	if not win or winobj.frontend:dead() then
-		--create a dummy window so we can send a message to it, which is
-		--the only way to unblock the event loop.
-		win = C.xcb_generate_id(c)
-		check(C.xcb_create_window_checked(c, C.XCB_COPY_FROM_PARENT, win,
-			screen.root, 0, 0, 1, 1, 0,
-			C.XCB_WINDOW_CLASS_INPUT_ONLY,
-			screen.root_visual, 0, nil))
-		dummy_win = true
-	end
-	--send a custom "stop loop" event to any window
-	send_client_message(win, atom_list_event(win, ...))
-	if dummy_win then
-		C.xcb_destroy_window(c, win)
-	end
-	C.xcb_flush(c)
-end
-]]
 
 function app:stop()
 	self._stop = true
@@ -486,9 +660,7 @@ function window:new(app, frontend, t)
 		C.XCB_EVENT_MASK_EXPOSURE,
 		C.XCB_EVENT_MASK_VISIBILITY_CHANGE,
 		C.XCB_EVENT_MASK_STRUCTURE_NOTIFY,
-		C.XCB_EVENT_MASK_RESIZE_REDIRECT,
 		C.XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY,
-		C.XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT,
 		C.XCB_EVENT_MASK_FOCUS_CHANGE,
 		C.XCB_EVENT_MASK_PROPERTY_CHANGE,
 		C.XCB_EVENT_MASK_COLOR_MAP_CHANGE,
@@ -497,33 +669,27 @@ function window:new(app, frontend, t)
 
 	local parent = t.parent and t.parent.backend.win or screen.root
 
-	--default depth and visual
-	local depth = C.XCB_COPY_FROM_PARENT
-	local visual = screen.root_visual
-
-	--check if screen has a 32bit depth visual and if it does,
-	--create a colormap for it and add it to the window values array.
-	--this allows us to create a 32bit-depth window (i.e. with alpha).
-	for d in depths(screen) do
-		if d.depth == 32 then
-			for v in visuals(d) do
-				visual = v.visual_id
-				depth = 32
-				local colormap = C.xcb_generate_id(c)
-				C.xcb_create_colormap(c, C.XCB_COLORMAP_ALLOC_NONE, colormap, parent, visual)
-				addvalue(C.XCB_CW_COLORMAP, colormap)
-				break
-			end
-			break
-		end
+	local depth, visual = xcb_find_visual(screen, 32)
+	if not depth then
+		--settle for the default depth and visual
+		depth = C.XCB_COPY_FROM_PARENT
+		visual = screen.root_visual
+	else
+		--create a colormap for the visual and add it to the window values array.
+		--this allows us to create a 32bit-depth window (i.e. with alpha).
+		local colormap = C.xcb_generate_id(c)
+		C.xcb_create_colormap(c, C.XCB_COLORMAP_ALLOC_NONE, colormap, parent, visual)
+		addvalue(C.XCB_CW_COLORMAP, colormap)
 	end
 
 	self.win = C.xcb_generate_id(c)
 
+	local cx, cy, cw, ch = app:frame_to_client(t.frame, t.x or 0, t.y or 0, t.w, t.h)
+
 	C.xcb_create_window(
 		c, depth, self.win, parent,
-		0, 0, --x, y (ignored, set later)
-		t.w, t.h,
+		0, 0, --x, y (ignored by WM, set later)
+		cw, ch,
 		0, --border width (ignored)
 		C.XCB_WINDOW_CLASS_INPUT_OUTPUT, --class
 		visual, mask, values)
@@ -546,15 +712,57 @@ function window:new(app, frontend, t)
 		set_atom_prop(self.win, '_NET_WM_WINDOW_TYPE', '_NET_WM_WINDOW_TYPE_TOOLBAR')
 	end
 
+	--[[
+	self._minimizable = opt.minimizable
+	self._maximizable = opt.maximizable
+	self._closeable = opt.closeable
+	self._resizeable = opt.resizeable
+	self._fullscreenable = opt.fullscreenable
+	self._activable = opt.activable
+	]]
+
+	set_atom_map_prop(self.win, '_NET_WM_ALLOWED_ACTIONS', {
+		_NET_WM_ACTION_MOVE = true,
+		_NET_WM_ACTION_RESIZE = t.resizeable,
+		_NET_WM_ACTION_MINIMIZE = t.minimizable,
+		_NET_WM_ACTION_MAXIMIZE_HORZ = t.maximizable,
+		_NET_WM_ACTION_MAXIMIZE_VERT = t.maximizable,
+		_NET_WM_ACTION_FULLSCREEN = t.fullscreenable,
+		_NET_WM_ACTION_CLOSE = t.closeable,
+	})
+
+	if t.min_cw or t.min_ch or t.max_cw or t.max_ch or not t.resizeable then
+		local hints = get_wm_normal_hints(self.win)
+		local min_cw, min_ch, max_cw, max_ch
+		if not t.resizeable then
+			--this is how we tell
+			min_cw, min_ch = w, h
+			max_cw, max_ch = w, h
+		else
+			min_cw, min_ch = t.min_cw, t.min_ch
+			max_cw, max_ch = t.max_cw, t.max_ch
+		end
+		hints.flags = 0
+		if min_cw or min_ch then
+			hints.flags = bit.bor(hints.flags, C.XCB_ICCCM_SIZE_HINT_P_MIN_SIZE)
+			hints.min_width  = min_cw or 0
+			hints.min_height = min_ch or 0
+		end
+		if max_cw or max_ch then
+			hints.flags = bit.bor(hints.flags, C.XCB_ICCCM_SIZE_HINT_P_MAX_SIZE)
+			hints.max_width  = max_cw or 2^30 --arbitrary long number
+			hints.max_height = max_ch or 2^30
+		end
+		set_wm_normal_hints(self.win, hints)
+	end
+
 	if t.visible then
 		C.xcb_map_window(c, self.win)
 	end
 
 	--NOTE: setting the window's position only works after the window is mapped.
-	if t.x or t.y then
-		local xy = ffi.new('int32_t[2]', t.x, t.y)
-		C.xcb_configure_window(c, self.win,
-			bit.bor(C.XCB_CONFIG_WINDOW_X, C.XCB_CONFIG_WINDOW_Y), xy)
+	if t.x then
+		xcb_change_pos(self.win, t.x, t.y)
 	end
 
 	set_atom_map_prop(self.win, '_NET_WM_STATE', {
@@ -597,6 +805,22 @@ function window:new(app, frontend, t)
 	return self
 end
 
+function app:root_props()
+	return list_props(screen.root)
+end
+
+function app:root_query_tree()
+	return query_tree(screen.root)
+end
+
+function window:props()
+	return list_props(self.win)
+end
+
+function window:query_tree()
+	return query_tree(self.win)
+end
+
 --closing --------------------------------------------------------------------
 
 function window:_ping_event(e)
@@ -604,6 +828,7 @@ function window:_ping_event(e)
 	reply.response_type = C.XCB_CLIENT_MESSAGE
 	reply.window = screen.root
 	send_client_message_to_root(reply) --pong!
+	C.xcb_flush(c)
 end
 
 ev[C.XCB_CLIENT_MESSAGE] = function(e)
@@ -622,6 +847,25 @@ ev[C.XCB_CLIENT_MESSAGE] = function(e)
 			self:_ping_event(e)
 		end
 	end
+end
+
+ev[C.XCB_PROPERTY_NOTIFY] = function(e)
+	e = cast('xcb_property_notify_event_t*', e)
+	local self = getwin(e.window)
+	if not self then return end
+	if e.atom == atom'_NET_FRAME_EXTENTS' then
+	end
+end
+
+ev[C.XCB_CONFIGURE_NOTIFY] = function(e)
+	e = cast('xcb_configure_notify_event_t*', e)
+	local self = getwin(e.window)
+	if not self then return end
+	self.x = e.x
+	self.y = e.y
+	self.w = e.width
+	self.h = e.height
+	print('XCB_CONFIGURE_NOTIFY', self.x, self.y, self.w, self.h)
 end
 
 function window:forceclose()
@@ -687,6 +931,7 @@ end
 
 function window:minimize()
 	minimize(self.win)
+	C.xcb_flush(c)
 end
 
 --state/maximizing -----------------------------------------------------------
@@ -702,6 +947,7 @@ function window:maximize()
 	set_netwm_state(self.win, true,
 		'_NET_WM_STATE_MAXIMIZED_HORZ',
 		'_NET_WM_STATE_MAXIMIZED_VERT')
+	C.xcb_flush(c)
 end
 
 --state/restoring ------------------------------------------------------------
@@ -710,12 +956,14 @@ function window:restore()
 	set_netwm_state(self.win, false,
 		'_NET_WM_STATE_MAXIMIZED_HORZ',
 		'_NET_WM_STATE_MAXIMIZED_VERT')
+	C.xcb_flush(c)
 end
 
 function window:shownormal()
 	set_netwm_state(self.win, false,
 		'_NET_WM_STATE_MAXIMIZED_HORZ',
 		'_NET_WM_STATE_MAXIMIZED_VERT')
+	C.xcb_flush(c)
 end
 
 --state/changed event --------------------------------------------------------
@@ -730,10 +978,12 @@ end
 
 function window:enter_fullscreen()
 	set_netwm_state(self.win, true, '_NET_WM_STATE_FULLSCREEN')
+	C.xcb_flush(c)
 end
 
 function window:exit_fullscreen()
 	set_netwm_state(self.win, false, '_NET_WM_STATE_FULLSCREEN')
+	C.xcb_flush(c)
 end
 
 --state/enabled --------------------------------------------------------------
@@ -747,79 +997,131 @@ end
 --positioning/conversions ----------------------------------------------------
 
 function window:to_screen(x, y)
+	return xcb_translate_coords(self.win, screen.root, x, y)
 end
 
 function window:to_client(x, y)
+	return xcb_translate_coords(screen.root, self.win, x, y)
+end
+
+local function frame_extents(frame)
+
+	--create a dummy window
+	local depth = C.XCB_COPY_FROM_PARENT
+	local visual = screen.root_visual
+	local win = C.xcb_generate_id(c)
+	C.xcb_create_window(
+		c, depth, win, screen.root,
+		0, 0, --x, y (ignored)
+		200, 200,
+		0, --border width (ignored)
+		C.XCB_WINDOW_CLASS_INPUT_OUTPUT, --class
+		visual, 0, nil)
+
+	--set its frame
+	if frame == 'toolbox' then
+		set_atom_prop(win, '_NET_WM_WINDOW_TYPE', '_NET_WM_WINDOW_TYPE_TOOLBAR')
+	end
+
+	--request frame extents estimation from the WM
+	request_frame_extents(win)
+	--the WM should have set the frame extents
+	local w1, h1, w2, h2 = xcb_frame_extents(win)
+
+	--destroy the window
+	C.xcb_destroy_window(c, win)
+	C.xcb_flush(c)
+
+	--compute/return the frame rectangle
+	return {w1, h1, w2, h2}
+end
+
+local frame_extents = glue.memoize(frame_extents)
+
+local frame_extents = function(frame)
+	return unpack(frame_extents(frame))
+end
+
+local function frame_rect(x, y, w, h, w1, h1, w2, h2)
+	return x - w1, y - h1, w + w1 + w2, h + h1 + h2
+end
+
+local function unframe_rect(x, y, w, h, w1, h1, w2, h2)
+	return frame_rect(x, y, w, h, -w1, -h1, -w2, -h2)
 end
 
 function app:client_to_frame(frame, x, y, w, h)
+	return frame_rect(x, y, w, h, frame_extents(frame))
 end
 
 function app:frame_to_client(frame, x, y, w, h)
+	local fx, fy, fw, fh = self:client_to_frame(frame, 0, 0, 200, 200)
+	local cx = x - fx
+	local cy = y - fy
+	local cw = w - (fw - 200)
+	local ch = h - (fh - 200)
+	return cx, cy, cw, ch
 end
 
 --positioning/rectangles -----------------------------------------------------
 
-local function translate(c, src_win, dst_win, x, y)
-	local cookie = C.xcb_translate_coordinates(c, src_win, dst_win, x, y)
-	local reply = C.xcb_translate_coordinates_reply(c, cookie, nil)
-	local x, y =
-		reply.dst_x,
-		reply.dst_y
-	free(reply)
-	return x, y
+function window:_frame_extents()
+	return xcb_frame_extents(self.win)
 end
 
 function window:get_normal_rect()
-	local cookie = C.xcb_get_window_attributes(c, self.win)
-	local reply = C.xcb_get_window_attributes_reply(c, cookie, nil)
-	local visual = visual(reply.visual)
-	local x, y, w, h =
-		visual.x,
-		visual.y,
-		visual.width,
-		visual.height
-	free(reply)
-	return x, y, w, h
+	return self:get_frame_rect()
 end
 
 function window:set_normal_rect(x, y, w, h)
- 	local xy = ffi.new('uint32_t[2]', x, y)
- 	local wh = ffi.new('uint32_t[2]', w, h)
-	C.xcb_configure_window_checked(c, self.win,
-		bit.bor(C.XCB_CONFIG_WINDOW_X, C.XCB_CONFIG_WINDOW_Y), xy)
-	C.xcb_configure_window_checked(c, self.win,
-		bit.bor(C.XCB_CONFIG_WINDOW_WIDTH, C.XCB_CONFIG_WINDOW_HEIGHT), wh)
-	C.xcb_flush(c)
+	self:set_frame_rect(x, y, w, h)
 end
 
 function window:get_frame_rect()
-	local x, y, w, h = self:get_normal_rect()
-	x, y = translate(c, self.win, 0, x, y)
-	return x, y, w, h
+	local x, y = self:to_screen(0, 0)
+	local w, h = self:get_size()
+	return frame_rect(x, y, w, h, self:_frame_extents())
 end
 
 function window:set_frame_rect(x, y, w, h)
-
+	x, y, w, h = unframe_rect(x, y, w, h, self:_frame_extents())
+	xcb_change_pos(x, y)
+	xcb_change_size(w, h)
+	C.xcb_flush(c)
 end
 
 function window:get_size()
-	local _, _, w, h = self:get_frame_rect()
+	local cookie = C.xcb_get_geometry(c, self.win)
+	local reply = C.xcb_get_geometry_reply(c, cookie, nil)
+	local w, h = reply.width, reply.height
+	free(reply)
 	return w, h
 end
 
 --positioning/constraints ----------------------------------------------------
 
 function window:get_minsize()
-end
-
-function window:set_minsize(w, h)
+	local hints = get_wm_normal_hints(self.win)
+	return hints.min_width, hints.min_height
 end
 
 function window:get_maxsize()
+	local hints = get_wm_normal_hints(self.win)
+	return hints.max_width, hints.max_height
+end
+
+function window:set_minsize(w, h)
+	local hints = get_wm_normal_hints(self.win)
+	hints.min_width = w
+	hints.min_height = h
+	set_wm_normal_hints(self.win, hints)
 end
 
 function window:set_maxsize(w, h)
+	local hints = get_wm_normal_hints(self.win)
+	hints.max_width = w
+	hints.max_height = h
+	set_wm_normal_hints(self.win, hints)
 end
 
 --positioning/resizing -------------------------------------------------------
@@ -842,6 +1144,7 @@ end
 
 function window:set_title(title)
 	set_string_prop(self.win, C.XCB_ATOM_WM_NAME, title)
+	C.xcb_flush(c)
 end
 
 --z-order --------------------------------------------------------------------
@@ -852,6 +1155,7 @@ end
 
 function window:set_topmost(topmost)
 	set_netwm_state(self.win, topmost, atom'_NET_WM_STATE_ABOVE')
+	C.xcb_flush(c)
 end
 
 function window:set_zorder(mode, relto)
@@ -894,6 +1198,35 @@ end
 --self.app.frontend:_backend_displays_changed()
 
 --cursors --------------------------------------------------------------------
+
+--[[
+     # NQR means default shape is not pretty... surely there is another
+        # cursor font?
+        cursor_shapes = {
+            self.CURSOR_CROSSHAIR:       cursorfont.XC_crosshair,
+            self.CURSOR_HAND:            cursorfont.XC_hand2,
+            self.CURSOR_HELP:            cursorfont.XC_question_arrow,  # NQR
+            self.CURSOR_NO:              cursorfont.XC_pirate,          # NQR
+            self.CURSOR_SIZE:            cursorfont.XC_fleur,
+            self.CURSOR_SIZE_UP:         cursorfont.XC_top_side,
+            self.CURSOR_SIZE_UP_RIGHT:   cursorfont.XC_top_right_corner,
+            self.CURSOR_SIZE_RIGHT:      cursorfont.XC_right_side,
+            self.CURSOR_SIZE_DOWN_RIGHT: cursorfont.XC_bottom_right_corner,
+            self.CURSOR_SIZE_DOWN:       cursorfont.XC_bottom_side,
+            self.CURSOR_SIZE_DOWN_LEFT:  cursorfont.XC_bottom_left_corner,
+            self.CURSOR_SIZE_LEFT:       cursorfont.XC_left_side,
+            self.CURSOR_SIZE_UP_LEFT:    cursorfont.XC_top_left_corner,
+            self.CURSOR_SIZE_UP_DOWN:    cursorfont.XC_sb_v_double_arrow,
+            self.CURSOR_SIZE_LEFT_RIGHT: cursorfont.XC_sb_h_double_arrow,
+            self.CURSOR_TEXT:            cursorfont.XC_xterm,
+            self.CURSOR_WAIT:            cursorfont.XC_watch,
+            self.CURSOR_WAIT_ARROW:      cursorfont.XC_watch,           # NQR
+        }
+        if name not in cursor_shapes:
+            raise MouseCursorException('Unknown cursor name "%s"' % name)
+        cursor = xlib.XCreateFontCursor(self._x_display, cursor_shapes[name])
+        return XlibMouseCursor(cursor)
+]]
 
 function window:cursor(name)
 end
@@ -1028,46 +1361,50 @@ local function make_bitmap(w, h, win)
 	if false and xcb_has_shm() then
 
 		local shmid = shm.shmget(shm.IPC_PRIVATE, size, bit.bor(shm.IPC_CREAT, 0x1ff))
-		local data  = shm.shmat(shmid, 0, 0)
+		local data  = shm.shmat(shmid, nil, 0)
 
 		local shmseg  = C.xcb_generate_id(c)
-		C.xcb_shm_attach(c, shmseg, shmid, 0)
-		shm.shmctl(shmid, shm.IPC_RMID, 0)
+		xcbshm.xcb_shm_attach(c, shmseg, shmid, 0)
+		shm.shmctl(shmid, shm.IPC_RMID, nil)
 
 		local pix = C.xcb_generate_id(c)
 
-		C.xcb_shm_create_pixmap(c, pix, self.win, w, h, depth_id, shmseg, 0)
+		xcbshm.xcb_shm_create_pixmap(c, pix, win, w, h, depth_id, shmseg, 0)
 
 		C.xcb_flush(c)
 
 		bitmap.data = data
 
+		local gc = C.xcb_generate_id(c)
+		C.xcb_create_gc(c, gc, win, 0, nil)
+
 		function paint()
-			C.xcb_copy_area(c, pix, win, gcontext, 0, 0, 0, 0, w, h)
+			C.xcb_copy_area(c, pix, win, gc, 0, 0, 0, 0, w, h)
 			C.xcb_flush(c)
 		end
 
 		function free()
-			C.xcb_shm_detach(c, shmseg)
+			xcbshm.xcb_shm_detach(c, shmseg)
 			shm.shmdt(data)
 			C.xcb_free_pixmap(c, pix)
 		end
 
 	else
 
-		local pix = C.xcb_generate_id(c)
-		C.xcb_create_pixmap(c, 32, pix, win, w, h)
-
 		local data = glue.malloc('char', size)
 		bitmap.data = data
 
+		local pix = C.xcb_generate_id(c)
+		C.xcb_create_pixmap(c, 32, pix, win, w, h)
+
 		local gc = C.xcb_generate_id(c)
-		C.xcb_create_gc(c, gc, win, 0, 0)
+		C.xcb_create_gc(c, gc, win, 0, nil)
 
 		function paint()
-			print(w, h)
 			C.xcb_put_image(c, C.XCB_IMAGE_FORMAT_Z_PIXMAP,
-				win, gc, w, h, 0, 0, 0, 32, size, data)
+				pix, gc, w, h, 0, 0, 0, 32, size, data)
+			C.xcb_copy_area(c, pix, win, gc, 0, 0, 0, 0, w, h)
+			C.xcb_flush(c)
 		end
 
 		function free()
@@ -1296,7 +1633,5 @@ end
 
 --buttons --------------------------------------------------------------------
 
-
-if not ... then require'nw_test' end
 
 return nw

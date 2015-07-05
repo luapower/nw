@@ -493,7 +493,7 @@ function window:to_client(x, y)
 	return p.x, p.y
 end
 
-local function frame_args(frame)
+local function frame_args(frame, has_menu)
 	local framed = frame == 'normal' or frame == 'toolbox'
 	local layered = frame == 'none-transparent'
 	return {
@@ -502,16 +502,17 @@ local function frame_args(frame)
 		window_edge = framed,
 		sizeable = framed,
 		layered = layered,
+		menu = has_menu,
 	}
 end
 
-function app:client_to_frame(frame, x, y, w, h)
-	return unpack_rect(winapi.Window:client_to_frame(frame_args(frame),
+function app:client_to_frame(frame, has_menu, x, y, w, h)
+	return unpack_rect(winapi.Window:client_to_frame(frame_args(frame, has_menu),
 		pack_rect(nil, x, y, w, h)))
 end
 
-function app:frame_to_client(frame, x, y, w, h)
-	return unpack_rect(winapi.Window:frame_to_client(frame_args(frame),
+function app:frame_to_client(frame, has_menu, x, y, w, h)
+	return unpack_rect(winapi.Window:frame_to_client(frame_args(frame, has_menu),
 		pack_rect(nil, x, y, w, h)))
 end
 

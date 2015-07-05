@@ -2417,14 +2417,34 @@ end)
 --xcb dev tests --------------------------------------------------------------
 
 add('xcb', function()
-	local win1 = app:window{w = 500, h = 300,
+
+	--print(app:client_to_frame('normal', 10, 10, 100, 100))
+
+	local win1 = app:window{x = 2, y = 29, w = 500, h = 300,
 		title = 'Hello 1',}
-	local win2 = app:window{x = -100, y = 100, w = 300, h = 400,
-		title = 'Hello 2',}
-	function win1:event(...) print('win1', ...) end
-	function win2:event(...) print('win2', ...) end
-	win1:bitmap()
+	--local win2 = app:window{x = -100, y = 100, w = 300, h = 400,
+	--	title = 'Hello 2',}
+	--function win1:event(...) print('win1', ...) end
+	--function win2:event(...) print('win2', ...) end
+	--function win1:repaint() win1:bitmap() end
 	--app:runafter(1, function() win1:minimize() print(win1:minimized()) end)
+	--app:runevery(1, function() print(win1:size()) end)
+	--[[
+	pp('extensions',      app.backend:ext())
+	pp('root_props',      app.backend:root_props())
+	pp('win1_props',      win1.backend:props())
+	pp('virtual_roots',   app.backend:virtual_roots())
+	pp('win1_query_tree', win1.backend.win, win1.backend:query_tree())
+	pp('root_query_tree', app.backend:root_query_tree())
+	]]
+	function win1:repaint()
+		local bmp = self:bitmap()
+		ffi.fill(bmp.data, bmp.stride * 10, 0x80)
+	end
+	app:runevery(1, function()
+		print('frame_rect   ', win1:frame_rect())
+		print('client_rect  ', win1:client_rect())
+	end)
 	app:run()
 end)
 

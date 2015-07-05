@@ -439,8 +439,14 @@ function window:_new(app, backend_class, useropt)
 
 	--if missing some frame coords but given some client coords, convert client
 	--coords to frame coords, and replace missing frame coords with the result.
-	if not opt.x or not opt.y or not opt.w or not opt.h and (opt.cx or opt.cy or opt.cw or opt.ch) then
-		local x1, y1, w1, h1 = app:client_to_frame(opt.frame, opt.cx or 0, opt.cy or 0, opt.cw or 0, opt.ch or 0)
+	if not (opt.x and opt.y and opt.w and opt.h) and (opt.cx or opt.cy or opt.cw or opt.ch) then
+		local x1, y1, w1, h1 = app:client_to_frame(
+			opt.frame,
+			opt.menu and true,
+			opt.cx or 0,
+			opt.cy or 0,
+			opt.cw or 0,
+			opt.ch or 0)
 		opt.x = opt.x or (opt.cx and x1)
 		opt.y = opt.y or (opt.cy and y1)
 		opt.w = opt.w or (opt.cw and w1)
@@ -448,11 +454,12 @@ function window:_new(app, backend_class, useropt)
 	end
 
 	--width and height must be given, either of the client area or of the frame.
-	assert(opt.w, 'w or cw missing')
-	assert(opt.h, 'h or ch missing')
+	assert(opt.w, 'w or cw expected')
+	assert(opt.h, 'h or ch expected')
 
 	--either cascading or fixating the position, there's no mix.
-	assert((not opt.x) == (not opt.y), 'either give both x and y or none')
+	assert((not opt.x) == (not opt.y),
+		'both x (or cx) and y (or cy) or none expected')
 
 	self = glue.inherit({app = app}, self)
 
@@ -733,15 +740,18 @@ function window:to_client(x, y, w, h)
 end
 
 --frame rect for a frame type and client rectangle in screen coordinates.
-function app:client_to_frame(frame, x, y, w, h)
+function app:client_to_frame(frame, has_menu, x, y, w, h)
 	frame = checkframe(frame)
-	return self.backend:client_to_frame(frame, x, y, w, h)
+	if frame == 'none' or frame == 'none-transparent' then
+		return x, y, w, h
+	end
+	return self.backend:client_to_frame(frame, has_menu, x, y, w, h)
 end
 
 --client rect in screen coordinates for a frame type and frame rectangle.
-function app:frame_to_client(frame, x, y, w, h)
+function app:frame_to_client(frame, has_menu, x, y, w, h)
 	frame = checkframe(frame)
-	local cx, cy, cw, ch = self.backend:frame_to_client(frame, x, y, w, h)
+	local cx, cy, cw, ch = self.backend:frame_to_client(frame, has_menu, x, y, w, h)
 	cw = math.max(0, cw)
 	ch = math.max(0, ch)
 	return cx, cy, cw, ch
@@ -785,10 +795,10 @@ function window:client_rect(x1, y1, w1, h1)
 	if x1 or y1 or w1 or h1 then
 		if self:fullscreen() then return end --ignore because OSX can't do it
 		local cx, cy, cw, ch = self:client_rect()
+		local ccw, cch = cw, ch
 		local cx, cy, cw, ch = override_rect(cx, cy, cw, ch, x1, y1, w1, h1)
 		local x, y, w, h = self:frame_rect()
 		local dx, dy = self:to_client(x, y)
-		local ccw, cch = self:size()
 		local dw, dh = w - ccw, h - cch
 		self.backend:set_frame_rect(cx + dx, cy + dy, cw + dw, ch + dh)
 	else

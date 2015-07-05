@@ -207,6 +207,9 @@ function window:new(app, frontend, t)
 	if transparent then
 		self.nswin:setOpaque(false)
 		self.nswin:setBackgroundColor(objc.NSColor:clearColor())
+		--TODO: click-through option for transparent windows?
+		--NOTE: in windows this is done with window.transparent (WS_EX_TRANSPARENT) attribute.
+		--self.nswin:setIgnoresMouseEvents(true) --make it click-through
 	end
 
 	--set parent.
@@ -808,7 +811,7 @@ local function stylemask(frame)
 		and objc.NSTitledWindowMask or objc.NSBorderlessWindowMask
 end
 
-function app:client_to_frame(frame, x, y, w, h)
+function app:client_to_frame(frame, has_menu, x, y, w, h)
 	local style = stylemask(frame)
 	local psh = primary_screen_h()
 	local rect = objc.NSMakeRect(flip_screen_rect(psh, x, y, w, h))
@@ -816,7 +819,7 @@ function app:client_to_frame(frame, x, y, w, h)
 	return flip_screen_rect(psh, unpack_nsrect(rect))
 end
 
-function app:frame_to_client(frame, x, y, w, h)
+function app:frame_to_client(frame, has_menu, x, y, w, h)
 	local style = stylemask(frame)
 	local psh = primary_screen_h()
 	local rect = objc.NSMakeRect(flip_screen_rect(psh, x, y, w, h))
