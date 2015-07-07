@@ -11,17 +11,7 @@ tagline:   native widgets API
 -----------------------------------------------------------------------------------------------------------------
 __topic__			__actions__								__queries__									__events__
 ----------------- -------------------------------- ----------------------------------- --------------------------
-backends				nw:init([backendname]) 				nw.backends-> {OS = backendname} \
-																	nw.backend.name -> name \
-																	nw:os() -> os_version \
-																	nw:os(compat_version) -> ?
-
-OOP					obj:override(method, func)
-
-events				obj:observe(event, func) 															obj:event(name, args...) \
-																													obj:\<eventname\>(args...)
-
-app singleton													nw:app() -> app
+app object														nw:app() -> app
 
 message loop		app:run() \								app:running()
 						app:stop()
@@ -109,4 +99,14 @@ menus					app:menu() -> menu					win:menubar() -> menu \
 						\											menu:item_count() -> n \
 						menu:checked(index, ?) \			menu:checked(index) -> ? \
 						menu:enabled(index, ?)				menu:enabled(index) -> ?
+
+backends				nw:init([backendname]) 				nw.backends-> {OS = backendname} \
+																	nw.backend.name -> name \
+																	nw:os() -> os_version \
+																	nw:os(compat_version) -> ?
+
+OOP					obj:override(method, func)
+
+events				obj:observe(event, func) 															obj:event(name, args...) \
+																													obj:\<eventname\>(args...)
 -----------------------------------------------------------------------------------------------------------------

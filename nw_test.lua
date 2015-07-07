@@ -2420,8 +2420,18 @@ add('xcb', function()
 
 	--print(app:client_to_frame('normal', 10, 10, 100, 100))
 
-	local win1 = app:window{x = 2, y = 29, w = 500, h = 300,
-		title = 'Hello 1',}
+	--local win0 = app:window{w = 500, h = 300}
+
+	local win1 = app:window{x = 1, y = 25, w = 500, h = 300,
+		title = 'Hello 1',
+		min_cw = 200, min_ch = 200,
+		max_cw = 600,
+		max_ch = 400,
+		maximizable = false,
+		minimizable = false,
+		--frame = 'toolbox',
+		parent = true,
+	}
 	--local win2 = app:window{x = -100, y = 100, w = 300, h = 400,
 	--	title = 'Hello 2',}
 	--function win1:event(...) print('win1', ...) end
@@ -2432,16 +2442,23 @@ add('xcb', function()
 	--[[
 	pp('extensions',      app.backend:ext())
 	pp('root_props',      app.backend:root_props())
-	pp('win1_props',      win1.backend:props())
 	pp('virtual_roots',   app.backend:virtual_roots())
 	pp('win1_query_tree', win1.backend.win, win1.backend:query_tree())
 	pp('root_query_tree', app.backend:root_query_tree())
 	]]
 	function win1:repaint()
 		local bmp = self:bitmap()
-		ffi.fill(bmp.data, bmp.stride * 10, 0x80)
+		local _, setpixel = require'bitmap'.pixel_interface(bmp)
+		for y=0,bmp.h-1 do
+			for x=0,bmp.w-1 do
+				setpixel(x, y, x, y, x, 0xff)
+			end
+		end
+		--ffi.fill(bmp.data, bmp.stride * 10, 0x80)
 	end
 	app:runevery(1, function()
+		pp('win1_props',      win1.backend:props())
+		win1:frame_rect(win1:frame_rect())
 		print('frame_rect   ', win1:frame_rect())
 		print('client_rect  ', win1:client_rect())
 	end)
