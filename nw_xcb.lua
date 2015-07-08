@@ -190,6 +190,8 @@ function window:new(app, frontend, t)
 		C.XCB_EVENT_MASK_OWNER_GRAB_BUTTON
 	))
 
+	local framed = t.frame ~= 'none' and t.frame ~= 'none-transparent'
+
 	--local parent = t.parent and t.parent.backend.win or screen.root
 	local parent = screen.root --TODO
 
@@ -229,20 +231,26 @@ function window:new(app, frontend, t)
 	xcb.set_cardinal_prop(self.win, '_NET_WM_PID', getpid())
 
 	if t.title then
-		self:set_title(t.title)
+		xcb.set_title(self.win, t.title)
 	end
 
-	if t.frame == 'toolbox' then
-		xcb.set_atom_prop(self.win, '_NET_WM_WINDOW_TYPE', '_NET_WM_WINDOW_TYPE_TOOLBAR')
-	end
-
+	--setting minw/h = maxw/h is how we tell X that a window has fixed size.
 	if not t.resizeable then
 		xcb.set_wm_normal_hints(self.win, w, h, w, h)
 	else
 		xcb.set_wm_normal_hints(self.win, t.min_cw, t.min_ch, t.max_cw, t.max_ch)
 	end
 
-	-- motif hints must be set before mapping
+	--before mapping we have to set the _NET_WM_STATE property directly.
+	--later we have to use set_netwm_state().
+	xcb.set_atom_map_prop(win, '_NET_WM_STATE', {
+		_NET_WM_STATE_MAXIMIZED_HORZ = t.maximized or nil,
+		_NET_WM_STATE_MAXIMIZED_VERT = t.maximized or nil,
+		_NET_WM_STATE_ABOVE = t.topmost or nil,
+		_NET_WM_STATE_FULLSCREEN = t.fullscreen or nil,
+	})
+
+	--motif hints must be set before mapping
 
 	local hints = ffi.new'MotifWmHints'
 
@@ -281,16 +289,6 @@ function window:new(app, frontend, t)
 			'_NET_WM_STATE_MAXIMIZED_HORZ',
 			'_NET_WM_STATE_MAXIMIZED_VERT')
 	end
-
-	if t.topmost then
-		xcb.set_netwm_state(self.win, true, '_NET_WM_STATE_ABOVE')
-	end
-
-	if t.fullscreen then
-		xcb.set_netwm_state(self.win, true, '_NET_WM_STATE_FULLSCREEN')
-	end
-
-	local framed = t.frame ~= 'none' and t.frame ~= 'none-transparent'
 
 	xcb.flush()
 
@@ -637,11 +635,11 @@ end
 --titlebar -------------------------------------------------------------------
 
 function window:get_title()
-	return xcb.get_string_prop(self.win, C.XCB_ATOM_WM_NAME)
+	return xcb.get_title(win)
 end
 
 function window:set_title(title)
-	xcb.set_string_prop(self.win, C.XCB_ATOM_WM_NAME, title)
+	xcb.set_title(self.win, title)
 	xcb.flush()
 end
 
