@@ -305,14 +305,6 @@ end
 
 --closing --------------------------------------------------------------------
 
-function window:_ping_event(e)
-	local reply = ffi.new('xcb_client_message_event_t', e[0])
-	reply.response_type = C.XCB_CLIENT_MESSAGE
-	reply.window = screen.root
-	send_client_message_to_root(reply) --pong!
-	xcb.flush()
-end
-
 ev[C.XCB_CLIENT_MESSAGE] = function(e)
 	e = cast('xcb_client_message_event_t*', e)
 	local self = getwin(e.window)
@@ -326,7 +318,8 @@ ev[C.XCB_CLIENT_MESSAGE] = function(e)
 		elseif v == atom'WM_TAKE_FOCUS' then
 			--ha?
 		elseif v == atom'_NET_WM_PING' then
-			self:_ping_event(e)
+			xcb.pong(e)
+			xcb.flush()
 		end
 	end
 end
