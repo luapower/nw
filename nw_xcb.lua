@@ -9,7 +9,6 @@ local bit = require'bit'
 local glue = require'glue'
 local box2d = require'box2d'
 local xcb_module = require'xcb'
-require'xcb_icccm_h' --for wm_hints (minimization)
 local time = require'time' --for timers
 local heap = require'heap' --for timers
 local pp = require'pp'
@@ -214,7 +213,7 @@ function window:new(app, frontend, t)
 
 	xcb.create_window(
 		depth, self.win, parent,
-		0, 0, --x, y (ignored by WM, set later)
+		0, 0, --x, y (ignored by WM, set after mapping the window)
 		cw, ch,
 		0, --border width (ignored)
 		C.XCB_WINDOW_CLASS_INPUT_OUTPUT, --class
@@ -236,58 +235,49 @@ function window:new(app, frontend, t)
 
 	--setting minw/h = maxw/h is how we tell X that a window has fixed size.
 	if not t.resizeable then
-		xcb.set_wm_normal_hints(self.win, w, h, w, h)
+		xcb.set_minmax(self.win, w, h, w, h)
 	else
-		xcb.set_wm_normal_hints(self.win, t.min_cw, t.min_ch, t.max_cw, t.max_ch)
+		xcb.set_minmax(self.win, t.min_cw, t.min_ch, t.max_cw, t.max_ch)
 	end
 
-	--before mapping we have to set the _NET_WM_STATE property directly.
-	--later we have to use set_netwm_state().
-	xcb.set_atom_map_prop(win, '_NET_WM_STATE', {
+	--set the _NET_WM_STATE property before mapping the window.
+	--later on we have to use change_netwm_states() to change these values.
+	xcb.set_netwm_states(self.win, {
 		_NET_WM_STATE_MAXIMIZED_HORZ = t.maximized or nil,
 		_NET_WM_STATE_MAXIMIZED_VERT = t.maximized or nil,
 		_NET_WM_STATE_ABOVE = t.topmost or nil,
 		_NET_WM_STATE_FULLSCREEN = t.fullscreen or nil,
 	})
 
-	--motif hints must be set before mapping
+	--set WM_HINTS before mapping the window.
+	if t.minimized then
+		local hints = ffi.new'xcb_icccm_wm_hints_t'
+		hints.flags = C.XCB_ICCCM_WM_HINT_STATE
+		hints.initial_state = C.XCB_ICCCM_WM_STATE_ICONIC
+		xcb.set_wm_hints(self.win, hints)
+	end
 
-	local hints = ffi.new'MotifWmHints'
-
+	--set motif hints before mapping the window.
+	local hints = ffi.new'xcb_motif_wm_hints_t'
 	hints.flags = bit.bor(
 		C.MWM_HINTS_FUNCTIONS,
 		C.MWM_HINTS_DECORATIONS)
-		--C.MWM_HINTS_INPUT_MODE,
-		--C.MWM_HINTS_STATUS)
-
-	hints.decorations = bit.bor(
-		framed and C.MWM_DECOR_BORDER or 0,
-		framed and C.MWM_DECOR_TITLE or 0,
-		framed and C.MWM_DECOR_MENU or 0,
-		t.resizeable and C.MWM_DECOR_RESIZEH or 0)
-
 	hints.functions = bit.bor(
 		t.resizeable and C.MWM_FUNC_RESIZE or 0,
 		C.MWM_FUNC_MOVE,
 		t.minimizable and C.MWM_FUNC_MINIMIZE or 0,
 		t.maximizable and C.MWM_FUNC_MAXIMIZE or 0,
 		t.closeable and C.MWM_FUNC_CLOSE or 0)
+	hints.decorations = bit.bor(
+		framed and C.MWM_DECOR_BORDER or 0,
+		framed and C.MWM_DECOR_TITLE or 0,
+		framed and C.MWM_DECOR_MENU or 0,
+		t.resizeable and C.MWM_DECOR_RESIZEH or 0)
+	xcb.set_motif_wm_hints(self.win, hints)
 
-	xcb.set_motif_wm_hints(win, hints)
-
-	if t.visible then
-		xcb.map(self.win)
-	end
-
-	--NOTE: setting the window's position only works after the window is mapped.
+	--setting the window's position only works after mapping the window.
 	if t.x then
-		xcb.change_pos(self.win, t.x, t.y)
-	end
-
-	if t.maximized then
-		xcb.set_netwm_state(self.win, true,
-			'_NET_WM_STATE_MAXIMIZED_HORZ',
-			'_NET_WM_STATE_MAXIMIZED_VERT')
+		self._init_pos, self._init_x, self._init_y = true, t.x, t.y
 	end
 
 	xcb.flush()
@@ -404,6 +394,10 @@ end
 
 function window:show()
 	xcb.map(self.win)
+	if self._init_pos then
+		xcb.change_pos(self.win, self._init_x, self._init_y)
+		self._init_pos, self._init_x, self._init_y = nil
+	end
 	xcb.flush()
 end
 
@@ -434,7 +428,7 @@ function window:maximized()
 end
 
 function window:maximize()
-	xcb.set_netwm_state(self.win, true,
+	xcb.change_netwm_states(self.win, true,
 		'_NET_WM_STATE_MAXIMIZED_HORZ',
 		'_NET_WM_STATE_MAXIMIZED_VERT')
 	xcb.flush()
@@ -443,14 +437,14 @@ end
 --state/restoring ------------------------------------------------------------
 
 function window:restore()
-	xcb.set_netwm_state(self.win, false,
+	xcb.change_netwm_states(self.win, false,
 		'_NET_WM_STATE_MAXIMIZED_HORZ',
 		'_NET_WM_STATE_MAXIMIZED_VERT')
 	xcb.flush()
 end
 
 function window:shownormal()
-	xcb.set_netwm_state(self.win, false,
+	xcb.change_netwm_states(self.win, false,
 		'_NET_WM_STATE_MAXIMIZED_HORZ',
 		'_NET_WM_STATE_MAXIMIZED_VERT')
 	xcb.flush()
@@ -467,12 +461,12 @@ function window:fullscreen()
 end
 
 function window:enter_fullscreen()
-	xcb.set_netwm_state(self.win, true, '_NET_WM_STATE_FULLSCREEN')
+	xcb.change_netwm_states(self.win, true, '_NET_WM_STATE_FULLSCREEN')
 	xcb.flush()
 end
 
 function window:exit_fullscreen()
-	xcb.set_netwm_state(self.win, false, '_NET_WM_STATE_FULLSCREEN')
+	xcb.change_netwm_states(self.win, false, '_NET_WM_STATE_FULLSCREEN')
 	xcb.flush()
 end
 
@@ -520,7 +514,6 @@ local function frame_extents(frame)
 	if not w1 then --TODO:
 		w1, h1, w2, h2 = 0, 0, 0, 0
 	end
-	print(frame, win, w1, h1)
 
 	--destroy the window
 	xcb.destroy_window(win)
@@ -535,13 +528,6 @@ local frame_extents = glue.memoize(frame_extents)
 local frame_extents = function(frame)
 	return unpack(frame_extents(frame))
 end
-
---[[TODO: fix frame_extents second call!
-xcb_init()
-print(frame_extents'normal')
-print(frame_extents'toolbox')
-os.exit()
-]]
 
 local function frame_rect(x, y, w, h, w1, h1, w2, h2)
 	return x - w1, y - h1, w + w1 + w2, h + h1 + h2
@@ -611,12 +597,12 @@ function window:get_maxsize()
 end
 
 function window:set_minsize(minw, minh)
-	set_wm_normal_hints(self.win, minw, minh)
+	xcb.set_minmax(self.win, minw, minh)
 	xcb.flush()
 end
 
 function window:set_maxsize(maxw, maxh)
-	set_wm_normal_hints(self.win, nil, nil, maxw, maxh)
+	xcb.set_minmax(self.win, nil, nil, maxw, maxh)
 	xcb.flush()
 end
 
@@ -650,7 +636,7 @@ function window:get_topmost()
 end
 
 function window:set_topmost(topmost)
-	xcb.set_netwm_state(self.win, topmost, atom'_NET_WM_STATE_ABOVE')
+	xcb.change_netwm_states(self.win, topmost, atom'_NET_WM_STATE_ABOVE')
 	xcb.flush()
 end
 

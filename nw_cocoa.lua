@@ -786,6 +786,7 @@ end
 
 function window:set_enabled(enabled)
 	self._disabled = not enabled
+	self:_set_movable()
 end
 
 --positioning/conversions ----------------------------------------------------
