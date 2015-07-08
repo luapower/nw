@@ -134,10 +134,6 @@ end
 
 --windows --------------------------------------------------------------------
 
---bind getpid() for setting _NET_WM_PID.
-ffi.cdef'int32_t getpid()'
-local getpid = ffi.C.getpid
-
 local window = {}
 app.window = window
 
@@ -226,8 +222,8 @@ function window:new(app, frontend, t)
 		_NET_WM_PING = true,     --respond to ping events
 	})
 
-	--set pid for _NET_WM_PING protocol to allow the user to kill a non-responsive process.
-	xcb.set_cardinal_prop(self.win, '_NET_WM_PID', getpid())
+	--set info for _NET_WM_PING to allow the user to kill a non-responsive process.
+	xcb.set_netwm_ping_info(self.win)
 
 	if t.title then
 		xcb.set_title(self.win, t.title)
