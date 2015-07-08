@@ -206,7 +206,7 @@ function window:new(app, frontend, t)
 		addvalue(C.XCB_CW_COLORMAP, colormap)
 	end
 
-	local cx, cy, cw, ch = app:frame_to_client(t.frame, t.x or 0, t.y or 0, t.w, t.h)
+	local _, _, cw, ch = app:frame_to_client(t.frame, t.x or 0, t.y or 0, t.w, t.h)
 
 	self.win = xcb.gen_id()
 
@@ -242,6 +242,31 @@ function window:new(app, frontend, t)
 		xcb.set_wm_normal_hints(self.win, t.min_cw, t.min_ch, t.max_cw, t.max_ch)
 	end
 
+	-- motif hints must be set before mapping
+
+	local hints = ffi.new'MotifWmHints'
+
+	hints.flags = bit.bor(
+		C.MWM_HINTS_FUNCTIONS,
+		C.MWM_HINTS_DECORATIONS)
+		--C.MWM_HINTS_INPUT_MODE,
+		--C.MWM_HINTS_STATUS)
+
+	hints.decorations = bit.bor(
+		framed and C.MWM_DECOR_BORDER or 0,
+		framed and C.MWM_DECOR_TITLE or 0,
+		framed and C.MWM_DECOR_MENU or 0,
+		t.resizeable and C.MWM_DECOR_RESIZEH or 0)
+
+	hints.functions = bit.bor(
+		t.resizeable and C.MWM_FUNC_RESIZE or 0,
+		C.MWM_FUNC_MOVE,
+		t.minimizable and C.MWM_FUNC_MINIMIZE or 0,
+		t.maximizable and C.MWM_FUNC_MAXIMIZE or 0,
+		t.closeable and C.MWM_FUNC_CLOSE or 0)
+
+	xcb.set_motif_wm_hints(win, hints)
+
 	if t.visible then
 		xcb.map(self.win)
 	end
@@ -267,56 +292,9 @@ function window:new(app, frontend, t)
 
 	local framed = t.frame ~= 'none' and t.frame ~= 'none-transparent'
 
-	--[[
-	local hints = ffi.new'motif_wm_hints_t'
-	hints.functions = bit.bor(
-		t.resizeable and MWM_FUNC_RESIZE or 0,
-		MWM_FUNC_MOVE,
-		t.minimizable and MWM_FUNC_MINIMIZE or 0,
-		t.maximizable and MWM_FUNC_MAXIMIZE or 0,
-		t.closable and MWM_FUNC_CLOSE or 0
-	)
-
-	hints.decorations = bit.bor(
-		framed and MWM_DECOR_BORDER or 0,
-		t.minimizable and MWM_DECOR_MINIMIZE or 0,
-		t.maximizable and MWM_DECOR_MAXIMIZE or 0,
-		framed and MWM_DECOR_TITLE or 0,
-		framed and MWM_DECOR_MENU or 0,
-		framed and t.resizeable and MWM_DECOR_RESIZEH or 0)
-
-	xcb_set_motif_wm_hints(self.win, hints)
-	]]
-
 	xcb.flush()
 
 	setwin(self.win, self)
-
-	--[[
-	self._layered = t.frame == 'none-transparent'
-
-	self.win = Window{
-		min_cw = t.min_cw,
-		min_ch = t.min_ch,
-		max_cw = t.max_cw,
-		max_ch = t.max_ch,
-		enabled = t.enabled,
-		--frame
-		border = framed,
-		frame = framed,
-		window_edge = framed, --must be off for frameless windows!
-		layered = self._layered,
-		owner = t.parent and t.parent.backend.win,
-		--behavior
-		minimize_button = t.minimizable,
-		maximize_button = t.maximizable,
-		noclose = not t.closeable,
-		sizeable = framed and t.resizeable, --must be off for frameless windows!
-		activable = t.activable,
-		receive_double_clicks = false, --we do our own double-clicking
-		remember_maximized_pos = true, --to emulate OSX behavior for constrained maximized windows
-	}
-	]]
 
 	return self
 end
