@@ -1364,7 +1364,7 @@ add('pos-client-rect', function()
 	end
 	test{}
 	test{frame = 'none'}
-	test{frame = 'none-transparent'}
+	test{frame = 'none', transparent = true}
 	print'ok'
 end)
 
@@ -1624,7 +1624,7 @@ end)
 
 --cursors --------------------------------------------------------------------
 
-local cursors = {'arrow', 'ibeam', 'hand', 'cross', 'no', 'nwse', 'nesw', 'ew', 'ns', 'move', 'busy'}
+local cursors = {'arrow', 'text', 'hand', 'cross', 'no', 'nwse', 'nesw', 'ew', 'ns', 'move', 'busyarrow'}
 
 add('cursors', function()
 	local win = app:window(winpos{resizeable = true})
@@ -1659,8 +1659,9 @@ add('frameless', function()
 end)
 
 add('transparent', function()
-	local win = app:window(winpos{frame = 'none-transparent'})
-	assert(win:frame() == 'none-transparent')
+	local win = app:window(winpos{frame = 'none', transparent = true})
+	assert(win:frame() == 'none')
+	assert(win:transparent())
 end)
 
 --parent/child relationship --------------------------------------------------
@@ -1861,7 +1862,7 @@ end
 --window bitmap --------------------------------------------------------------
 
 add('bitmap', function()
-	local win = app:window{w = 500, h = 300, frame = 'none-transparent'}
+	local win = app:window{w = 500, h = 300, frame = 'none', transparent = true}
 
 	function win:event(...)
 		print(...)
@@ -2021,7 +2022,7 @@ local function cube(w)
 end
 
 add('view-cairo', function()
-	local win = app:window{w = 500, h = 300}--, frame = 'none-transparent'}
+	local win = app:window{w = 500, h = 300}--, frame = 'none', transparent = true}
 	local fps = 60
 
 	local x, y = 150, 10
@@ -2418,15 +2419,17 @@ end)
 
 add('xcb', function()
 
-	local win1 = app:window{x = 2, y = 26, w = 500, h = 300,
+	local win1 = app:window{x = 2, y = 26, cw = 500, ch = 300,
 		title = 'Hello 1',
-		min_cw = 200, min_ch = 200,
-		max_cw = 600,
-		max_ch = 400,
-		maximizable = false,
-		minimizable = false,
-		minimized = true,
-		maximized = true,
+		--min_cw = 200,
+		--min_ch = 200,
+		--max_cw = 600,
+		--max_ch = 400,
+		--resizeable = false,
+		--maximizable = false,
+		--minimizable = false,
+		--minimized = true,
+		--maximized = true,
 		--fullscreen = true,
 	}
 	function win1:repaint()
@@ -2434,18 +2437,34 @@ add('xcb', function()
 		local _, setpixel = require'bitmap'.pixel_interface(bmp)
 		for y=0,bmp.h-1 do
 			for x=0,bmp.w-1 do
-				setpixel(x, y, x, y, x, 0xff)
+				setpixel(x, y, x, y, x, x)
 			end
 		end
 		--ffi.fill(bmp.data, bmp.stride * 10, 0x80)
 	end
 	app:runevery(1, function()
-		do return end
-		pp('win1_props',      win1.backend:props())
-		win1:frame_rect(win1:frame_rect())
-		print('frame_rect   ', win1:frame_rect())
-		print('client_rect  ', win1:client_rect())
+		--[[
+		local mw, mh = win1:maxsize()
+		mw = mw - 10
+		mh = mh - 10
+		win1:maxsize(mw, mh)
+		]]
+		if win1:minimized() then
+			win1:show()
+		end
+		--[[
+		if not win1:maximized() then
+			win1:maximize()
+		else
+			win1:restore()
+		end
+		]]
+		--win1:fullscreen(not win1:fullscreen())
 	end)
+	local win2 = app:window{x = 20, y = 40, cw = 300, ch = 200}
+	function app:event(...) print('app', ...) end
+	function win1:event(...) print('win1', ...) end
+	function win2:event(...) print('win2', ...) end
 	app:run()
 end)
 

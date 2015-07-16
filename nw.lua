@@ -365,9 +365,7 @@ end
 
 local window = glue.update({}, object)
 
-local defaults = {}
-
-defaults.normal = {
+local defaults = {
 	--state
 	visible = true,
 	minimized = false,
@@ -376,6 +374,7 @@ defaults.normal = {
 	enabled = true,
 	--frame
 	title = '',
+	transparent = false,
 	--behavior
 	topmost = false,
 	minimizable = true,
@@ -388,53 +387,77 @@ defaults.normal = {
 	edgesnapping = 'screen',
 }
 
-defaults.none = glue.merge({
+local frame_defaults = {}
+
+frame_defaults.normal = {}
+
+frame_defaults.none = {
 	resizeable = false,
-}, defaults.normal)
+}
 
-defaults['none-transparent'] = defaults.none
-
-defaults.toolbox = glue.merge({
+frame_defaults.toolbox = {
 	minimizable = false,
 	maximizable = false,
 	fullscreenable = false,
 	edgesnapping = 'parent siblings screen',
-}, defaults.normal)
+}
+
+local defaults_toplevel = {}
+local defaults_child = frame_defaults.toolbox
 
 function app:window(t)
 	return window:_new(self, self.backend.window, t)
 end
 
-local bool_frame = {[false] = 'none', [true] = 'normal'}
-
 local function checkframe(frame)
-	frame = bool_frame[frame] or frame
-	assert(defaults[frame], 'invalid frame')
+	frame =
+		frame == true and 'normal' or
+		frame == false and 'none' or
+		frame or 'normal'
+	assert(frame_defaults[frame], 'invalid frame')
 	return frame
 end
 
 function window:_new(app, backend_class, useropt)
 
 	--check/normalize args.
-	local frame = checkframe(useropt.frame or 'normal')
-	local opt = glue.update({frame = frame}, defaults[frame], useropt)
+	local frame = checkframe(useropt.frame)
+	local opt = glue.update({frame = frame},
+		defaults,
+		frame_defaults[frame],
+		useropt.parent and defaults_child or defaults_toplevel,
+		useropt)
 
-	--frameless windows are not resizeable.
+	--frameless windows can't be resizeable.
 	if frame:find'^none' then
 		assert(not opt.resizeable, 'frameless windows cannot be resizeable')
 	end
 
+	if opt.parent then
+		--child windows can't be minimizable because they don't show in taskbar.
+		assert(not opt.minimizable,    'child windows cannot be minimizable')
+		--child windows can't be maximizable or fullscreenable (X11 limitation).
+		assert(not opt.maximizable,    'child windows cannot be maximizable')
+		assert(not opt.fullscreenable, 'child windows cannot be fullscreenable')
+		--parent-child deep hierarchies are not allowed (self-imposed limitation).
+		assert(not opt.parent.parent,  'parent window cannot have a parent itself')
+	end
+
+	--top-level toolboxes don't make sense because they don't show in taskbar
+	--so they can't be activated when they are completely behind other windows.
+	--they can't be (minimiz|maximiz|fullscreen)able either (winapi/X11 limitation).
 	if frame == 'toolbox' then
-		--toolboxes can't be minimizable because they don't show in taskbar.
-		assert(not opt.minimizable, 'toolbox windows cannot be minimizable')
-		--although not required by backends, top-level toolboxes don't make
-		--sense because they don't show in taskbar so they can't be activated.
 		assert(opt.parent, 'toolbox windows must have a parent')
 	end
 
 	--only toolboxes can be non-activable (winapi limitation)
 	if frame ~= 'toolbox' then
 		assert(opt.activable, 'only toolbox windows can be non-activable')
+	end
+
+	--transparent windows must be frameless (winapi limitation)
+	if opt.transparent then
+		assert(opt.frame == 'none', 'transparent windows must be frameless')
 	end
 
 	--if missing some frame coords but given some client coords, convert client
@@ -472,6 +495,7 @@ function window:_new(app, backend_class, useropt)
 	--stored properties
 	self._parent = opt.parent
 	self._frame = opt.frame
+	self._transparent = opt.transparent
 	self._minimizable = opt.minimizable
 	self._maximizable = opt.maximizable
 	self._closeable = opt.closeable
@@ -742,7 +766,7 @@ end
 --frame rect for a frame type and client rectangle in screen coordinates.
 function app:client_to_frame(frame, has_menu, x, y, w, h)
 	frame = checkframe(frame)
-	if frame == 'none' or frame == 'none-transparent' then
+	if frame == 'none' then
 		return x, y, w, h
 	end
 	return self.backend:client_to_frame(frame, has_menu, x, y, w, h)
@@ -958,6 +982,8 @@ function window:zorder(zorder, relto)
 	if relto then
 		relto:_check()
 	end
+	assert(zorder == 'front' or zorder == 'back',
+		'invalid zorder: "front" or "back" expected')
 	self.backend:set_zorder(zorder, relto)
 end
 
@@ -1006,12 +1032,17 @@ end
 --cursors --------------------------------------------------------------------
 
 function window:cursor(name)
-	return self.backend:cursor(name)
+	if name ~= nil then
+		self.backend:set_cursor(name)
+	else
+		return self.backend:get_cursor()
+	end
 end
 
 --frame ----------------------------------------------------------------------
 
 function window:frame() self:_check(); return self._frame end
+function window:transparent() self:_check(); return self._transparent end
 function window:minimizable() self:_check(); return self._minimizable end
 function window:maximizable() self:_check(); return self._maximizable end
 function window:closeable() self:_check(); return self._closeable end

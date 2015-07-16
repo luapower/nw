@@ -166,7 +166,6 @@ function window:new(app, frontend, t)
 
 	local toolbox = t.frame == 'toolbox'
 	local framed = t.frame == 'normal' or toolbox
-	local transparent = t.frame == 'none-transparent'
 
 	--compute initial window style.
 	local style
@@ -204,7 +203,7 @@ function window:new(app, frontend, t)
 	end
 
 	--set transparent.
-	if transparent then
+	if t.transparent then
 		self.nswin:setOpaque(false)
 		self.nswin:setBackgroundColor(objc.NSColor:clearColor())
 		--TODO: click-through option for transparent windows?
@@ -1227,11 +1226,11 @@ end
 local cursors = {
 	--pointers
 	arrow = 'arrowCursor',
-	ibeam = 'IBeamCursor',
+	text  = 'IBeamCursor',
 	hand  = 'openHandCursor',
 	cross = 'crosshairCursor',
 	--app state
-	busy  = 'busyButClickableCursor', --undocumented, whatever
+	busyarrow  = 'busyButClickableCursor', --undocumented, whatever
 }
 
 local hi_cursors = {
@@ -1246,7 +1245,8 @@ local hi_cursors = {
 }
 
 local load_hicursor = objc.memoize(function(name)
-	basepath = basepath or (objc.findframework'ApplicationServices.HIServices' .. '/Versions/Current/Resources/cursors')
+	basepath = basepath or (objc.findframework(
+		'ApplicationServices.HIServices/Versions/Current/Resources/cursors')
 	local curpath = string.format('%s/%s/cursor.pdf', basepath, name)
 	local infopath = string.format('%s/%s/info.plist', basepath, name)
 	local image = objc.NSImage:alloc():initByReferencingFile(curpath)
@@ -1264,14 +1264,14 @@ local function setcursor(name)
 	end
 end
 
-function window:cursor(name)
-	if name ~= nil then
-		if self._cursor == name then return end
-		self._cursor = name
-		self.nswin:invalidateCursorRectsForView(self.nswin:contentView()) --trigger cursorUpdate
-	else
-		return self._cursor
-	end
+function window:set_cursor(name)
+	if self._cursor == name then return end
+	self._cursor = name
+	self.nswin:invalidateCursorRectsForView(self.nswin:contentView()) --trigger cursorUpdate
+end
+
+function window:get_cursor()
+	return self._cursor
 end
 
 function Window:cursorUpdate(event)

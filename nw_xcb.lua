@@ -137,29 +137,30 @@ end
 local window = {}
 app.window = window
 
+local function clamp_opt(x, min, max)
+	if min then x = math.max(x, min) end
+	if max then x = math.min(x, max) end
+	return x
+end
+function window:__constrain(cw, ch)
+	cw = clamp_opt(cw, self._min_cw, self._max_cw)
+	ch = clamp_opt(ch, self._min_ch, self._max_ch)
+	return cw, ch
+end
+
 function window:new(app, frontend, t)
 	self = glue.inherit({app = app, frontend = frontend}, self)
 
-	--helper to populate the values array for xcb_create_window().
-	local mask = 0
-	local i, n = 0, 4
-	local values = ffi.new('uint32_t[?]', n)
-	local function addvalue(maskbit, value)
-		assert(i < n)          --increase n to add more values!
-		assert(maskbit > mask) --values must be added in enum order!
-		mask = bit.bor(mask, maskbit)
-		values[i] = value
-		i = i + 1
-	end
+	local attrs = {}
 
 	--say that we don't want the server to keep a pixmap for the window.
-	addvalue(C.XCB_CW_BACK_PIXMAP, C.XCB_BACK_PIXMAP_NONE)
+	attrs[C.XCB_CW_BACK_PIXMAP] = C.XCB_BACK_PIXMAP_NONE
 
 	--needed if we want to set a value for XCB_CW_COLORMAP too!
-	addvalue(C.XCB_CW_BORDER_PIXEL, 0)
+	attrs[C.XCB_CW_BORDER_PIXEL] = 0
 
 	--declare what events we want to receive.
-	addvalue(C.XCB_CW_EVENT_MASK, bit.bor(
+	attrs[C.XCB_CW_EVENT_MASK] = bit.bor(
 		C.XCB_EVENT_MASK_KEY_PRESS,
 		C.XCB_EVENT_MASK_KEY_RELEASE,
 		C.XCB_EVENT_MASK_BUTTON_PRESS,
@@ -183,12 +184,9 @@ function window:new(app, frontend, t)
 		C.XCB_EVENT_MASK_PROPERTY_CHANGE,
 		C.XCB_EVENT_MASK_COLOR_MAP_CHANGE,
 		C.XCB_EVENT_MASK_OWNER_GRAB_BUTTON
-	))
+	)
 
-	local framed = t.frame ~= 'none' and t.frame ~= 'none-transparent'
-
-	--local parent = t.parent and t.parent.backend.win or screen.root
-	local parent = screen.root --TODO
+	local framed = t.frame ~= 'none'
 
 	local depth, visual = xcb.find_bgra8_visual(screen)
 	if not depth then
@@ -199,16 +197,28 @@ function window:new(app, frontend, t)
 		--create a colormap for the visual and add it to the window values array.
 		--this allows us to create a 32bit-depth window (i.e. with alpha).
 		local colormap = xcb.gen_id()
-		xcb.create_colormap(C.XCB_COLORMAP_ALLOC_NONE, colormap, parent, visual)
-		addvalue(C.XCB_CW_COLORMAP, colormap)
+		xcb.create_colormap(C.XCB_COLORMAP_ALLOC_NONE, colormap, screen.root, visual)
+		attrs[C.XCB_CW_COLORMAP] = colormap
 	end
 
-	local _, _, cw, ch = app:frame_to_client(t.frame, t.x or 0, t.y or 0, t.w, t.h)
+	--get client size from frame size
+	local _, _, cw, ch = app:frame_to_client(
+		t.frame, t.menu and true or false,
+		t.x or 0, t.y or 0, t.w, t.h)
+
+	--store and apply constraints to client size
+	self._min_cw = t.min_cw
+	self._min_ch = t.min_ch
+	self._max_cw = t.max_cw
+	self._max_ch = t.max_ch
+	cw, ch = self:__constrain(cw, ch)
 
 	self.win = xcb.gen_id()
 
+	local mask, values = xcb.mask_and_values(attrs)
+
 	xcb.create_window(
-		depth, self.win, parent,
+		depth, self.win, screen.root,
 		0, 0, --x, y (ignored by WM, set after mapping the window)
 		cw, ch,
 		0, --border width (ignored)
@@ -229,11 +239,16 @@ function window:new(app, frontend, t)
 		xcb.set_title(self.win, t.title)
 	end
 
-	--setting minw/h = maxw/h is how we tell X that a window has fixed size.
+	if t.frame == 'toolbox' then
+		xcb.set_transient_for(t.parent.backend.win)
+	end
+
 	if not t.resizeable then
-		xcb.set_minmax(self.win, w, h, w, h)
+		--this is how we tell X that a window is non-resizeable.
+		xcb.set_minmax(self.win, cw, ch, cw, ch)
 	else
-		xcb.set_minmax(self.win, t.min_cw, t.min_ch, t.max_cw, t.max_ch)
+		--tell X about the (already-applied) constraints.
+		xcb.set_minmax(self.win, self._min_cw, self._min_ch, self._max_cw, self._max_ch)
 	end
 
 	--set the _NET_WM_STATE property before mapping the window.
@@ -258,6 +273,7 @@ function window:new(app, frontend, t)
 	hints.flags = bit.bor(
 		C.MWM_HINTS_FUNCTIONS,
 		C.MWM_HINTS_DECORATIONS)
+	--TODO: compiz doesn't like this
 	hints.functions = bit.bor(
 		t.resizeable and C.MWM_FUNC_RESIZE or 0,
 		C.MWM_FUNC_MOVE,
@@ -268,7 +284,9 @@ function window:new(app, frontend, t)
 		framed and C.MWM_DECOR_BORDER or 0,
 		framed and C.MWM_DECOR_TITLE or 0,
 		framed and C.MWM_DECOR_MENU or 0,
-		t.resizeable and C.MWM_DECOR_RESIZEH or 0)
+		t.resizeable  and C.MWM_DECOR_RESIZEH or 0,
+		t.minimizable and C.MWM_DECOR_MINIMIZE or 0,
+		t.maximizable and C.MWM_DECOR_MAXIMIZE or 0)
 	xcb.set_motif_wm_hints(self.win, hints)
 
 	--setting the window's position only works after mapping the window.
@@ -322,10 +340,11 @@ end
 
 ev[C.XCB_PROPERTY_NOTIFY] = function(e)
 	e = cast('xcb_property_notify_event_t*', e)
+	if e.window == xcb.get_xsettings_window() then
+		print('XSETTINGS PROPERTY_NOTIFY')
+	end
 	local self = getwin(e.window)
 	if not self then return end
-	if e.atom == atom'_NET_FRAME_EXTENTS' then
-	end
 end
 
 ev[C.XCB_CONFIGURE_NOTIFY] = function(e)
@@ -336,7 +355,7 @@ ev[C.XCB_CONFIGURE_NOTIFY] = function(e)
 	self.y = e.y
 	self.w = e.width
 	self.h = e.height
-	print('XCB_CONFIGURE_NOTIFY', self.x, self.y, self.w, self.h)
+	--print('XCB_CONFIGURE_NOTIFY', self.x, self.y, self.w, self.h)
 end
 
 function window:forceclose()
@@ -348,26 +367,88 @@ end
 
 --activation -----------------------------------------------------------------
 
---app: self.frontend:_backend_activated()
---app: self.frontend:_backend_deactivated()
---window: self.frontend:_backend_activated()
---window: self.frontend:_backend_deactivated()
+--how much to wait for another window to become active after a window
+--is deactivated, before triggering a 'app deactivated' event.
+local focus_out_timeout = 0.2
+local last_focus_out
+local app_active
+local last_active_window
+
+function app:_check_activated()
+	if app_active then return end
+	app_active = true
+	self.frontend:_backend_activated()
+end
+
+ev[C.XCB_FOCUS_IN] = function(e)
+	local e = cast('xcb_focus_in_event_t*', e)
+	local self = getwin(e.event)
+	if not self then return end
+
+	if last_active_window then return end --ignore duplicate events
+	last_active_window = self
+
+	last_focus_out = nil
+	self.app:_check_activated() --window activation implies app activation.
+	self.frontend:_backend_activated()
+end
+
+ev[C.XCB_FOCUS_OUT] = function(e)
+	local e = cast('xcb_focus_out_event_t*', e)
+	local self = getwin(e.event)
+	if not self then return end
+
+	if not last_active_window then return end --ignore duplicate events
+	last_active_window = nil
+
+	--start a timer to check for when the app is deactivated
+	last_focus_out = time.clock()
+	self.app:runevery(focus_out_timeout / 2, function()
+		if not last_focus_out then
+			return false --abort: another window was activated in the meantime
+		end
+		if time.clock() - last_focus_out > focus_out_timeout then
+			last_focus_out = nil
+			app_active = false
+			self.app.frontend:_backend_deactivated()
+			return false --defuse: we're done
+		end
+	end)
+
+	self.frontend:_backend_deactivated()
+end
 
 function app:activate()
-
+	if app_active then return end
+	--unlike OSX, in X you don't activate an app, you have to activate a specific window.
+	--activating this app means activating the last window that was active.
+	local win = last_active_window
+	if win and not win.frontend:dead() then
+		win:activate()
+	end
 end
 
 function app:active_window()
-	local win = get_window_prop(screen.root, '_NET_ACTIVE_WINDOW')
-	return getwin(win)
+	return app_active and getwin(xcb.get_input_focus()) or nil
 end
 
 function app:active()
-	return true
+	return app_active
+end
+
+function window:_activate_noflush()
+	if xcb.net_active_window_supported() then
+		xcb.set_net_active_window(self.win)
+	else
+		xcb.config_window(self.win, {
+			[C.XCB_CONFIG_WINDOW_STACK_MODE] = C.XCB_STACK_MODE_ABOVE,
+		})
+		xcb.set_input_focus(self.win)
+	end
 end
 
 function window:activate()
-	xcb.activate(self.win)
+	self:_activate_noflush()
 	xcb.flush()
 end
 
@@ -378,15 +459,24 @@ end
 --state/visibility -----------------------------------------------------------
 
 function window:visible()
-	return true
+	return xcb.get_attrs(self.win).map_state == 0
 end
 
 function window:show()
+	--NOTE: this is needed only if activation is done via xcb.set_input_focus().
+	xcb.config_window(self.win, {
+		[C.XCB_CONFIG_WINDOW_STACK_MODE] = C.XCB_STACK_MODE_ABOVE,
+	})
 	xcb.map(self.win)
 	if self._init_pos then
-		xcb.change_pos(self.win, self._init_x, self._init_y)
+		xcb.config_window(self.win, {
+			[C.XCB_CONFIG_WINDOW_X] = self._init_x,
+			[C.XCB_CONFIG_WINDOW_Y] = self._init_y,
+			[C.XCB_CONFIG_WINDOW_BORDER_WIDTH] = 0,
+		})
 		self._init_pos, self._init_x, self._init_y = nil
 	end
+	self:_activate_noflush()
 	xcb.flush()
 end
 
@@ -398,8 +488,10 @@ end
 --state/minimizing ---------------------------------------------------------h(--
 
 function window:minimized()
-	local hints = xcb.get_wm_hints(self.win) --TODO: returns nil
-	return hints and bit.band(hints.initial_state, C.XCB_ICCCM_WM_STATE_ICONIC) ~= 0
+	if not self:visible() then
+		return self._minimized
+	end
+	return xcb.get_wm_state(self.win) == C.XCB_ICCCM_WM_STATE_ICONIC
 end
 
 function window:minimize()
@@ -413,23 +505,28 @@ function window:maximized()
 	local states = xcb.get_netwm_states(self.win)
 	return
 		states[xcb.atom'_NET_WM_STATE_MAXIMIZED_HORZ'] and
-		states[xcb.atom'_NET_WM_STATE_MAXIMIZED_VERT']
+		states[xcb.atom'_NET_WM_STATE_MAXIMIZED_VERT'] or false
 end
 
-function window:maximize()
-	xcb.change_netwm_states(self.win, true,
+function window:_set_maximized(onoff)
+	xcb.change_netwm_states(self.win, onoff,
 		'_NET_WM_STATE_MAXIMIZED_HORZ',
 		'_NET_WM_STATE_MAXIMIZED_VERT')
 	xcb.flush()
+end
+
+function window:maximize()
+	self:_set_maximized(true)
 end
 
 --state/restoring ------------------------------------------------------------
 
 function window:restore()
-	xcb.change_netwm_states(self.win, false,
-		'_NET_WM_STATE_MAXIMIZED_HORZ',
-		'_NET_WM_STATE_MAXIMIZED_VERT')
-	xcb.flush()
+	if self:minimized() then
+		self:show()
+	elseif self:maximized() then
+		self:_set_maximized(false)
+	end
 end
 
 function window:shownormal()
@@ -462,9 +559,11 @@ end
 --state/enabled --------------------------------------------------------------
 
 function window:get_enabled()
+	return not self._disabled
 end
 
 function window:set_enabled(enabled)
+	self._disabled = not enabled
 end
 
 --positioning/conversions ----------------------------------------------------
@@ -477,7 +576,7 @@ function window:to_client(x, y)
 	return xcb.translate_coords(screen.root, self.win, x, y)
 end
 
-local function frame_extents(frame)
+local function frame_extents(frame, has_menu)
 
 	--create a dummy window
 	local depth = C.XCB_COPY_FROM_PARENT
@@ -493,7 +592,7 @@ local function frame_extents(frame)
 
 	--set its frame
 	if frame == 'toolbox' then
-		xcb.set_atom_prop(win, '_NET_WM_WINDOW_TYPE', '_NET_WM_WINDOW_TYPE_TOOLBAR')
+		xcb.set_transient_for(screen.root)
 	end
 
 	--request frame extents estimation from the WM
@@ -514,8 +613,8 @@ end
 
 local frame_extents = glue.memoize(frame_extents)
 
-local frame_extents = function(frame)
-	return unpack(frame_extents(frame))
+local frame_extents = function(frame, has_menu)
+	return unpack(frame_extents(frame, has_menu))
 end
 
 local function frame_rect(x, y, w, h, w1, h1, w2, h2)
@@ -526,12 +625,12 @@ local function unframe_rect(x, y, w, h, w1, h1, w2, h2)
 	return frame_rect(x, y, w, h, -w1, -h1, -w2, -h2)
 end
 
-function app:client_to_frame(frame, x, y, w, h)
-	return frame_rect(x, y, w, h, frame_extents(frame))
+function app:client_to_frame(frame, has_menu, x, y, w, h)
+	return frame_rect(x, y, w, h, frame_extents(frame, has_menu))
 end
 
-function app:frame_to_client(frame, x, y, w, h)
-	local fx, fy, fw, fh = self:client_to_frame(frame, 0, 0, 200, 200)
+function app:frame_to_client(frame, has_menu, x, y, w, h)
+	local fx, fy, fw, fh = self:client_to_frame(frame, has_menu, 0, 0, 200, 200)
 	local cx = x - fx
 	local cy = y - fy
 	local cw = w - (fw - 200)
@@ -542,7 +641,7 @@ end
 --positioning/rectangles -----------------------------------------------------
 
 function window:_frame_extents()
-	return xcb.frame_extents(self.win)
+	return xcb.frame_extents(self.win, self:menubar() and true or false)
 end
 
 function window:get_normal_rect()
@@ -560,9 +659,14 @@ function window:get_frame_rect()
 end
 
 function window:set_frame_rect(x, y, w, h)
-	local x1, y1, w, h = unframe_rect(x, y, w, h, self:_frame_extents())
-	xcb.change_pos(self.win, x, y)
-	xcb.change_size(self.win, w, h)
+	local cx, cy, cw, ch = unframe_rect(x, y, w, h, self:_frame_extents())
+	xcb.config_window(self.win, {
+		[C.XCB_CONFIG_WINDOW_X] = x,
+		[C.XCB_CONFIG_WINDOW_Y] = y,
+		[C.XCB_CONFIG_WINDOW_WIDTH] = cw,
+		[C.XCB_CONFIG_WINDOW_HEIGHT] = ch,
+		[C.XCB_CONFIG_WINDOW_BORDER_WIDTH] = 0, --required by icccm
+	})
 	xcb.flush()
 end
 
@@ -576,23 +680,41 @@ end
 --positioning/constraints ----------------------------------------------------
 
 function window:get_minsize()
-	local hints = get_wm_normal_hints(self.win)
-	return hints.min_width, hints.min_height
+	return self._min_cw, self._min_ch
 end
 
 function window:get_maxsize()
-	local hints = get_wm_normal_hints(self.win)
-	return hints.max_width, hints.max_height
+	return self._max_cw, self._max_ch
 end
 
-function window:set_minsize(minw, minh)
-	xcb.set_minmax(self.win, minw, minh)
-	xcb.flush()
+function window:_apply_constraints()
+	local cw0, ch0 = self:get_size()
+	local cw, ch = self:__constrain(cw0, ch0)
+	if cw ~= cw0 or ch ~= ch0 then --dimensions changed
+		--update constraints
+		if not self.frontend:resizeable() then
+			xcb.set_minmax(self.win, cw, ch, cw, ch)
+		else
+			xcb.set_minmax(self.win, self._min_cw, self._min_ch, self._max_cw, self._max_ch)
+		end
+		--resize window
+		xcb.config_window(self.win, {
+			[C.XCB_CONFIG_WINDOW_WIDTH] = cw,
+			[C.XCB_CONFIG_WINDOW_HEIGHT] = ch,
+			[C.XCB_CONFIG_WINDOW_BORDER_WIDTH] = 0, --required by icccm
+		})
+		xcb.flush()
+	end
 end
 
-function window:set_maxsize(maxw, maxh)
-	xcb.set_minmax(self.win, nil, nil, maxw, maxh)
-	xcb.flush()
+function window:set_minsize(min_cw, min_ch)
+	self._min_cw, self._min_ch = min_cw, min_ch
+	self:_apply_constraints()
+end
+
+function window:set_maxsize(max_cw, max_ch)
+	self._max_cw, self._max_ch = max_cw, max_ch
+	self:_apply_constraints()
 end
 
 --positioning/resizing -------------------------------------------------------
@@ -630,6 +752,7 @@ function window:set_topmost(topmost)
 end
 
 function window:set_zorder(mode, relto)
+	--if relto
 end
 
 --displays -------------------------------------------------------------------
@@ -670,36 +793,128 @@ end
 
 --cursors --------------------------------------------------------------------
 
+local XC_xterm = 152
+local XC_hand2 = 60
+local XC_crosshair = 34
+local XC_pirate = 88
+local XC_watch = 150
+
+local cursor_shapes = {
+	--pointers
+	arrow = 0, --TODO
+	text  = XC_xterm,
+	hand  = XC_hand2,
+	cross = XC_crosshair,
+	no    = XC_pirate,
+	--move and resize
+	nwse  = 0,
+	nesw  = 0,
+	we    = 0,
+	ns    = 0,
+	move  = 0,
+	--app state
+	busyarrow  = XC_watch, --TODO
+}
 --[[
-     # NQR means default shape is not pretty... surely there is another
-        # cursor font?
-        cursor_shapes = {
-            self.CURSOR_CROSSHAIR:       cursorfont.XC_crosshair,
-            self.CURSOR_HAND:            cursorfont.XC_hand2,
-            self.CURSOR_HELP:            cursorfont.XC_question_arrow,  # NQR
-            self.CURSOR_NO:              cursorfont.XC_pirate,          # NQR
-            self.CURSOR_SIZE:            cursorfont.XC_fleur,
-            self.CURSOR_SIZE_UP:         cursorfont.XC_top_side,
-            self.CURSOR_SIZE_UP_RIGHT:   cursorfont.XC_top_right_corner,
-            self.CURSOR_SIZE_RIGHT:      cursorfont.XC_right_side,
-            self.CURSOR_SIZE_DOWN_RIGHT: cursorfont.XC_bottom_right_corner,
-            self.CURSOR_SIZE_DOWN:       cursorfont.XC_bottom_side,
-            self.CURSOR_SIZE_DOWN_LEFT:  cursorfont.XC_bottom_left_corner,
-            self.CURSOR_SIZE_LEFT:       cursorfont.XC_left_side,
-            self.CURSOR_SIZE_UP_LEFT:    cursorfont.XC_top_left_corner,
-            self.CURSOR_SIZE_UP_DOWN:    cursorfont.XC_sb_v_double_arrow,
-            self.CURSOR_SIZE_LEFT_RIGHT: cursorfont.XC_sb_h_double_arrow,
-            self.CURSOR_TEXT:            cursorfont.XC_xterm,
-            self.CURSOR_WAIT:            cursorfont.XC_watch,
-            self.CURSOR_WAIT_ARROW:      cursorfont.XC_watch,           # NQR
-        }
-        if name not in cursor_shapes:
-            raise MouseCursorException('Unknown cursor name "%s"' % name)
-        cursor = xlib.XCreateFontCursor(self._x_display, cursor_shapes[name])
-        return XlibMouseCursor(cursor)
+	self.CURSOR_CROSSHAIR:       cursorfont.XC_crosshair,
+	self.CURSOR_HAND:            cursorfont.XC_hand2,
+	self.CURSOR_HELP:            cursorfont.XC_question_arrow,  # NQR
+	self.CURSOR_SIZE:            cursorfont.XC_fleur,
+	self.CURSOR_SIZE_UP:         cursorfont.XC_top_side,
+	self.CURSOR_SIZE_UP_RIGHT:   cursorfont.XC_top_right_corner,
+	self.CURSOR_SIZE_RIGHT:      cursorfont.XC_right_side,
+	self.CURSOR_SIZE_DOWN_RIGHT: cursorfont.XC_bottom_right_corner,
+	self.CURSOR_SIZE_DOWN:       cursorfont.XC_bottom_side,
+	self.CURSOR_SIZE_DOWN_LEFT:  cursorfont.XC_bottom_left_corner,
+	self.CURSOR_SIZE_LEFT:       cursorfont.XC_left_side,
+	self.CURSOR_SIZE_UP_LEFT:    cursorfont.XC_top_left_corner,
+	self.CURSOR_SIZE_UP_DOWN:    cursorfont.XC_sb_v_double_arrow,
+	self.CURSOR_SIZE_LEFT_RIGHT: cursorfont.XC_sb_h_double_arrow,
+
+
+	XC_num_glyphs = 154
+	XC_X_cursor = 0
+	XC_arrow = 2
+	XC_based_arrow_down = 4
+	XC_based_arrow_up = 6
+	XC_boat = 8
+	XC_bogosity = 10
+	XC_bottom_left_corner = 12
+	XC_bottom_right_corner = 14
+	XC_bottom_side = 16
+	XC_bottom_tee = 18
+	XC_box_spiral = 20
+	XC_center_ptr = 22
+	XC_circle = 24
+	XC_clock = 26
+	XC_coffee_mug = 28
+	XC_cross = 30
+	XC_cross_reverse = 32
+	XC_crosshair = 34
+	XC_diamond_cross = 36
+	XC_dot = 38
+	XC_dotbox = 40
+	XC_double_arrow = 42
+	XC_draft_large = 44
+	XC_draft_small = 46
+	XC_draped_box = 48
+	XC_exchange = 50
+	XC_fleur = 52
+	XC_gobbler = 54
+	XC_gumby = 56
+	XC_hand1 = 58
+	XC_heart = 62
+	XC_icon = 64
+	XC_iron_cross = 66
+	XC_left_ptr = 68
+	XC_left_side = 70
+	XC_left_tee = 72
+	XC_leftbutton = 74
+	XC_ll_angle = 76
+	XC_lr_angle = 78
+	XC_man = 80
+	XC_middlebutton = 82
+	XC_mouse = 84
+	XC_pencil = 86
+	XC_pirate = 88
+	XC_plus = 90
+	XC_question_arrow = 92
+	XC_right_ptr = 94
+	XC_right_side = 96
+	XC_right_tee = 98
+	XC_rightbutton = 100
+	XC_rtl_logo = 102
+	XC_sailboat = 104
+	XC_sb_down_arrow = 106
+	XC_sb_h_double_arrow = 108
+	XC_sb_left_arrow = 110
+	XC_sb_right_arrow = 112
+	XC_sb_up_arrow = 114
+	XC_sb_v_double_arrow = 116
+	XC_shuttle = 118
+	XC_sizing = 120
+	XC_spider = 122
+	XC_spraycan = 124
+	XC_star = 126
+	XC_target = 128
+	XC_tcross = 130
+	XC_top_left_arrow = 132
+	XC_top_left_corner = 134
+	XC_top_right_corner = 136
+	XC_top_side = 138
+	XC_top_tee = 140
+	XC_trek = 142
+	XC_ul_angle = 144
+	XC_umbrella = 146
+	XC_ur_angle = 148
+	XC_watch = 150
 ]]
 
-function window:cursor(name)
+function window:set_cursor(name)
+end
+
+function window:get_cursor()
+
 end
 
 --keyboard -------------------------------------------------------------------
@@ -708,6 +923,7 @@ ev[C.XCB_KEY_PRESS] = function(e)
 	local e = cast('xcb_key_press_event_t*', e)
 	local self = getwin(e.event)
 	if not self then return end
+	if self._disabled then return end
 	if self._keypressed then
 		self._keypressed = false
 		return
@@ -723,10 +939,11 @@ ev[C.XCB_KEY_RELEASE] = function(e)
 	local e = cast('xcb_key_press_event_t*', e)
 	local self = getwin(e.event)
 	if not self then return end
+	if self._disabled then return end
 	local key = e.detail
 
 	--peek next message to distinguish between key release and key repeat
- 	local e1 = peek_event()
+ 	local e1 = xcb.peek()
  	if e1 then
  		local v = bit.band(e1.response_type, bit.bnot(0x80))
  		if v == C.XCB_KEY_PRESS then
@@ -759,6 +976,7 @@ ev[C.XCB_BUTTON_PRESS] = function(e)
 	e = cast('xcb_button_press_event_t*', e)
 	local self = getwin(e.event)
 	if not self then return end
+	if self._disabled then return end
 
 	local btn = btns[e.detail]
 	if not btn then return end
@@ -770,6 +988,7 @@ ev[C.XCB_BUTTON_RELEASE] = function(e)
 	e = cast('xcb_button_press_event_t*', e)
 	local self = getwin(e.event)
 	if not self then return end
+	if self._disabled then return end
 
 	local btn = btns[e.detail]
 	if not btn then return end

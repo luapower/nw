@@ -121,7 +121,7 @@ function window:new(app, frontend, t)
 	self = glue.inherit({app = app, frontend = frontend}, self)
 
 	local framed = t.frame == 'normal' or t.frame == 'toolbox'
-	self._layered = t.frame == 'none-transparent'
+	self._layered = t.transparent
 
 	self.win = Window{
 		--state
@@ -495,13 +495,11 @@ end
 
 local function frame_args(frame, has_menu)
 	local framed = frame == 'normal' or frame == 'toolbox'
-	local layered = frame == 'none-transparent'
 	return {
 		border = framed,
 		frame = framed,
 		window_edge = framed,
 		sizeable = framed,
-		layered = layered,
 		menu = has_menu,
 	}
 end
@@ -792,7 +790,7 @@ require'winapi.cursor'
 local cursors = {
 	--pointers
 	arrow = winapi.IDC_ARROW,
-	ibeam = winapi.IDC_IBEAM,
+	text  = winapi.IDC_IBEAM,
 	hand  = winapi.IDC_HAND,
 	cross = winapi.IDC_CROSS,
 	no    = winapi.IDC_NO,
@@ -803,17 +801,16 @@ local cursors = {
 	ns    = winapi.IDC_SIZENS,
 	move  = winapi.IDC_SIZEALL,
 	--app state
-	--wait  = winapi.IDC_WAIT, --not in OSX
-	busy  = winapi.IDC_APPSTARTING,
+	busyarrow = winapi.IDC_APPSTARTING,
 }
 
-function window:cursor(name)
-	if name ~= nil then
-		self._cursor = name
-		self:invalidate()
-	else
-		return self._cursor
-	end
+function window:set_cursor(name)
+	self._cursor = name
+	self:invalidate()
+end
+
+function window:get_cursor()
+	return self._cursor
 end
 
 function Window:on_set_cursor(_, ht)
