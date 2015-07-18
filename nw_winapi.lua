@@ -793,31 +793,30 @@ local cursors = {
 	text  = winapi.IDC_IBEAM,
 	hand  = winapi.IDC_HAND,
 	cross = winapi.IDC_CROSS,
-	no    = winapi.IDC_NO,
+	forbidden = winapi.IDC_NO,
 	--move and resize
-	nwse  = winapi.IDC_SIZENWSE,
-	nesw  = winapi.IDC_SIZENESW,
-	we    = winapi.IDC_SIZEWE,
-	ns    = winapi.IDC_SIZENS,
-	move  = winapi.IDC_SIZEALL,
+	size_diag1 = winapi.IDC_SIZENESW,
+	size_diag2 = winapi.IDC_SIZENWSE,
+	size_h = winapi.IDC_SIZEWE,
+	size_v = winapi.IDC_SIZENS,
+	move = winapi.IDC_SIZEALL,
 	--app state
-	busyarrow = winapi.IDC_APPSTARTING,
+	busy_arrow = winapi.IDC_APPSTARTING,
 }
 
-function window:set_cursor(name)
-	self._cursor = name
-	self:invalidate()
-end
-
-function window:get_cursor()
-	return self._cursor
+function window:update_cursor()
+	self:invalidate() --trigger WM_SETCURSOR
 end
 
 function Window:on_set_cursor(_, ht)
 	if ht ~= winapi.HTCLIENT then return end
-	local cursor = cursors[self.backend._cursor]
-	if not cursor then return end
-	winapi.SetCursor(winapi.LoadCursor(cursor))
+	local cursor, visible = self.frontend:cursor()
+	if not visible then
+		winapi.SetCursor(nil)
+	else
+		local cursor = assert(cursors[cursor])
+		winapi.SetCursor(winapi.LoadCursor(cursor))
+	end
 	return true --important
 end
 

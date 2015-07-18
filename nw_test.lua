@@ -2442,7 +2442,7 @@ add('xcb', function()
 		end
 		--ffi.fill(bmp.data, bmp.stride * 10, 0x80)
 	end
-	app:runevery(1, function()
+	app:runevery(2, function()
 		--[[
 		local mw, mh = win1:maxsize()
 		mw = mw - 10
@@ -2452,6 +2452,8 @@ add('xcb', function()
 		if win1:minimized() then
 			win1:show()
 		end
+
+		win1:fullscreen(not win1:fullscreen())
 		--[[
 		if not win1:maximized() then
 			win1:maximize()

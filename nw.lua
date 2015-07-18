@@ -440,7 +440,7 @@ function window:_new(app, backend_class, useropt)
 		assert(not opt.maximizable,    'child windows cannot be maximizable')
 		assert(not opt.fullscreenable, 'child windows cannot be fullscreenable')
 		--parent-child deep hierarchies are not allowed (self-imposed limitation).
-		assert(not opt.parent.parent,  'parent window cannot have a parent itself')
+		assert(not opt.parent.parent,  'parent windows must be top-level windows')
 	end
 
 	--top-level toolboxes don't make sense because they don't show in taskbar
@@ -489,6 +489,9 @@ function window:_new(app, backend_class, useropt)
 	self._mouse = {}
 	self._down = {}
 	self._views = {}
+
+	self._cursor_visible = true
+	self._cursor = 'arrow'
 
 	self.backend = backend_class:new(app.backend, self, opt)
 
@@ -1033,9 +1036,14 @@ end
 
 function window:cursor(name)
 	if name ~= nil then
-		self.backend:set_cursor(name)
+		if type(name) == 'boolean' then
+			self._cursor_visible = name
+		else
+			self._cursor = name
+		end
+		self.backend:update_cursor()
 	else
-		return self.backend:get_cursor()
+		return self._cursor, self._cursor_visible
 	end
 end
 

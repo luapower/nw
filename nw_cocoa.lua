@@ -1230,18 +1230,18 @@ local cursors = {
 	hand  = 'openHandCursor',
 	cross = 'crosshairCursor',
 	--app state
-	busyarrow  = 'busyButClickableCursor', --undocumented, whatever
+	busy_arrow = 'busyButClickableCursor', --undocumented, whatever
 }
 
 local hi_cursors = {
 	--pointers
-	no    = 'notallowed',
+	forbidden  = 'notallowed',
 	--move and resize
-	nesw  = 'resizenortheastsouthwest',
-	nwse  = 'resizenorthwestsoutheast',
-	ew    = 'resizeeastwest',
-	ns    = 'resizenorthsouth',
-	move  = 'move',
+	size_diag1 = 'resizenortheastsouthwest',
+	size_diag2 = 'resizenorthwestsoutheast',
+	size_h     = 'resizeeastwest',
+	size_v     = 'resizenorthsouth',
+	move       = 'move',
 }
 
 local load_hicursor = objc.memoize(function(name)
@@ -1256,27 +1256,29 @@ local load_hicursor = objc.memoize(function(name)
 	return objc.NSCursor:alloc():initWithImage_hotSpot(image, objc.NSMakePoint(hotx, hoty))
 end)
 
-local function setcursor(name)
+local function load_cursor(name)
 	if cursors[name] then
-		objc.NSCursor[cursors[name]](objc.NSCursor):set()
+		return objc.NSCursor[cursors[name]](objc.NSCursor)
 	elseif hi_cursors[name] then
-		load_hicursor(hi_cursors[name]):set()
+		return load_hicursor(hi_cursors[name])
+	else
+		error'invalid cursor'
 	end
 end
 
-function window:set_cursor(name)
-	if self._cursor == name then return end
-	self._cursor = name
+function window:update_cursor()
 	self.nswin:invalidateCursorRectsForView(self.nswin:contentView()) --trigger cursorUpdate
-end
-
-function window:get_cursor()
-	return self._cursor
 end
 
 function Window:cursorUpdate(event)
 	if self:nw_clientarea_hit(event) then
-		setcursor(self.backend._cursor)
+		local cursor, visible = self.frontend:cursor()
+		if visible then
+			load_cursor(cursor):set()
+			objc.NSCursor:unhide()
+		else
+			objc.NSCursor:hide()
+		end
 	else
 		objc.callsuper(self, 'cursorUpdate', event)
 	end
