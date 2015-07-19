@@ -439,8 +439,6 @@ function window:_new(app, backend_class, useropt)
 		--child windows can't be maximizable or fullscreenable (X11 limitation).
 		assert(not opt.maximizable,    'child windows cannot be maximizable')
 		assert(not opt.fullscreenable, 'child windows cannot be fullscreenable')
-		--parent-child deep hierarchies are not allowed (self-imposed limitation).
-		assert(not opt.parent.parent,  'parent windows must be top-level windows')
 	end
 
 	--top-level toolboxes don't make sense because they don't show in taskbar

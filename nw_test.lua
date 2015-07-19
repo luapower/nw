@@ -251,6 +251,40 @@ add('timer-runevery', function()
 	rec{'start', 1, 2, 3, 'stop', 'quit'}
 end)
 
+--ensure that timers that are too fast don't starve the loop
+add('timer-fast', function()
+	local rec = recorder()
+	local i = 1
+	app:runevery(0, function()
+		rec(i)
+		i = i + 1
+		if i > 3 then
+			--stopping is done on the next loop. if the app stops
+			--then it means that it reached the top of the loop.
+			app:stop()
+		end
+	end)
+	app:run()
+	rec{1, 2, 3}
+end)
+
+--timers stop when the loop is stopped, and resume after the loop is resumed.
+add('timer-resume', function()
+	local rec = recorder()
+	local i = 1
+	app:runevery(0, function()
+		rec(i)
+		i = i + 1
+		if i > 3 then
+			app:stop()
+		end
+	end)
+	app:run()
+	i = 1
+	app:run()
+	rec{1, 2, 3, 1, 2, 3}
+end)
+
 --app running and stopping ---------------------------------------------------
 
 --run() starts the loop even if there are no windows.
@@ -283,6 +317,22 @@ add('loop-running', function()
 	app:run()
 	assert(not app:running())
 	rec{'after-stop'}
+end)
+
+--stop() works after running a second time.
+add('loop-run-stop-run', function()
+	local rec = recorder()
+	app:runafter(0, function()
+		rec'run1'
+		app:stop()
+	end)
+	app:run()
+	app:runafter(0, function()
+		rec'run2'
+		app:stop()
+	end)
+	app:run()
+	rec{'run1', 'run2'}
 end)
 
 --app quitting ---------------------------------------------------------------
@@ -602,40 +652,42 @@ end)
 --8. app:active_window() works (gives the expected window).
 add('activation-events', function()
 	local rec = recorder()
-	local win1 = app:window(winpos())
-	local win2 = app:window(winpos())
-	local win3 = app:window(winpos())
-	function app:activated() rec'app-activated' end
-	function app:deactivated() rec'app-deactivated' end
-	function win1:activated() rec'win1-activated' end
-	function win2:activated() rec'win2-activated' end
-	function win3:activated() rec'win3-activated' end
-	function win1:deactivated() rec'win1-deactivated' end
-	function win2:deactivated() rec'win2-deactivated' end
-	function win3:deactivated() rec'win3-deactivated' end
-	app:runafter(0, function()
-		rec'started'
-		assert(app:active())
-		win1:activate(); assert(app:active_window() == win1)
-		win2:activate(); assert(app:active_window() == win2)
-		win3:activate(); assert(app:active_window() == win3)
-		win3:close();    assert(app:active_window() == win2)
-		win2:close();    assert(app:active_window() == win1)
-		assert(app:active())
-		win1:close()
-		assert(not app:active_window())
-		if ffi.os == 'Windows' then
-			--on Windows, the app is deactivated after the last windows is closed.
-			assert(not app:active())
-		else
-			--on OSX, the app stays active (there's still the main menu and the dock icon).
-			rec'app-deactivated' --fake entry
-			assert(app:active())
-		end
-		rec'ended'
-	end)
 	rec'before-run'
-	app:run()
+	process(function()
+		local win1 = app:window(winpos())
+		local win2 = app:window(winpos())
+		local win3 = app:window(winpos())
+		function app:activated() rec'app-activated' end
+		function app:deactivated() rec'app-deactivated' end
+		function win1:activated() rec'win1-activated' end
+		function win2:activated() rec'win2-activated' end
+		function win3:activated() rec'win3-activated' end
+		function win1:deactivated() rec'win1-deactivated' end
+		function win2:deactivated() rec'win2-deactivated' end
+		function win3:deactivated() rec'win3-deactivated' end
+		app:runafter(1, function()
+			rec'started'
+			assert(app:active())
+			win1:activate(); sleep(0.1); assert(app:active_window() == win1)
+			win2:activate(); sleep(0.1); assert(app:active_window() == win2)
+			win3:activate(); sleep(0.1); assert(app:active_window() == win3)
+			win3:close();    sleep(0.1); assert(app:active_window() == win2)
+			win2:close();    sleep(0.1); assert(app:active_window() == win1)
+			assert(app:active())
+			win1:close()
+			assert(not app:active_window())
+			if ffi.os == 'Windows' then
+				--on Windows, the app is deactivated after the last windows is closed.
+				assert(not app:active())
+			else
+				--on OSX, the app stays active (there's still the main menu and the dock icon).
+				rec'app-deactivated' --fake entry
+				assert(app:active())
+			end
+			rec'ended'
+		end)
+		sleep(10)
+	end)()
 	rec{
 		'before-run',
 		'app-activated',
@@ -2419,6 +2471,8 @@ end)
 
 add('xcb', function()
 
+	--app:autoquit(false)
+
 	local win1 = app:window{x = 2, y = 26, cw = 500, ch = 300,
 		title = 'Hello 1',
 		--min_cw = 200,
@@ -2432,6 +2486,7 @@ add('xcb', function()
 		--maximized = true,
 		--fullscreen = true,
 	}
+
 	function win1:repaint()
 		local bmp = self:bitmap()
 		local _, setpixel = require'bitmap'.pixel_interface(bmp)
@@ -2449,11 +2504,9 @@ add('xcb', function()
 		mh = mh - 10
 		win1:maxsize(mw, mh)
 		]]
-		if win1:minimized() then
-			win1:show()
-		end
+		--if win1:minimized() then win1:show() end
 
-		win1:fullscreen(not win1:fullscreen())
+		--win1:fullscreen(not win1:fullscreen())
 		--[[
 		if not win1:maximized() then
 			win1:maximize()
@@ -2463,7 +2516,7 @@ add('xcb', function()
 		]]
 		--win1:fullscreen(not win1:fullscreen())
 	end)
-	local win2 = app:window{x = 20, y = 40, cw = 300, ch = 200}
+	local win2 = app:window{x = 20, y = 40, cw = 300, ch = 200, parent = win1}
 	function app:event(...) print('app', ...) end
 	function win1:event(...) print('win1', ...) end
 	function win2:event(...) print('win2', ...) end

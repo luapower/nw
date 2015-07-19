@@ -88,6 +88,7 @@ function app:run()
 			self:_sleep()
 		end
 	end
+	self._stop = false
 end
 
 function app:stop()
@@ -121,6 +122,9 @@ function app:_check_timers()
 			else
 				t.time = now + t.interval
 				timers:replace(1, t)
+				--break to the loop to avoid infinite looping the same timer
+				--without other events having a chance to be pulled.
+				break
 			end
 		else
 			break
@@ -359,18 +363,26 @@ ev[C.XCB_CONFIGURE_NOTIFY] = function(e)
 end
 
 function window:forceclose()
-	xcb.destroy_window(self.win)
+	if self._closing then return end
+	self._closing = true --forceclose() barrier
+	--force-close child windows first to emulate Windows behavior.
+	for i,win in ipairs(self.frontend:children()) do
+		win.backend:forceclose()
+	end
+	xcb.destroy_window(self.win) --doesn't trigger WM_DELETE_WINDOW
 	xcb.flush()
 	self.frontend:_backend_closed()
 	setwin(self.win, nil)
+	self.win = nil
 end
 
 --activation -----------------------------------------------------------------
 
 --how much to wait for another window to become active after a window
 --is deactivated, before triggering a 'app deactivated' event.
-local focus_out_timeout = 0.2
+local focus_out_timeout = 0.1
 local last_focus_out
+local focus_timer_started
 local app_active
 local last_active_window
 
@@ -401,20 +413,27 @@ ev[C.XCB_FOCUS_OUT] = function(e)
 	if not last_active_window then return end --ignore duplicate events
 	last_active_window = nil
 
-	--start a timer to check for when the app is deactivated
+	--start a delayed check for when the app is deactivated.
+	--if a timer is already started, just advance the delay.
 	last_focus_out = time.clock()
-	self.app:runevery(focus_out_timeout / 2, function()
-		if not last_focus_out then
-			return false --abort: another window was activated in the meantime
-		end
-		if time.clock() - last_focus_out > focus_out_timeout then
-			last_focus_out = nil
-			app_active = false
-			self.app.frontend:_backend_deactivated()
-			return false --defuse: we're done
-		end
-	end)
+	if not focus_timer_started then
+		self.app.frontend:runafter(focus_out_timeout, function()
+			if last_focus_out and time.clock() - last_focus_out > focus_out_timeout then
+				last_focus_out = nil
+				app_active = false
+				self.app.frontend:_backend_deactivated()
+			end
+			focus_timer_started = false
+		end)
+		focus_timer_started = true
+	end
 
+	self.frontend:_backend_deactivated()
+end
+
+--if the app was active but the
+function app:_check_app_deactivate()
+	if not app_active then return end
 	self.frontend:_backend_deactivated()
 end
 
@@ -910,6 +929,7 @@ Things you need to know:
 - you can't create a xcb_drawable_t, that's just an abstraction: instead,
   any xcb_pixmap_t or xcb_window_t can be used where a xcb_drawable_t
   is expected (they're all int32 ids btw).
+- pixmaps have depth, but no channel layout. windows have color info.
 - the default screen visual has 24 depth, but a screen can have many visuals.
   if it has a 32 depth visual, then we can make windows with alpha.
 - a window with alpha needs XCB_CW_COLORMAP which needs XCB_CW_BORDER_PIXEL.
