@@ -37,7 +37,6 @@ function glview:_init(t)
 	end
 
 	self.view:show()
-
 end
 
 function glview:free()

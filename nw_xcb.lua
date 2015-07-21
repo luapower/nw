@@ -47,7 +47,7 @@ local xcb, screen, c, atom --xcb connection state
 function app:new(frontend)
 	self = glue.inherit({frontend = frontend}, self)
 	xcb = xcb_module.connect()
-	c, screen, atom = xcb.c, xcb.screen, xcb.atom
+	c, screen, atom = xcb.connection, xcb.screen, xcb.atom
 	return self
 end
 
@@ -200,8 +200,7 @@ function window:new(app, frontend, t)
 	else
 		--create a colormap for the visual and add it to the window values array.
 		--this allows us to create a 32bit-depth window (i.e. with alpha).
-		local colormap = xcb.gen_id()
-		xcb.create_colormap(C.XCB_COLORMAP_ALLOC_NONE, colormap, screen.root, visual)
+		local colormap = xcb.create_colormap(screen.root, visual)
 		attrs[C.XCB_CW_COLORMAP] = colormap
 	end
 
@@ -217,17 +216,14 @@ function window:new(app, frontend, t)
 	self._max_ch = t.max_ch
 	cw, ch = self:__constrain(cw, ch)
 
-	self.win = xcb.gen_id()
-
 	local mask, values = xcb.mask_and_values(attrs)
 
-	xcb.create_window(
-		depth, self.win, screen.root,
+	self.win = xcb.create_window(
+		screen.root,
 		0, 0, --x, y (ignored by WM, set after mapping the window)
 		cw, ch,
 		0, --border width (ignored)
-		C.XCB_WINDOW_CLASS_INPUT_OUTPUT, --class
-		visual, mask, values)
+		depth, visual, mask, values)
 
 	--declare the X protocols that the window supports.
 	xcb.set_atom_map_prop(self.win, 'WM_PROTOCOLS', {
@@ -600,14 +596,12 @@ local function frame_extents(frame, has_menu)
 	--create a dummy window
 	local depth = C.XCB_COPY_FROM_PARENT
 	local visual = screen.root_visual
-	local win = xcb.gen_id()
-	xcb.create_window(
-		depth, win, screen.root,
+	local win = xcb.create_window(
+		screen.root,
 		0, 0, --x, y (ignored)
 		200, 200,
 		0, --border width (ignored)
-		C.XCB_WINDOW_CLASS_INPUT_OUTPUT, --class
-		visual, 0, nil)
+		depth, visual, 0, nil)
 
 	--set its frame
 	if frame == 'toolbox' then
@@ -986,16 +980,12 @@ local function make_bitmap(w, h, win)
 		local data = glue.malloc('char', size)
 		bitmap.data = data
 
-		local pix = xcb.gen_id()
-		C.xcb_create_pixmap(c, 32, pix, win, w, h)
-
-		local gc = xcb.gen_id()
-		C.xcb_create_gc(c, gc, win, 0, nil)
+		local pix = xcb.create_pixmap(win, w, h, 32)
+		local gc = xcb.create_gc(win)
 
 		function paint()
-			C.xcb_put_image(c, C.XCB_IMAGE_FORMAT_Z_PIXMAP,
-				pix, gc, w, h, 0, 0, 0, 32, size, data)
-			C.xcb_copy_area(c, pix, win, gc, 0, 0, 0, 0, w, h)
+			xcb.put_image(gc, data, size, w, h, 32, pix)
+			xcb.copy_area(gc, pix, 0, 0, w, h, win)
 			xcb.flush()
 		end
 

@@ -97,6 +97,7 @@ local timers = {}
 
 function app:runevery(seconds, func)
 	timer_cb = timer_cb or ffi.cast('TIMERPROC', function(hwnd, wm_timer, id, ellapsed_ms)
+		local id = tonumber(id)
 		local func = timers[id]
 		if not func then return end
 		if func() == false then
@@ -104,7 +105,7 @@ function app:runevery(seconds, func)
 			winapi.KillTimer(nil, id)
 		end
 	end)
-	local id = winapi.SetTimer(nil, 0, seconds * 1000, timer_cb)
+	local id = tonumber(winapi.SetTimer(nil, 0, seconds * 1000, timer_cb))
 	timers[id] = func
 end
 
@@ -1006,6 +1007,7 @@ function Window:setkey(vk, flags, down)
 			name = 'altgr'
 		end
 	end
+	if not name then return end --unmapped key
 	local searchname = name:lower()
 	if not keycodes[searchname] then --save the state of this key because we can't get it with GetKeyState()
 		keystate[searchname] = down

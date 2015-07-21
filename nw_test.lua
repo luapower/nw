@@ -2073,6 +2073,32 @@ local function cube(w)
 	gl.glPopMatrix()
 end
 
+local function render()
+	gl.glClearColor(0, 0, 0, 1)
+	gl.glClear(bit.bor(gl.GL_COLOR_BUFFER_BIT, gl.GL_DEPTH_BUFFER_BIT))
+	gl.glEnable(gl.GL_BLEND)
+	gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_SRC_ALPHA)
+	gl.glDisable(gl.GL_DEPTH_TEST)
+	gl.glDisable(gl.GL_CULL_FACE)
+	gl.glDisable(gl.GL_LIGHTING)
+	gl.glMatrixMode(gl.GL_MODELVIEW)
+	gl.glLoadIdentity()
+	gl.glTranslated(0,0,-1)
+	cube(1)
+end
+
+add('view-gl', function()
+	local win = app:window{cw = 700, ch = 500}
+	local glv = win:glview{x = 50, y = 50, w = 600, h = 400}
+	function glv:render()
+		render()
+	end
+	app:runevery(1/60, function()
+		glv:invalidate()
+	end)
+	app:run()
+end)
+
 add('view-cairo', function()
 	local win = app:window{w = 500, h = 300}--, frame = 'none', transparent = true}
 	local fps = 60
@@ -2099,32 +2125,6 @@ add('view-cairo', function()
 		cr:set_source_rgba(1, 0, 0, alpha)
 		cr:rectangle(cx - 50, cy - 50, 100, 100)
 		cr:fill()
-	end
-
-	local x, y = 150, 170
-	local w, h = 300, 80
-
-	local glview = win:glview{x = x, y = y, w = w, h = h}
-	function glview:render()
-
-		--set default viewport
-		gl.glViewport(0, 0, w, h)
-		gl.glMatrixMode(gl.GL_PROJECTION)
-		gl.glLoadIdentity()
-		gl.glFrustum(-1, 1, -1, 1, 1, 100) --so fov is 90 deg
-		gl.glScaled(1, w/h, 1)
-
-		gl.glClearColor(0, 0, 0, 1)
-		gl.glClear(bit.bor(gl.GL_COLOR_BUFFER_BIT, gl.GL_DEPTH_BUFFER_BIT))
-		gl.glEnable(gl.GL_BLEND)
-		gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_SRC_ALPHA)
-		gl.glDisable(gl.GL_DEPTH_TEST)
-		gl.glDisable(gl.GL_CULL_FACE)
-		gl.glDisable(gl.GL_LIGHTING)
-		gl.glMatrixMode(gl.GL_MODELVIEW)
-		gl.glLoadIdentity()
-		gl.glTranslated(0,0,-1)
-		cube(1)
 	end
 
 	local x, y = 230, 20

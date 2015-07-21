@@ -1316,6 +1316,8 @@ end
 local glview = glue.inherit({}, view)
 
 function window:glview(t)
+	--check that the window is not layered (winapi limitation)
+	assert(not self:transparent(), 'opengl views cannot render on transparent windows')
 	return glview:_new(self, self.backend.glview, t)
 end
 

@@ -5,11 +5,6 @@ local glue = require'glue'
 local objc = require'objc'
 objc.load'OpenGL'
 
-ffi.cdef[[
-void* malloc (size_t size);
-void  free   (void*);
-]]
-
 local function unpack_nsrect(r)
 	return r.origin.x, r.origin.y, r.size.width, r.size.height
 end
