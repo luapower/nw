@@ -2467,14 +2467,16 @@ add('dragging', function()
 	app:run()
 end)
 
---xcb dev tests --------------------------------------------------------------
+--xlib dev tests -------------------------------------------------------------
 
-add('xcb', function()
+add('xlib', function()
 
 	--app:autoquit(false)
 
 	local win1 = app:window{x = 2, y = 26, cw = 500, ch = 300,
 		title = 'Hello 1',
+		transparent = true,
+		frame = 'none',
 		--min_cw = 200,
 		--min_ch = 200,
 		--max_cw = 600,

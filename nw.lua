@@ -37,7 +37,7 @@ end
 nw.backends = {
 	Windows = 'nw_winapi',
 	OSX     = 'nw_cocoa',
-	Linux   = 'nw_xcb',
+	Linux   = 'nw_xlib',
 }
 
 function nw:init(bkname)

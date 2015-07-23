@@ -1,5 +1,5 @@
 
---native widgets - XCB backend.
+--native widgets - Xlib backend.
 --Written by Cosmin Apreutesei. Public domain.
 
 if not ... then require'nw_test'; return end
@@ -8,16 +8,18 @@ local ffi = require'ffi'
 local bit = require'bit'
 local glue = require'glue'
 local box2d = require'box2d'
-local xcb_module = require'xcb'
+local xlib = require'xlib'
+require'xlib_keysym_h'
+require'xlib_xshm_h'
 local time = require'time' --for timers
 local heap = require'heap' --for timers
 local pp = require'pp'
 local cast = ffi.cast
 local free = glue.free
+local xid = xlib.xid
+local C = xlib.C
 
-local C = xcb_module.C
-
-local nw = {name = 'xcb'}
+local nw = {name = 'xlib'}
 
 --os version -----------------------------------------------------------------
 
@@ -27,37 +29,24 @@ end
 
 nw.min_os = 'Linux 11.0'
 
---window handle to window object mapping -------------------------------------
-
---NOTE: xcb_window_t is an uint32_t so it comes from ffi as a Lua number
---so it can be used as table key directly.
-
-local winmap = {} --{xcb_window_t -> window object}
-local function setwin(win, x) winmap[win] = x end
-local function getwin(win) return winmap[win] end
-local function nextwin() return next(winmap) end
-
 --app object -----------------------------------------------------------------
 
 local app = {}
 nw.app = app
 
-local xcb, screen, c, atom --xcb connection state
-
 function app:new(frontend)
-	self = glue.inherit({frontend = frontend}, self)
-	xcb = xcb_module.connect()
-	c, screen, atom = xcb.connection, xcb.screen, xcb.atom
+	self   = glue.inherit({frontend = frontend}, self)
+	xlib   = xlib.connect()
 	return self
 end
 
 function app:virtual_roots()
-	return get_window_list_prop(screen.root, '_NET_VIRTUAL_ROOTS')
+	return get_window_list_prop(xlib.screen.root, '_NET_VIRTUAL_ROOTS')
 end
 
 --message loop ---------------------------------------------------------------
 
-local ev = {} --{xcb_event_code = event_handler}
+local ev = {} --{event_code = event_handler}
 
 --how much to wait before polling again.
 --checking more often increases CPU usage!
@@ -74,15 +63,14 @@ function app:_sleep()
 end
 
 function app:run()
-	local e, etype
+	local e
 	while not self._stop do
 		last_poll_time = time.clock()
-		local e, etype = xcb.poll()
+		local e = xlib.poll()
 		if e then
 			--print('EVENT', etype)
-			local f = ev[etype]
+			local f = ev[tonumber(e.type)]
 			if f then f(e) end
-			free(e)
 		else
 			self:_check_timers()
 			self:_sleep()
@@ -141,6 +129,8 @@ end
 local window = {}
 app.window = window
 
+local winmap = {} --{Window (always a number) -> window object}
+
 local function clamp_opt(x, min, max)
 	if min then x = math.max(x, min) end
 	if max then x = math.min(x, max) end
@@ -152,56 +142,68 @@ function window:__constrain(cw, ch)
 	return cw, ch
 end
 
+--check if a given screen has a bgra8 visual (for creating windows with alpha).
+local function find_bgra8_visual(screen)
+	for i=0,screen.ndepths-1 do
+		local d = screen.depths[i]
+		if d.depth == 32 then
+			for i=0,d.nvisuals-1 do
+				local v = d.visuals[i]
+				if v.bits_per_rgb == 8 and v.blue_mask == 0xff then --BGRA8
+					return v
+				end
+			end
+		end
+	end
+end
+
 function window:new(app, frontend, t)
 	self = glue.inherit({app = app, frontend = frontend}, self)
 
 	local attrs = {}
 
 	--say that we don't want the server to keep a pixmap for the window.
-	attrs[C.XCB_CW_BACK_PIXMAP] = C.XCB_BACK_PIXMAP_NONE
+	attrs.background_pixmap = 0
 
-	--needed if we want to set a value for XCB_CW_COLORMAP too!
-	attrs[C.XCB_CW_BORDER_PIXEL] = 0
+	--needed if we want to set a value for CWColormap too!
+	attrs.border_pixel = 0
 
 	--declare what events we want to receive.
-	attrs[C.XCB_CW_EVENT_MASK] = bit.bor(
-		C.XCB_EVENT_MASK_KEY_PRESS,
-		C.XCB_EVENT_MASK_KEY_RELEASE,
-		C.XCB_EVENT_MASK_BUTTON_PRESS,
-		C.XCB_EVENT_MASK_BUTTON_RELEASE,
-		C.XCB_EVENT_MASK_ENTER_WINDOW,
-		C.XCB_EVENT_MASK_LEAVE_WINDOW,
-		C.XCB_EVENT_MASK_POINTER_MOTION,
-		C.XCB_EVENT_MASK_POINTER_MOTION_HINT,
-		C.XCB_EVENT_MASK_BUTTON_1_MOTION,
-		C.XCB_EVENT_MASK_BUTTON_2_MOTION,
-		C.XCB_EVENT_MASK_BUTTON_3_MOTION,
-		C.XCB_EVENT_MASK_BUTTON_4_MOTION,
-		C.XCB_EVENT_MASK_BUTTON_5_MOTION,
-		C.XCB_EVENT_MASK_BUTTON_MOTION,
-		C.XCB_EVENT_MASK_KEYMAP_STATE,
-		C.XCB_EVENT_MASK_EXPOSURE,
-		C.XCB_EVENT_MASK_VISIBILITY_CHANGE,
-		C.XCB_EVENT_MASK_STRUCTURE_NOTIFY,
-		C.XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY,
-		C.XCB_EVENT_MASK_FOCUS_CHANGE,
-		C.XCB_EVENT_MASK_PROPERTY_CHANGE,
-		C.XCB_EVENT_MASK_COLOR_MAP_CHANGE,
-		C.XCB_EVENT_MASK_OWNER_GRAB_BUTTON
-	)
+	attrs.event_mask = bit.bor(
+		C.KeyPressMask,
+		C.KeyReleaseMask,
+		C.ButtonPressMask,
+		C.ButtonReleaseMask,
+		C.EnterWindowMask,
+		C.LeaveWindowMask,
+		C.PointerMotionMask,
+		C.PointerMotionHintMask,
+		C.Button1MotionMask,
+		C.Button2MotionMask,
+		C.Button3MotionMask,
+		C.Button4MotionMask,
+		C.Button5MotionMask,
+		C.ButtonMotionMask,
+		C.KeymapStateMask,
+		C.ExposureMask,
+		C.VisibilityChangeMask,
+		C.StructureNotifyMask,
+		--C.ResizeRedirectMask,
+		C.SubstructureNotifyMask,
+		--C.SubstructureRedirectMask,
+		C.FocusChangeMask,
+		C.PropertyChangeMask,
+		C.ColormapChangeMask,
+		C.OwnerGrabButtonMask,
+	0)
 
 	local framed = t.frame ~= 'none'
-
-	local depth, visual = xcb.find_bgra8_visual(screen)
-	if not depth then
-		--settle for the default depth and visual
-		depth = C.XCB_COPY_FROM_PARENT
-		visual = screen.root_visual
-	else
-		--create a colormap for the visual and add it to the window values array.
-		--this allows us to create a 32bit-depth window (i.e. with alpha).
-		local colormap = xcb.create_colormap(screen.root, visual)
-		attrs[C.XCB_CW_COLORMAP] = colormap
+	attrs.visual = find_bgra8_visual(xlib.screen)
+	if attrs.visual then
+		attrs.depth = 32
+		--create a colormap for the visual which allows us to create a
+		--32bit-depth window so we can have transparency.
+		attrs.colormap = xlib.create_colormap(xlib.screen.root, attrs.visual)
 	end
 
 	--get client size from frame size
@@ -216,44 +218,39 @@ function window:new(app, frontend, t)
 	self._max_ch = t.max_ch
 	cw, ch = self:__constrain(cw, ch)
 
-	local mask, values = xcb.mask_and_values(attrs)
-
-	self.win = xcb.create_window(
-		screen.root,
-		0, 0, --x, y (ignored by WM, set after mapping the window)
-		cw, ch,
-		0, --border width (ignored)
-		depth, visual, mask, values)
+	attrs.width = cw
+	attrs.height = ch
+	self.win = xlib.create_window(attrs)
 
 	--declare the X protocols that the window supports.
-	xcb.set_atom_map_prop(self.win, 'WM_PROTOCOLS', {
+	xlib.set_atom_map_prop(self.win, 'WM_PROTOCOLS', {
 		WM_DELETE_WINDOW = true, --don't close the connection when a window is closed
 		WM_TAKE_FOCUS = true,    --allow focusing the window programatically
 		_NET_WM_PING = true,     --respond to ping events
 	})
 
 	--set info for _NET_WM_PING to allow the user to kill a non-responsive process.
-	xcb.set_netwm_ping_info(self.win)
+	xlib.set_netwm_ping_info(self.win)
 
 	if t.title then
-		xcb.set_title(self.win, t.title)
+		xlib.set_title(self.win, t.title)
 	end
 
 	if t.frame == 'toolbox' then
-		xcb.set_transient_for(t.parent.backend.win)
+		xlib.set_transient_for(t.parent.backend.win)
 	end
 
 	if not t.resizeable then
 		--this is how we tell X that a window is non-resizeable.
-		xcb.set_minmax(self.win, cw, ch, cw, ch)
+		xlib.set_minmax(self.win, cw, ch, cw, ch)
 	else
 		--tell X about the (already-applied) constraints.
-		xcb.set_minmax(self.win, self._min_cw, self._min_ch, self._max_cw, self._max_ch)
+		xlib.set_minmax(self.win, self._min_cw, self._min_ch, self._max_cw, self._max_ch)
 	end
 
 	--set the _NET_WM_STATE property before mapping the window.
 	--later on we have to use change_netwm_states() to change these values.
-	xcb.set_netwm_states(self.win, {
+	xlib.set_netwm_states(self.win, {
 		_NET_WM_STATE_MAXIMIZED_HORZ = t.maximized or nil,
 		_NET_WM_STATE_MAXIMIZED_VERT = t.maximized or nil,
 		_NET_WM_STATE_ABOVE = t.topmost or nil,
@@ -262,18 +259,18 @@ function window:new(app, frontend, t)
 
 	--set WM_HINTS before mapping the window.
 	if t.minimized then
-		local hints = ffi.new'xcb_icccm_wm_hints_t'
-		hints.flags = C.XCB_ICCCM_WM_HINT_STATE
-		hints.initial_state = C.XCB_ICCCM_WM_STATE_ICONIC
-		xcb.set_wm_hints(self.win, hints)
+		local hints = ffi.new'XWMHints'
+		hints.flags = C.StateHint
+		hints.initial_state = C.IconicState
+		xlib.set_wm_hints(self.win, hints)
 	end
 
+	if not t.parent then pp(t) end
 	--set motif hints before mapping the window.
-	local hints = ffi.new'xcb_motif_wm_hints_t'
+	local hints = ffi.new'MotifWmHints'
 	hints.flags = bit.bor(
 		C.MWM_HINTS_FUNCTIONS,
 		C.MWM_HINTS_DECORATIONS)
-	--TODO: compiz doesn't like this
 	hints.functions = bit.bor(
 		t.resizeable and C.MWM_FUNC_RESIZE or 0,
 		C.MWM_FUNC_MOVE,
@@ -287,75 +284,55 @@ function window:new(app, frontend, t)
 		t.resizeable  and C.MWM_DECOR_RESIZEH or 0,
 		t.minimizable and C.MWM_DECOR_MINIMIZE or 0,
 		t.maximizable and C.MWM_DECOR_MAXIMIZE or 0)
-	xcb.set_motif_wm_hints(self.win, hints)
+	xlib.set_motif_wm_hints(self.win, hints)
 
 	--setting the window's position only works after mapping the window.
-	if t.x then
+	if t.x or t.y then
 		self._init_pos, self._init_x, self._init_y = true, t.x, t.y
 	end
 
-	xcb.flush()
-
-	setwin(self.win, self)
+	winmap[self.win] = self
 
 	return self
 end
 
-function app:root_props()
-	return xcb.list_props(screen.root)
-end
-
-function app:root_query_tree()
-	return xcb.query_tree(screen.root)
-end
-
-function window:props()
-	return xcb.list_props(self.win)
-end
-
-function window:query_tree()
-	return xcb.query_tree(self.win)
-end
-
 --closing --------------------------------------------------------------------
 
-ev[C.XCB_CLIENT_MESSAGE] = function(e)
-	e = cast('xcb_client_message_event_t*', e)
-	local self = getwin(e.window)
+ev[C.ClientMessage] = function(e)
+	e = e.xclient
+	local self = winmap[xid(e.window)]
 	if not self then return end --not for us
-	local v = e.data.data32[0]
-	if e.type == atom'WM_PROTOCOLS' then
-		if v == atom'WM_DELETE_WINDOW' then
+	local v = e.data.l[0]
+	if e.message_type == xlib.atom'WM_PROTOCOLS' then
+		if v == xlib.atom'WM_DELETE_WINDOW' then
 			if self.frontend:_backend_closing() then
 				self:forceclose()
 			end
-		elseif v == atom'WM_TAKE_FOCUS' then
+		elseif v == xlib.atom'WM_TAKE_FOCUS' then
 			--ha?
-		elseif v == atom'_NET_WM_PING' then
-			xcb.pong(e)
-			xcb.flush()
+		elseif v == xlib.atom'_NET_WM_PING' then
+			xlib.pong(e)
 		end
 	end
 end
 
-ev[C.XCB_PROPERTY_NOTIFY] = function(e)
-	e = cast('xcb_property_notify_event_t*', e)
-	if e.window == xcb.get_xsettings_window() then
+ev[C.PropertyNotify] = function(e)
+	e = e.xproperty
+	if e.window == xlib.get_xsettings_window() then
 		print('XSETTINGS PROPERTY_NOTIFY')
 	end
-	local self = getwin(e.window)
+	local self = winmap[xid(e.window)]
 	if not self then return end
 end
 
-ev[C.XCB_CONFIGURE_NOTIFY] = function(e)
-	e = cast('xcb_configure_notify_event_t*', e)
-	local self = getwin(e.window)
+ev[C.ConfigureNotify] = function(e)
+	e = e.xconfigure
+	local self = winmap[xid(e.window)]
 	if not self then return end
 	self.x = e.x
 	self.y = e.y
 	self.w = e.width
 	self.h = e.height
-	--print('XCB_CONFIGURE_NOTIFY', self.x, self.y, self.w, self.h)
 end
 
 function window:forceclose()
@@ -365,10 +342,9 @@ function window:forceclose()
 	for i,win in ipairs(self.frontend:children()) do
 		win.backend:forceclose()
 	end
-	xcb.destroy_window(self.win) --doesn't trigger WM_DELETE_WINDOW
-	xcb.flush()
+	xlib.destroy_window(self.win) --doesn't trigger WM_DELETE_WINDOW
 	self.frontend:_backend_closed()
-	setwin(self.win, nil)
+	winmap[self.win] = nil
 	self.win = nil
 end
 
@@ -388,9 +364,9 @@ function app:_check_activated()
 	self.frontend:_backend_activated()
 end
 
-ev[C.XCB_FOCUS_IN] = function(e)
-	local e = cast('xcb_focus_in_event_t*', e)
-	local self = getwin(e.event)
+ev[C.FocusIn] = function(e)
+	local e = e.xfocus
+	local self = winmap[xid(e.window)]
 	if not self then return end
 
 	if last_active_window then return end --ignore duplicate events
@@ -401,9 +377,9 @@ ev[C.XCB_FOCUS_IN] = function(e)
 	self.frontend:_backend_activated()
 end
 
-ev[C.XCB_FOCUS_OUT] = function(e)
-	local e = cast('xcb_focus_out_event_t*', e)
-	local self = getwin(e.event)
+ev[C.FocusOut] = function(e)
+	local e = e.xfocus
+	local self = winmap[xid(e.window)]
 	if not self then return end
 
 	if not last_active_window then return end --ignore duplicate events
@@ -444,7 +420,7 @@ function app:activate()
 end
 
 function app:active_window()
-	return app_active and getwin(xcb.get_input_focus()) or nil
+	return app_active and winmap[xlib.get_input_focus()] or nil
 end
 
 function app:active()
@@ -452,19 +428,16 @@ function app:active()
 end
 
 function window:_activate_noflush()
-	if xcb.net_active_window_supported() then
-		xcb.set_net_active_window(self.win)
+	if xlib.net_active_window_supported() then
+		xlib.set_net_active_window(self.win)
 	else
-		xcb.config_window(self.win, {
-			[C.XCB_CONFIG_WINDOW_STACK_MODE] = C.XCB_STACK_MODE_ABOVE,
-		})
-		xcb.set_input_focus(self.win)
+		xlib.raise(self.win)
+		xlib.set_input_focus(self.win)
 	end
 end
 
 function window:activate()
 	self:_activate_noflush()
-	xcb.flush()
 end
 
 function window:active()
@@ -474,30 +447,26 @@ end
 --state/visibility -----------------------------------------------------------
 
 function window:visible()
-	return xcb.get_attrs(self.win).map_state == 0
+	return xlib.get_attrs(self.win).map_state == 0
 end
 
 function window:show()
-	--NOTE: this is needed only if activation is done via xcb.set_input_focus().
-	xcb.config_window(self.win, {
-		[C.XCB_CONFIG_WINDOW_STACK_MODE] = C.XCB_STACK_MODE_ABOVE,
-	})
-	xcb.map(self.win)
+	--NOTE: this is needed only if activation is done via set_input_focus().
+	xlib.raise(self.win)
+	xlib.map(self.win)
 	if self._init_pos then
-		xcb.config_window(self.win, {
-			[C.XCB_CONFIG_WINDOW_X] = self._init_x,
-			[C.XCB_CONFIG_WINDOW_Y] = self._init_y,
-			[C.XCB_CONFIG_WINDOW_BORDER_WIDTH] = 0,
+		xlib.config(self.win, {
+			x = self._init_x,
+			y = self._init_y,
+			border_width = 0,
 		})
 		self._init_pos, self._init_x, self._init_y = nil
 	end
 	self:_activate_noflush()
-	xcb.flush()
 end
 
 function window:hide()
-	xcb.unmap(self.win)
-	xcb.flush()
+	xlib.unmap(self.win)
 end
 
 --state/minimizing ---------------------------------------------------------h(--
@@ -506,28 +475,26 @@ function window:minimized()
 	if not self:visible() then
 		return self._minimized
 	end
-	return xcb.get_wm_state(self.win) == C.XCB_ICCCM_WM_STATE_ICONIC
+	return xlib.get_wm_state(self.win) == C.IconicState
 end
 
 function window:minimize()
-	xcb.minimize(self.win)
-	xcb.flush()
+	xlib.minimize(self.win)
 end
 
 --state/maximizing -----------------------------------------------------------
 
 function window:maximized()
-	local states = xcb.get_netwm_states(self.win)
+	local states = xlib.get_netwm_states(self.win)
 	return
-		states[xcb.atom'_NET_WM_STATE_MAXIMIZED_HORZ'] and
-		states[xcb.atom'_NET_WM_STATE_MAXIMIZED_VERT'] or false
+		states[xlib.atom'_NET_WM_STATE_MAXIMIZED_HORZ'] and
+		states[xlib.atom'_NET_WM_STATE_MAXIMIZED_VERT'] or false
 end
 
 function window:_set_maximized(onoff)
-	xcb.change_netwm_states(self.win, onoff,
+	xlib.change_netwm_states(self.win, onoff,
 		'_NET_WM_STATE_MAXIMIZED_HORZ',
 		'_NET_WM_STATE_MAXIMIZED_VERT')
-	xcb.flush()
 end
 
 function window:maximize()
@@ -545,10 +512,9 @@ function window:restore()
 end
 
 function window:shownormal()
-	xcb.change_netwm_states(self.win, false,
+	xlib.change_netwm_states(self.win, false,
 		'_NET_WM_STATE_MAXIMIZED_HORZ',
 		'_NET_WM_STATE_MAXIMIZED_VERT')
-	xcb.flush()
 end
 
 --state/changed event --------------------------------------------------------
@@ -558,17 +524,15 @@ end
 --state/fullscreen -----------------------------------------------------------
 
 function window:fullscreen()
-	return xcb.get_netwm_states(self.win)[xcb.atom'_NET_WM_STATE_FULLSCREEN']
+	return xlib.get_netwm_states(self.win)[xlib.atom'_NET_WM_STATE_FULLSCREEN']
 end
 
 function window:enter_fullscreen()
-	xcb.change_netwm_states(self.win, true, '_NET_WM_STATE_FULLSCREEN')
-	xcb.flush()
+	xlib.change_netwm_states(self.win, true, '_NET_WM_STATE_FULLSCREEN')
 end
 
 function window:exit_fullscreen()
-	xcb.change_netwm_states(self.win, false, '_NET_WM_STATE_FULLSCREEN')
-	xcb.flush()
+	xlib.change_netwm_states(self.win, false, '_NET_WM_STATE_FULLSCREEN')
 end
 
 --state/enabled --------------------------------------------------------------
@@ -584,41 +548,33 @@ end
 --positioning/conversions ----------------------------------------------------
 
 function window:to_screen(x, y)
-	return xcb.translate_coords(self.win, screen.root, x, y)
+	return xlib.translate_coords(self.win, xlib.screen.root, x, y)
 end
 
 function window:to_client(x, y)
-	return xcb.translate_coords(screen.root, self.win, x, y)
+	return xlib.translate_coords(xlib.screen.root, self.win, x, y)
 end
 
 local function frame_extents(frame, has_menu)
 
 	--create a dummy window
-	local depth = C.XCB_COPY_FROM_PARENT
-	local visual = screen.root_visual
-	local win = xcb.create_window(
-		screen.root,
-		0, 0, --x, y (ignored)
-		200, 200,
-		0, --border width (ignored)
-		depth, visual, 0, nil)
+	local win = xlib.create_window{width = 200, height = 200}
 
 	--set its frame
 	if frame == 'toolbox' then
-		xcb.set_transient_for(screen.root)
+		xlib.set_transient_for(xlib.screen.root)
 	end
 
 	--request frame extents estimation from the WM
-	xcb.request_frame_extents(win)
+	xlib.request_frame_extents(win)
 	--the WM should have set the frame extents
-	local w1, h1, w2, h2 = xcb.frame_extents(win)
+	local w1, h1, w2, h2 = xlib.frame_extents(win)
 	if not w1 then --TODO:
 		w1, h1, w2, h2 = 0, 0, 0, 0
 	end
 
 	--destroy the window
-	xcb.destroy_window(win)
-	xcb.flush()
+	xlib.destroy_window(win)
 
 	--compute/return the frame rectangle
 	return {w1, h1, w2, h2}
@@ -654,7 +610,7 @@ end
 --positioning/rectangles -----------------------------------------------------
 
 function window:_frame_extents()
-	return xcb.frame_extents(self.win, self:menubar() and true or false)
+	return xlib.frame_extents(self.win, self:menubar() and true or false)
 end
 
 function window:get_normal_rect()
@@ -673,20 +629,11 @@ end
 
 function window:set_frame_rect(x, y, w, h)
 	local cx, cy, cw, ch = unframe_rect(x, y, w, h, self:_frame_extents())
-	xcb.config_window(self.win, {
-		[C.XCB_CONFIG_WINDOW_X] = x,
-		[C.XCB_CONFIG_WINDOW_Y] = y,
-		[C.XCB_CONFIG_WINDOW_WIDTH] = cw,
-		[C.XCB_CONFIG_WINDOW_HEIGHT] = ch,
-		[C.XCB_CONFIG_WINDOW_BORDER_WIDTH] = 0, --required by icccm
-	})
-	xcb.flush()
+	xlib.config(self.win, {x = x, y = y, width = w, height = h, border_width = 0})
 end
 
 function window:get_size()
-	local geom = xcb.get_geometry(self.win)
-	local w, h = geom.width, geom.height
-	free(geom)
+	local x, y, w, h = xlib.get_geometry(self.win)
 	return w, h
 end
 
@@ -706,17 +653,12 @@ function window:_apply_constraints()
 	if cw ~= cw0 or ch ~= ch0 then --dimensions changed
 		--update constraints
 		if not self.frontend:resizeable() then
-			xcb.set_minmax(self.win, cw, ch, cw, ch)
+			xlib.set_minmax(self.win, cw, ch, cw, ch)
 		else
-			xcb.set_minmax(self.win, self._min_cw, self._min_ch, self._max_cw, self._max_ch)
+			xlib.set_minmax(self.win, self._min_cw, self._min_ch, self._max_cw, self._max_ch)
 		end
 		--resize window
-		xcb.config_window(self.win, {
-			[C.XCB_CONFIG_WINDOW_WIDTH] = cw,
-			[C.XCB_CONFIG_WINDOW_HEIGHT] = ch,
-			[C.XCB_CONFIG_WINDOW_BORDER_WIDTH] = 0, --required by icccm
-		})
-		xcb.flush()
+		xlib.config(self.win, {width = w, height = h, border_width = 0})
 	end
 end
 
@@ -745,23 +687,21 @@ end
 --titlebar -------------------------------------------------------------------
 
 function window:get_title()
-	return xcb.get_title(win)
+	return xlib.get_title(win)
 end
 
 function window:set_title(title)
-	xcb.set_title(self.win, title)
-	xcb.flush()
+	xlib.set_title(self.win, title)
 end
 
 --z-order --------------------------------------------------------------------
 
 function window:get_topmost()
-	return get_netwm_states(self.win)[atom'_NET_WM_STATE_ABOVE']
+	return get_netwm_states(self.win)[xlib.atom'_NET_WM_STATE_ABOVE']
 end
 
 function window:set_topmost(topmost)
-	xcb.change_netwm_states(self.win, topmost, atom'_NET_WM_STATE_ABOVE')
-	xcb.flush()
+	xlib.change_netwm_states(self.win, topmost, xlib.atom'_NET_WM_STATE_ABOVE')
 end
 
 function window:set_zorder(mode, relto)
@@ -774,8 +714,8 @@ function app:_display(screen)
 	return self.frontend:_display{
 		x = 0, --TODO
 		y = 0,
-		w = screen.width_in_pixels,
-		h = screen.height_in_pixels,
+		w = xlib.screen.width_in_pixels,
+		h = xlib.screen.height_in_pixels,
 		client_x = 0, --TODO
 		client_y = 0,
 		client_w = 0,
@@ -808,42 +748,41 @@ end
 
 function window:update_cursor()
 	local visible, name = self.frontend:cursor()
-	local cursor = visible and xcb.load_cursor(name) or xcb.blank_cursor()
-	xcb.set_cursor(self.win, cursor)
+	local cursor = visible and xlib.load_cursor(name) or xlib.blank_cursor()
+	xlib.set_cursor(self.win, cursor)
 end
 
 --keyboard -------------------------------------------------------------------
 
-ev[C.XCB_KEY_PRESS] = function(e)
-	local e = cast('xcb_key_press_event_t*', e)
-	local self = getwin(e.event)
+ev[C.KeyPress] = function(e)
+	local e = e.xkey
+	local self = winmap[xid(e.window)]
 	if not self then return end
 	if self._disabled then return end
 	if self._keypressed then
 		self._keypressed = false
 		return
 	end
-	local key = e.detail
+	local key = e.keycode
 	--print('sequence: ', e.sequence)
 	--print('state:    ', e.state)
 	self.frontend:_backend_keydown(key)
 	self.frontend:_backend_keypress(key)
 end
 
-ev[C.XCB_KEY_RELEASE] = function(e)
-	local e = cast('xcb_key_press_event_t*', e)
-	local self = getwin(e.event)
+ev[C.KeyRelease] = function(e)
+	local e = e.xkey
+	local self = winmap[xid(e.window)]
 	if not self then return end
 	if self._disabled then return end
-	local key = e.detail
+	local key = e.keycode
 
 	--peek next message to distinguish between key release and key repeat
- 	local e1 = xcb.peek()
+ 	local e1 = xlib.peek()
  	if e1 then
- 		local v = bit.band(e1.response_type, bit.bnot(0x80))
- 		if v == C.XCB_KEY_PRESS then
-			local e1 = cast('xcb_key_press_event_t*', e1)
- 			if e1.time == e.time and e1.detail == e.detail then
+ 		if e1.type == C.KeyPress then
+			local e1 = e1.xkey
+			if e1.time == e.time and e1.keycode == e.keycode then
 				self.frontend:_backend_keypress(key)
 				self._keypressed = true --key press barrier
  			end
@@ -867,25 +806,25 @@ end
 
 local btns = {'left', 'middle', 'right'}
 
-ev[C.XCB_BUTTON_PRESS] = function(e)
-	e = cast('xcb_button_press_event_t*', e)
-	local self = getwin(e.event)
+ev[C.ButtonPress] = function(e)
+	local e = e.xbutton
+	local self = winmap[xid(e.window)]
 	if not self then return end
 	if self._disabled then return end
 
-	local btn = btns[e.detail]
+	local btn = btns[e.button]
 	if not btn then return end
 	local x, y = 0, 0
 	self.frontend:_backend_mousedown(btn, x, y)
 end
 
-ev[C.XCB_BUTTON_RELEASE] = function(e)
-	e = cast('xcb_button_press_event_t*', e)
-	local self = getwin(e.event)
+ev[C.ButtonRelease] = function(e)
+	local e = e.xbutton
+	local self = winmap[xid(e.window)]
 	if not self then return end
 	if self._disabled then return end
 
-	local btn = btns[e.detail]
+	local btn = btns[e.button]
 	if not btn then return end
 	local x, y = 0, 0
 	self.frontend:_backend_mouseup(btn, x, y)
@@ -920,26 +859,37 @@ end
 Things you need to know:
 - in X11 bitmaps are called pixmaps and 1-bit bitmaps are called bitmaps.
 - pixmaps are server-side bitmaps while images are client-side bitmaps.
-- you can't create a xcb_drawable_t, that's just an abstraction: instead,
-  any xcb_pixmap_t or xcb_window_t can be used where a xcb_drawable_t
-  is expected (they're all int32 ids btw).
+- you can't create a Drawable, that's just an abstraction: instead,
+  any Pixmap or Window can be used where a Drawable is expected.
 - pixmaps have depth, but no channel layout. windows have color info.
 - the default screen visual has 24 depth, but a screen can have many visuals.
   if it has a 32 depth visual, then we can make windows with alpha.
-- a window with alpha needs XCB_CW_COLORMAP which needs XCB_CW_BORDER_PIXEL.
+- a window with alpha needs CWColormap which needs CWBorderPixel.
 ]]
 
-local function make_bitmap(w, h, win)
+local function slow_resize_buffer(ctype, shrink_factor, reserve_factor)
+	local buf, sz
+	return function(size)
+		if not buf or sz < size or sz > math.floor(size * shrink_factor) then
+			if buf then glue.free(buf) end
+			sz = math.floor(size * reserve_factor)
+			buf = glue.malloc(ctype, sz)
+		end
+		return buf
+	end
+end
+
+local function make_bitmap(w, h, win, ssbuf)
 
 	local stride = w * 4
 	local size = stride * h
 
 	local bitmap = {
-		w      = w,
-		h      = h,
-		stride = stride,
-		size   = size,
-		format = 'bgra8',
+		w        = w,
+		h        = h,
+		stride   = stride,
+		size     = size,
+		format   = 'bgra8',
 	}
 
 	local paint, free
@@ -949,24 +899,21 @@ local function make_bitmap(w, h, win)
 		local shmid = shm.shmget(shm.IPC_PRIVATE, size, bit.bor(shm.IPC_CREAT, 0x1ff))
 		local data  = shm.shmat(shmid, nil, 0)
 
-		local shmseg  = xcb.gen_id()
+		local shmseg  = xlib.gen_id()
 		xcbshm.xcb_shm_attach(c, shmseg, shmid, 0)
 		shm.shmctl(shmid, shm.IPC_RMID, nil)
 
-		local pix = xcb.gen_id()
+		local pix = xlib.gen_id()
 
 		xcbshm.xcb_shm_create_pixmap(c, pix, win, w, h, depth_id, shmseg, 0)
 
-		xcb.flush()
-
 		bitmap.data = data
 
-		local gc = xcb.gen_id()
+		local gc = xlib.gen_id()
 		C.xcb_create_gc(c, gc, win, 0, nil)
 
 		function paint()
-			C.xcb_copy_area(c, pix, win, gc, 0, 0, 0, 0, w, h)
-			xcb.flush()
+			xlib.copy_area(gc, pix, win, 0, 0, 0, 0, w, h)
 		end
 
 		function free()
@@ -977,22 +924,20 @@ local function make_bitmap(w, h, win)
 
 	else
 
-		local data = glue.malloc('char', size)
+		local data = ssbuf(size)
 		bitmap.data = data
 
-		local pix = xcb.create_pixmap(win, w, h, 32)
-		local gc = xcb.create_gc(win)
+		local pix = xlib.create_pixmap(win, w, h, 32)
+		local gc = xlib.create_gc(win)
 
 		function paint()
-			xcb.put_image(gc, data, size, w, h, 32, pix)
-			xcb.copy_area(gc, pix, 0, 0, w, h, win)
-			xcb.flush()
+			xlib.put_image(gc, data, size, w, h, 32, pix)
+			xlib.copy_area(gc, pix, 0, 0, w, h, win)
 		end
 
 		function free()
-			C.xcb_free_gc(c, gc)
-			C.xcb_free_pixmap_checked(c, pix)
-			glue.free(data)
+			xlib.free_gc(gc)
+			xlib.free_pixmap(pix)
 			bitmap.data = nil
 		end
 
@@ -1008,14 +953,16 @@ local function dynbitmap(api, win)
 
 	api = api or {}
 
-	local w, h, bitmap, free, paint
+	local w0, h0, bitmap, free, paint
+	local ssbuf = slow_resize_buffer('char', 2, 1.2)
 
 	function api:get()
-		local w1, h1 = api:size()
-		if w1 ~= w or h1 ~= h then
-			self:free()
-			bitmap, free, paint = make_bitmap(w1, h1, win)
-			w, h = w1, h1
+		local w, h = api:size()
+		if not bitmap or w ~= w0 or h ~= h0 then
+			if bitmap then
+				free()
+			end
+			bitmap, free, paint = make_bitmap(w, h, win, ssbuf)
 		end
 		return bitmap
 	end
@@ -1036,10 +983,10 @@ end
 
 --rendering ------------------------------------------------------------------
 
-ev[C.XCB_EXPOSE] = function(e)
-	local e = cast('xcb_expose_event_t*', e)
+ev[C.Expose] = function(e)
+	local e = e.xexpose
 	if e.count ~= 0 then return end --subregion rendering
-	local self = getwin(e.window)
+	local self = winmap[xid(e.window)]
 	if not self then return end
 	self:invalidate()
 end
