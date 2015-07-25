@@ -13,6 +13,7 @@ local pp = require'pp'
 --objc.debug.logtopics.refcount = true
 
 local app --global app object
+local eyetime = 1
 
 --testing helpers ------------------------------------------------------------
 
@@ -504,8 +505,8 @@ end)
 --window default options -----------------------------------------------------
 
 add('init-defaults', function()
-	local win = app:window(winpos())
-	assert(win:visible())
+	local win = app:window(winpos{visible = false})
+	assert(not win:visible())
 	assert(not win:minimized())
 	assert(not win:fullscreen())
 	assert(not win:maximized())
@@ -636,6 +637,114 @@ add('close-children-ask', function()
 	assert(not win1:dead())
 	assert(not win2:dead())
 	print'ok'
+end)
+
+--window visibility ----------------------------------------------------------
+
+--default visible=true
+--window is shown synchronously
+add('visible-init-default', function()
+	local win = app:window(winpos())
+	assert(win:visible())
+end)
+
+add('visible-init-default-check', function()
+	local win = app:window(winpos())
+	app:runafter(eyetime, function() app:quit() end)
+	app:run()
+end)
+
+add('visible-init-hidden', function()
+	local win = app:window(winpos{visible = false})
+	assert(not win:visible())
+end)
+
+add('visible-init-hidden-check', function()
+	local win = app:window(winpos{visible = false})
+	app:runafter(eyetime, function() app:quit() end)
+	app:run()
+end)
+
+--no changed event is triggered
+add('visible-init-hidden-changed', function()
+	local rec = recorder()
+	function app:window_created(win)
+		rec'created'
+		function win:changed()
+			assert(false)
+		end
+	end
+	local win = app:window(winpos{visible = false})
+	win.changed = nil
+	rec{'created'}
+end)
+
+--changed event is triggered synchronously
+add('visible-init-visible-changed', function()
+	local rec = recorder()
+	function app:window_created(win)
+		rec'created'
+		function win:changed()
+			rec(self:visible() and 'shown')
+		end
+	end
+	local win = app:window(winpos{visible = true})
+	rec{'created', 'shown'}
+	--TODO: Windows sends changed() event when the window is destroyed,
+	--but Linux and OSX don't.
+end)
+
+--window minimization --------------------------------------------------------
+
+add('minimized-init-default', function()
+	local win = app:window(winpos())
+	assert(not win:minimized())
+end)
+
+add('minimized-init-restore', function()
+	local win = app:window(winpos{minimized = true})
+	assert(win:minimized())
+	app:run()
+end)
+
+add('visible-init-hidden', function()
+	local win = app:window(winpos{visible = false})
+	assert(not win:visible())
+end)
+
+add('visible-init-hidden-check', function()
+	local win = app:window(winpos{visible = false})
+	app:runafter(eyetime, function() app:quit() end)
+	app:run()
+end)
+
+--no changed event is triggered
+add('visible-init-hidden-changed', function()
+	local rec = recorder()
+	function app:window_created(win)
+		rec'created'
+		function win:changed()
+			assert(false)
+		end
+	end
+	local win = app:window(winpos{visible = false})
+	win.changed = nil
+	rec{'created'}
+end)
+
+--changed event is triggered synchronously
+add('visible-init-visible-changed', function()
+	local rec = recorder()
+	function app:window_created(win)
+		rec'created'
+		function win:changed()
+			rec(self:visible() and 'shown')
+		end
+	end
+	local win = app:window(winpos{visible = true})
+	rec{'created', 'shown'}
+	--TODO: Windows sends changed() event when the window is destroyed,
+	--but Linux and OSX don't.
 end)
 
 --window & app activaton -----------------------------------------------------
@@ -2475,8 +2584,9 @@ add('xlib', function()
 
 	local win1 = app:window{x = 2, y = 26, cw = 500, ch = 300,
 		title = 'Hello 1',
-		transparent = true,
-		frame = 'none',
+		--resizeable = false,
+		--frame = 'none',
+		--transparent = true,
 		--min_cw = 200,
 		--min_ch = 200,
 		--max_cw = 600,
@@ -2487,6 +2597,7 @@ add('xlib', function()
 		--minimized = true,
 		--maximized = true,
 		--fullscreen = true,
+		visible = false,
 	}
 
 	function win1:repaint()
@@ -2499,6 +2610,10 @@ add('xlib', function()
 		end
 		--ffi.fill(bmp.data, bmp.stride * 10, 0x80)
 	end
+
+	win1:invalidate()
+	win1:show()
+
 	app:runevery(2, function()
 		--[[
 		local mw, mh = win1:maxsize()
@@ -2518,10 +2633,10 @@ add('xlib', function()
 		]]
 		--win1:fullscreen(not win1:fullscreen())
 	end)
-	local win2 = app:window{x = 20, y = 40, cw = 300, ch = 200, parent = win1}
+	--local win2 = app:window{x = 20, y = 40, cw = 300, ch = 200, parent = win1}
 	function app:event(...) print('app', ...) end
 	function win1:event(...) print('win1', ...) end
-	function win2:event(...) print('win2', ...) end
+	--function win2:event(...) print('win2', ...) end
 	app:run()
 end)
 

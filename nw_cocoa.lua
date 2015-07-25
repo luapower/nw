@@ -363,10 +363,9 @@ end
 --NOTE: the first call to nsapp:activateIgnoringOtherApps() doesn't also activate the main menu.
 --but NSRunningApplication:currentApplication():activateWithOptions() does, so we use that instead!
 function app:activate()
-
-objc.NSRunningApplication:currentApplication():activateWithOptions(bit.bor(
-		objc.NSApplicationActivateIgnoringOtherApps,
-		objc.NSApplicationActivateAllWindows))
+	objc.NSRunningApplication:currentApplication():activateWithOptions(bit.bor(
+			objc.NSApplicationActivateIgnoringOtherApps,
+			objc.NSApplicationActivateAllWindows))
 end
 
 function app:active_window()
@@ -469,7 +468,8 @@ function window:show()
 		self:_did_minimize()
 	else
 		self._visible = true
-		self.nswin:orderFront(nil) --TODO: is this blocking or async?
+		--TODO: we need/assume that orderFront() is blocking. confirm that it is.
+		self.nswin:orderFront(nil)
 		self.frontend:_backend_changed()
 		self.nswin:makeKeyWindow() --NOTE: async operation
 	end

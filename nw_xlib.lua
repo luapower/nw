@@ -62,20 +62,31 @@ function app:_sleep()
 	end
 end
 
-function app:run()
-	local e
+function app:_poll()
+	last_poll_time = time.clock()
+	local e = xlib.poll()
+	if e then
+		--print('EVENT', etype)
+		local f = ev[tonumber(e.type)]
+		if f then f(e) end
+	else
+		self:_check_timers()
+		self:_sleep()
+	end
+	return e
+end
+
+function app:_poll_until(func)
 	while not self._stop do
-		last_poll_time = time.clock()
-		local e = xlib.poll()
-		if e then
-			--print('EVENT', etype)
-			local f = ev[tonumber(e.type)]
-			if f then f(e) end
-		else
-			self:_check_timers()
-			self:_sleep()
+		local e = self:_poll()
+		if e and func(e) then
+			break
 		end
 	end
+end
+
+function app:run()
+	self:_poll_until(function() end)
 	self._stop = false
 end
 
@@ -165,7 +176,7 @@ function window:new(app, frontend, t)
 	--say that we don't want the server to keep a pixmap for the window.
 	attrs.background_pixmap = 0
 
-	--needed if we want to set a value for CWColormap too!
+	--needed if we want to set a value for colormap too!
 	attrs.border_pixel = 0
 
 	--declare what events we want to receive.
@@ -197,7 +208,6 @@ function window:new(app, frontend, t)
 		C.OwnerGrabButtonMask,
 	0)
 
-	local framed = t.frame ~= 'none'
 	attrs.visual = find_bgra8_visual(xlib.screen)
 	if attrs.visual then
 		attrs.depth = 32
@@ -206,21 +216,61 @@ function window:new(app, frontend, t)
 		attrs.colormap = xlib.create_colormap(xlib.screen.root, attrs.visual)
 	end
 
+	--in X we can't fixate x without fixating y too (or viceversa).
+	local x, y
+	if t.x or t.y then
+		x = t.x or 0
+		y = t.y or 0
+	end
+
+	--same goes for constraints
+	local minw, minh, maxw, maxh
+	if t.min_cw or t.min_ch then
+		minw = t.min_cw or 0
+		minh = t.min_ch or 0
+	end
+	if t.max_cw or t.max_ch then
+		maxw = t.max_cw or 2^24
+		maxh = t.max_ch or 2^24
+	end
+
 	--get client size from frame size
 	local _, _, cw, ch = app:frame_to_client(
 		t.frame, t.menu and true or false,
-		t.x or 0, t.y or 0, t.w, t.h)
+		x or 0, y or 0, t.w, t.h)
 
 	--store and apply constraints to client size
-	self._min_cw = t.min_cw
-	self._min_ch = t.min_ch
-	self._max_cw = t.max_cw
-	self._max_ch = t.max_ch
+	self._min_cw = minw
+	self._min_ch = minh
+	self._max_cw = maxw
+	self._max_ch = maxh
 	cw, ch = self:__constrain(cw, ch)
 
+	attrs.x = x
+	attrs.y = y
 	attrs.width = cw
 	attrs.height = ch
 	self.win = xlib.create_window(attrs)
+
+	--NOTE: WMs ignore the initial position unless we set WM_NORMAL_HINTS too
+	--(values don't matter, but we're using the same t.x and t.y just in case).
+	--NOTE: with set_wm_size_hints we can't set x withot y or viceversa.
+	local nhints = {x = x, y = y} --WM_NORMAL_HINTS
+
+	if not t.resizeable then
+		--this is how X knows that a window is non-resizeable.
+		nhints.min_width  = cw
+		nhints.min_height = ch
+		nhints.max_width  = cw
+		nhints.max_height = ch
+	else
+		--tell X about any (already-applied) constraints.
+		nhints.min_width  = minw
+		nhints.min_height = minh
+		nhints.max_width  = maxw
+		nhints.max_height = maxh
+	end
+	xlib.set_wm_size_hints(self.win, nhints)
 
 	--declare the X protocols that the window supports.
 	xlib.set_atom_map_prop(self.win, 'WM_PROTOCOLS', {
@@ -240,14 +290,6 @@ function window:new(app, frontend, t)
 		xlib.set_transient_for(t.parent.backend.win)
 	end
 
-	if not t.resizeable then
-		--this is how we tell X that a window is non-resizeable.
-		xlib.set_minmax(self.win, cw, ch, cw, ch)
-	else
-		--tell X about the (already-applied) constraints.
-		xlib.set_minmax(self.win, self._min_cw, self._min_ch, self._max_cw, self._max_ch)
-	end
-
 	--set the _NET_WM_STATE property before mapping the window.
 	--later on we have to use change_netwm_states() to change these values.
 	xlib.set_netwm_states(self.win, {
@@ -263,11 +305,11 @@ function window:new(app, frontend, t)
 		hints.flags = C.StateHint
 		hints.initial_state = C.IconicState
 		xlib.set_wm_hints(self.win, hints)
+		self._minimized = true
 	end
 
-	if not t.parent then pp(t) end
 	--set motif hints before mapping the window.
-	local hints = ffi.new'MotifWmHints'
+	local hints = ffi.new'PropMotifWmHints'
 	hints.flags = bit.bor(
 		C.MWM_HINTS_FUNCTIONS,
 		C.MWM_HINTS_DECORATIONS)
@@ -277,19 +319,16 @@ function window:new(app, frontend, t)
 		t.minimizable and C.MWM_FUNC_MINIMIZE or 0,
 		t.maximizable and C.MWM_FUNC_MAXIMIZE or 0,
 		t.closeable and C.MWM_FUNC_CLOSE or 0)
-	hints.decorations = bit.bor(
-		framed and C.MWM_DECOR_BORDER or 0,
-		framed and C.MWM_DECOR_TITLE or 0,
-		framed and C.MWM_DECOR_MENU or 0,
+	hints.decorations = t.frame == 'none' and 0 or bit.bor(
+		C.MWM_DECOR_BORDER,
+		C.MWM_DECOR_TITLE,
+		C.MWM_DECOR_MENU,
 		t.resizeable  and C.MWM_DECOR_RESIZEH or 0,
 		t.minimizable and C.MWM_DECOR_MINIMIZE or 0,
 		t.maximizable and C.MWM_DECOR_MAXIMIZE or 0)
 	xlib.set_motif_wm_hints(self.win, hints)
 
-	--setting the window's position only works after mapping the window.
-	if t.x or t.y then
-		self._init_pos, self._init_x, self._init_y = true, t.x, t.y
-	end
+	self._visible = false
 
 	winmap[self.win] = self
 
@@ -427,17 +466,13 @@ function app:active()
 	return app_active
 end
 
-function window:_activate_noflush()
+function window:activate()
 	if xlib.net_active_window_supported() then
 		xlib.set_net_active_window(self.win)
 	else
 		xlib.raise(self.win)
 		xlib.set_input_focus(self.win)
 	end
-end
-
-function window:activate()
-	self:_activate_noflush()
 end
 
 function window:active()
@@ -447,26 +482,48 @@ end
 --state/visibility -----------------------------------------------------------
 
 function window:visible()
-	return xlib.get_attrs(self.win).map_state == 0
+	return self._visible --xlib.get_attrs(self.win).map_state ~= C.IsUnmapped
 end
 
 function window:show()
-	--NOTE: this is needed only if activation is done via set_input_focus().
-	xlib.raise(self.win)
+	if self._visible then return end
 	xlib.map(self.win)
-	if self._init_pos then
-		xlib.config(self.win, {
-			x = self._init_x,
-			y = self._init_y,
-			border_width = 0,
-		})
-		self._init_pos, self._init_x, self._init_y = nil
+	self._visible = true
+	if not self._minimized then
+		--wait until the window is mapped to emulate Windows behavior.
+		self.app:_poll_until(function(e)
+			return e.type == C.MapNotify
+		end)
+	else
+		--wait until the window is minimized to emulate Windows behavior.
+		self.app:_poll_until(function(e)
+			return
+		end)
 	end
-	self:_activate_noflush()
+	--activate window to emulate Windows behavior.
+	if not self._minimized then
+		self:activate()
+	end
 end
 
 function window:hide()
+	if not self._visible then return end
+	self._minimized = self:minimized()
 	xlib.unmap(self.win)
+end
+
+ev[C.MapNotify] = function(e)
+	local e = e.xmap
+	local self = winmap[xid(e.window)]
+	if not self then return end
+	self.frontend:_backend_changed()
+end
+
+ev[C.UnmapNotify] = function(e)
+	local e = e.xunmap
+	local self = winmap[xid(e.window)]
+	if not self then return end
+	self.frontend:_backend_changed()
 end
 
 --state/minimizing ---------------------------------------------------------h(--
@@ -485,10 +542,10 @@ end
 --state/maximizing -----------------------------------------------------------
 
 function window:maximized()
-	local states = xlib.get_netwm_states(self.win)
-	return
-		states[xlib.atom'_NET_WM_STATE_MAXIMIZED_HORZ'] and
-		states[xlib.atom'_NET_WM_STATE_MAXIMIZED_VERT'] or false
+	local st = xlib.get_netwm_states(self.win)
+	return st and
+		st[xlib.atom'_NET_WM_STATE_MAXIMIZED_HORZ'] and
+		st[xlib.atom'_NET_WM_STATE_MAXIMIZED_VERT'] or false
 end
 
 function window:_set_maximized(onoff)
@@ -524,7 +581,8 @@ end
 --state/fullscreen -----------------------------------------------------------
 
 function window:fullscreen()
-	return xlib.get_netwm_states(self.win)[xlib.atom'_NET_WM_STATE_FULLSCREEN']
+	local st = xlib.get_netwm_states(self.win)
+	return st and st[xlib.atom'_NET_WM_STATE_FULLSCREEN'] or false
 end
 
 function window:enter_fullscreen()
@@ -687,7 +745,7 @@ end
 --titlebar -------------------------------------------------------------------
 
 function window:get_title()
-	return xlib.get_title(win)
+	return xlib.get_title(self.win)
 end
 
 function window:set_title(title)
@@ -697,7 +755,8 @@ end
 --z-order --------------------------------------------------------------------
 
 function window:get_topmost()
-	return get_netwm_states(self.win)[xlib.atom'_NET_WM_STATE_ABOVE']
+	local st = xlib.get_netwm_states(self.win)
+	return st and st[xlib.atom'_NET_WM_STATE_ABOVE'] or false
 end
 
 function window:set_topmost(topmost)

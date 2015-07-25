@@ -388,13 +388,8 @@ local defaults = {
 }
 
 local frame_defaults = {}
-
 frame_defaults.normal = {}
-
-frame_defaults.none = {
-	resizeable = false,
-}
-
+frame_defaults.none = {}
 frame_defaults.toolbox = {
 	minimizable = false,
 	maximizable = false,
@@ -427,11 +422,6 @@ function window:_new(app, backend_class, useropt)
 		frame_defaults[frame],
 		useropt.parent and defaults_child or defaults_toplevel,
 		useropt)
-
-	--frameless windows can't be resizeable.
-	if frame:find'^none' then
-		assert(not opt.resizeable, 'frameless windows cannot be resizeable')
-	end
 
 	if opt.parent then
 		--child windows can't be minimizable because they don't show in taskbar.

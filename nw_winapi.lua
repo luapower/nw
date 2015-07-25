@@ -1376,8 +1376,13 @@ local function dib_bitmap_api(w, h)
 		local r = win.screen_rect
 		pos.x = r.x
 		pos.y = r.y
-		winapi.UpdateLayeredWindow(win.hwnd, nil, pos, size, hdc, topleft, 0,
-			blendfunc, winapi.ULW_ALPHA)
+		if not winapi.UpdateLayeredWindow(win.hwnd, nil, pos, size, hdc,
+			topleft, 0, blendfunc, winapi.ULW_ALPHA)
+		then
+			--TODO: fallback to chroma-key alpha on Remote Desktop,
+			--or disable layered rendering altogether.
+			--winapi.SetLayeredWindowAttributes(win.hwnd, 0, 0, winapi.LWA_COLORKEY)
+		end
 	end
 
 	function api:free()

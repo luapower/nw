@@ -1,0 +1,330 @@
+- initial positioning
+- client frame and outer frame
+- minsize, maxsize
+- resizeable
+
+
+------------------------------------------------------------------------------
+init | action | change | get | query | event | flag || assert | check
+------------------------------------------------------------------------------
+
+REMOVE
+------------------------------------------------------------------------------
+- init: activable (not working on linux)
+- init: transparent (not working on windows / remote desktop)
+- init/change: alpha (not working on linux)
+
+INIT/PLATFORM VERSION
+------------------------------------------------------------------------------
+- os version checks
+	- assert: windows
+	- assert: osx
+	- assert: linux
+
+LOOP
+------------------------------------------------------------------------------
+- assert: events start after loop starts
+- assert: loop can end and be started again
+- get: running
+- TODO...
+
+TIMERS
+------------------------------------------------------------------------------
+- assert: runevery() works and return false stops the timer
+- TODO...
+
+RESTRICTIONS
+------------------------------------------------------------------------------
+- init: minimizable
+	- assert: not minimized
+	- check: no minimize button/command/shortcut
+- init: maximizable
+	- assert: not maximized
+	- check: no maximize button/command/shortcut
+- init: not minimizable and not maximizable
+	- check: hide instead of disabling the buttons
+- init: not minimizable xor not maximizable
+	- check: disable instead of hiding the buttons
+- init: resizeable
+	- check: not resize edges/corners/command/shortcut
+	- assert: resize() works
+	- assert: not maximizable
+	- assert: not fullscreenable
+	- assert: default not maximizable
+	- assert: default not fullscreenable
+- init: fullscreenable
+	- assert: not fullscreen
+	- check: no fullscreen button/command/shortcut
+- init: closeable
+	- check: no close button/command/shortcut
+
+TOPMOST
+------------------------------------------------------------------------------
+- init: topmost
+	- check: stays on top
+- action: topmost=true
+	- assert: activated event if behind
+	- check: raising and activating if behind
+- action: topmost=false
+	- assert: activated event if other topmost behind
+	- check: lowering and activating other window if other topmost behind
+
+PARENT
+------------------------------------------------------------------------------
+- init: parent
+	- check: not on taskbar
+	- assert: stays above parent
+	- assert: not minimizable
+	- assert: default not minimizable
+
+FRAME=NONE
+------------------------------------------------------------------------------
+- init: frame=none
+	- check: no frame
+	- assert: frame rect == client rect
+
+FRAME=TOOLBOX
+------------------------------------------------------------------------------
+- init: frame=toolbox
+	- check: has toolbox frame (windows)
+	- check: not on taskbar
+	- assert: has parent
+
+POSITIONING
+------------------------------------------------------------------------------
+- init: client size
+	- assert: client size
+- init: outer size
+	- assert: outer size
+- init: client pos
+- init: outer pos
+- init: app frame_rect <-> client_rect conv.
+- assert: strictly bigger/smaller size
+- init: default pos (cascade)
+	- check: screen pos (cascade)
+- init: client pos/size vs outer pos/size
+	- check: side-by-side pos/side
+- get: frame rect
+- get: client rect
+- change: frame rect
+- change: client rect
+- get: minsize/maxsize
+- change: minsize/maxsize
+- event: changed min/max/fullscr/visible/z-index
+- query: resizing
+- event: resized
+- event: moved
+
+MINSIZE/MAXSIZE
+------------------------------------------------------------------------------
+- init: minsize/maxsize
+	- assert: maxsize clamped to minsize
+	- assert: client size respects it
+	- assert: resize respects it
+	- check: resizing respects it
+	- assert: maxsize == minsize => resizeable = false (X limitation)
+	- assert: no resized event
+- change: minsize
+	- assert: clamped to maxsize
+- change: maxsize
+	- assert: clamped to minsize
+- change: minsize or maxsize
+	- assert: window resized
+	- assert: resized event
+	- check: resizing respects it
+	- assert: maxsize == minsize => resizeable = false (X limitation)
+
+STATE
+------------------------------------------------------------------------------
+- init: visible=default
+	* assert: visible
+	* check: visible
+	* assert: synchronous changed event
+- init: visible=false
+	* assert: not visible
+	* check: not visible
+- init: minimized
+	* assert: minimized -> normal
+	- check: minimized -> normal
+- init: maximized
+	- assert/check: maximized -> normal
+- init: fullscreen
+	- assert/check: fullscreen -> normal
+- init: minimized + maximized
+	- assert: minimized, maximized
+	- assert/check: restore -> maximized -> normal
+- init: minimized + fullscreen
+	- assert: minimized, fullscreen
+	- assert/check: restore -> fullscreen -> normal
+- init: maximized + fullscreen
+	- assert: maximized, fullscreen
+	- assert/check: restore -> maximized -> normal
+- init: minimized + maximized + fullscreen (?)
+	- assert: minimized, maximized, fullscreen
+	- assert/check: restore -> fullscreen -> maximized -> normal
+- action: hide
+- action: show
+- action: minimize
+- action: maximize
+- action: restore
+- action: shownormal
+- action: enter fullscreen
+- action: exit fullscreen
+
+TITLE
+------------------------------------------------------------------------------
+- init: title
+	- assert: get
+	- check: on taskbar and titlebar
+- get: title
+	- assert: get
+- change: title
+	- assert: get
+
+ENABLED
+------------------------------------------------------------------------------
+- init: enabled=false
+	- assert: get
+	- check: not enabled
+- get: enabled
+- set: enabled=true/false
+	- assert: get
+	- check: enabled/disabled
+
+CLOSING & QUITTING
+------------------------------------------------------------------------------
+- query: closing
+- event: closed
+- query: quitting
+- event: quit
+- flag: app autoquit
+- flag: window autoquit
+- action: quit
+
+ACTIVATION
+------------------------------------------------------------------------------
+- event: activate win
+- event: deactivate win
+- action: activate win
+	- assert: make hidden window visible
+	- assert: make minimized window visible?
+- event: activate app
+- event: deactivate app
+- action: hide app (osx)
+- action: show app (osx)
+- event: app hidden (osx)
+- event: app shown (osx)
+- action: activate app
+
+STACKING
+------------------------------------------------------------------------------
+- action: raise
+- action: lower
+- action: raise_above win
+- action: lower_below win
+
+DISPLAYS
+------------------------------------------------------------------------------
+- get: displays
+- get: main display
+
+KEYBOARD
+------------------------------------------------------------------------------
+- event: keydown
+- event: keyup
+- event: keypress
+- get: key state
+- get: keyboard state
+
+MOUSE
+------------------------------------------------------------------------------
+- event: mouse down
+- event: mouse up
+- event: mouse click
+- event: mouse dblclick
+- event: mouse tripleclick
+- event: mouse n-click
+
+RENDERING
+------------------------------------------------------------------------------
+- event: paint
+- get: writable bitmap
+- event: paint
+- action: invalidate
+- action: opengl set current
+
+CURSOR
+------------------------------------------------------------------------------
+- change: named cursor
+- change: default cursor
+- action: show cursor
+- action: hide cursor
+- get: writable cursor image
+- action: send event with custom data from a different thread
+
+VIEWS
+------------------------------------------------------------------------------
+- anchors
+- client <-> window coord conv
+- mouse enter / mouse leave / mouse move events
+- control event propagation
+- overlapping = undefined behavior
+
+X PING
+------------------------------------------------------------------------------
+- check: refusing to close + not responding to ping + kill works
+- check: refusing to close + responding to ping does not bring kill window
+
+MAGNETS
+------------------------------------------------------------------------------
+- check: sticking to (screen|app windows|all windows) works
+
+MENUS
+------------------------------------------------------------------------------
+- ...
+- APP MENU BAR (osx)
+- WINDOW MENU BAR (windows) / POPUP MENU (windows, osx)
+- POPUP MENU (windows, osx)
+
+NOTIFICATION ICONS (windows, osx)
+------------------------------------------------------------------------------
+- check: bitmap draw / animation
+
+WINDOW ICON (windows) / DOCK ICON (osx)
+------------------------------------------------------------------------------
+- check: bitmap draw / animation
+
+FILE CHOOSER
+------------------------------------------------------------------------------
+- check: open file chooser
+- check: save file chooser
+
+CLIPBOARD
+------------------------------------------------------------------------------
+- check: copy/paste text
+- check: copy/paste files
+- check: copy/paste bitmaps
+
+DRAG & DROP
+------------------------------------------------------------------------------
+- drop files
+- ...
+
+ISSUES
+------------------------------------------------------------------------------
+- review frontend/backend split
+- remove undefined behavior (asserts)
+- ensure consistent behavior / document inconsistent behavior (async; events)
+
+
+LOG
+------------------------------------------------------------------------------
+23/07 - inventory
+24/07 - list of tests
+25/07 - ...
+26/07
+27/07
+28/07
+29/07
+30/07
+31/07
