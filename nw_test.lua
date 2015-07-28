@@ -8,12 +8,14 @@ local bit = require'bit'
 local box2d = require'box2d'
 local bitmap = require'bitmap'
 local pp = require'pp'
+local sleep = require'time'.sleep
 
 --local objc = require'objc'
 --objc.debug.logtopics.refcount = true
 
 local app --global app object
-local eyetime = 1
+local seetime = 1
+local dotime = 5
 
 --testing helpers ------------------------------------------------------------
 
@@ -122,32 +124,6 @@ M    maximize
 N    minimize
 ]]
 		end
-	end
-end
-
---function wrapper that provides a sleep() function.
-
-local function sleep(seconds)
-	coroutine.yield(seconds)
-end
-
-local function process(func)
-	return function(...)
-		local proc = coroutine.wrap(function(...)
-			local ok, res = xpcall(func, debug.traceback, ...)
-			if not ok then error(res) end
-			return res
-		end)
-		local function step(...)
-			local seconds = proc(...)
-			if not seconds then
-				app:quit()
-				return
-			end
-			app:runafter(seconds, step)
-		end
-		app:runafter(0, step)
-		app:run()
 	end
 end
 
@@ -502,26 +478,6 @@ add('quit-quitting-while-closing', function()
 	rec{'ignored', 'closed'}
 end)
 
---window default options -----------------------------------------------------
-
-add('init-defaults', function()
-	local win = app:window(winpos{visible = false})
-	assert(not win:visible())
-	assert(not win:minimized())
-	assert(not win:fullscreen())
-	assert(not win:maximized())
-	assert(win:title() == '')
-	assert(win:frame() == 'normal')
-	assert(not win:topmost())
-	assert(win:minimizable())
-	assert(win:maximizable())
-	assert(win:closeable())
-	assert(win:resizeable())
-	assert(win:fullscreenable())
-	assert(not win:autoquit())
-	assert(win:edgesnapping() == 'screen')
-end)
-
 --window closing -------------------------------------------------------------
 
 --closed() event works, even before the app starts.
@@ -639,114 +595,6 @@ add('close-children-ask', function()
 	print'ok'
 end)
 
---window visibility ----------------------------------------------------------
-
---default visible=true
---window is shown synchronously
-add('visible-init-default', function()
-	local win = app:window(winpos())
-	assert(win:visible())
-end)
-
-add('visible-init-default-check', function()
-	local win = app:window(winpos())
-	app:runafter(eyetime, function() app:quit() end)
-	app:run()
-end)
-
-add('visible-init-hidden', function()
-	local win = app:window(winpos{visible = false})
-	assert(not win:visible())
-end)
-
-add('visible-init-hidden-check', function()
-	local win = app:window(winpos{visible = false})
-	app:runafter(eyetime, function() app:quit() end)
-	app:run()
-end)
-
---no changed event is triggered
-add('visible-init-hidden-changed', function()
-	local rec = recorder()
-	function app:window_created(win)
-		rec'created'
-		function win:changed()
-			assert(false)
-		end
-	end
-	local win = app:window(winpos{visible = false})
-	win.changed = nil
-	rec{'created'}
-end)
-
---changed event is triggered synchronously
-add('visible-init-visible-changed', function()
-	local rec = recorder()
-	function app:window_created(win)
-		rec'created'
-		function win:changed()
-			rec(self:visible() and 'shown')
-		end
-	end
-	local win = app:window(winpos{visible = true})
-	rec{'created', 'shown'}
-	--TODO: Windows sends changed() event when the window is destroyed,
-	--but Linux and OSX don't.
-end)
-
---window minimization --------------------------------------------------------
-
-add('minimized-init-default', function()
-	local win = app:window(winpos())
-	assert(not win:minimized())
-end)
-
-add('minimized-init-restore', function()
-	local win = app:window(winpos{minimized = true})
-	assert(win:minimized())
-	app:run()
-end)
-
-add('visible-init-hidden', function()
-	local win = app:window(winpos{visible = false})
-	assert(not win:visible())
-end)
-
-add('visible-init-hidden-check', function()
-	local win = app:window(winpos{visible = false})
-	app:runafter(eyetime, function() app:quit() end)
-	app:run()
-end)
-
---no changed event is triggered
-add('visible-init-hidden-changed', function()
-	local rec = recorder()
-	function app:window_created(win)
-		rec'created'
-		function win:changed()
-			assert(false)
-		end
-	end
-	local win = app:window(winpos{visible = false})
-	win.changed = nil
-	rec{'created'}
-end)
-
---changed event is triggered synchronously
-add('visible-init-visible-changed', function()
-	local rec = recorder()
-	function app:window_created(win)
-		rec'created'
-		function win:changed()
-			rec(self:visible() and 'shown')
-		end
-	end
-	local win = app:window(winpos{visible = true})
-	rec{'created', 'shown'}
-	--TODO: Windows sends changed() event when the window is destroyed,
-	--but Linux and OSX don't.
-end)
-
 --window & app activaton -----------------------------------------------------
 
 --1. the OS activates the app when the first window is created.
@@ -762,41 +610,39 @@ end)
 add('activation-events', function()
 	local rec = recorder()
 	rec'before-run'
-	process(function()
-		local win1 = app:window(winpos())
-		local win2 = app:window(winpos())
-		local win3 = app:window(winpos())
-		function app:activated() rec'app-activated' end
-		function app:deactivated() rec'app-deactivated' end
-		function win1:activated() rec'win1-activated' end
-		function win2:activated() rec'win2-activated' end
-		function win3:activated() rec'win3-activated' end
-		function win1:deactivated() rec'win1-deactivated' end
-		function win2:deactivated() rec'win2-deactivated' end
-		function win3:deactivated() rec'win3-deactivated' end
-		app:runafter(1, function()
-			rec'started'
+	local win1 = app:window(winpos())
+	local win2 = app:window(winpos())
+	local win3 = app:window(winpos())
+	function app:activated() rec'app-activated' end
+	function app:deactivated() rec'app-deactivated' end
+	function win1:activated() rec'win1-activated' end
+	function win2:activated() rec'win2-activated' end
+	function win3:activated() rec'win3-activated' end
+	function win1:deactivated() rec'win1-deactivated' end
+	function win2:deactivated() rec'win2-deactivated' end
+	function win3:deactivated() rec'win3-deactivated' end
+	app:runafter(1, function()
+		rec'started'
+		assert(app:active())
+		win1:activate(); sleep(0.1); assert(app:active_window() == win1)
+		win2:activate(); sleep(0.1); assert(app:active_window() == win2)
+		win3:activate(); sleep(0.1); assert(app:active_window() == win3)
+		win3:close();    sleep(0.1); assert(app:active_window() == win2)
+		win2:close();    sleep(0.1); assert(app:active_window() == win1)
+		assert(app:active())
+		win1:close()
+		assert(not app:active_window())
+		if ffi.os == 'Windows' then
+			--on Windows, the app is deactivated after the last windows is closed.
+			assert(not app:active())
+		else
+			--on OSX, the app stays active (there's still the main menu and the dock icon).
+			rec'app-deactivated' --fake entry
 			assert(app:active())
-			win1:activate(); sleep(0.1); assert(app:active_window() == win1)
-			win2:activate(); sleep(0.1); assert(app:active_window() == win2)
-			win3:activate(); sleep(0.1); assert(app:active_window() == win3)
-			win3:close();    sleep(0.1); assert(app:active_window() == win2)
-			win2:close();    sleep(0.1); assert(app:active_window() == win1)
-			assert(app:active())
-			win1:close()
-			assert(not app:active_window())
-			if ffi.os == 'Windows' then
-				--on Windows, the app is deactivated after the last windows is closed.
-				assert(not app:active())
-			else
-				--on OSX, the app stays active (there's still the main menu and the dock icon).
-				rec'app-deactivated' --fake entry
-				assert(app:active())
-			end
-			rec'ended'
-		end)
-		sleep(10)
-	end)()
+		end
+		rec'ended'
+	end)
+	sleep(10)
 	rec{
 		'before-run',
 		'app-activated',
@@ -946,7 +792,7 @@ end)
 
 --app visibility (OSX only) --------------------------------------------------
 
-add('app-hide', process(function()
+add('app-hide', function()
 	local rec = recorder()
 	function app:did_hide() rec'hide' end
 	function app:did_unhide() rec'unhide' end
@@ -958,7 +804,276 @@ add('app-hide', process(function()
 	sleep(0.1)
 	assert(not app:hidden())
 	rec{'hide', 'unhide'}
-end))
+end)
+
+--window state ---------------------------------------------------------------
+
+--[[
+What you should know:
+- there are four state flags making up the window state:
+	- v (visible)
+	- m (minimized)
+	- M (maximized)
+	- f (fullscreen)
+- a window can be created with any combination of (v, m, M) but not f.
+- you can't change v, m or M from f (you can only exit fullscreen).
+- changing any of these flags must result in a single changed() event.
+- a single changed() event is preferrable for each single user action.
+- the ability to change the state programmatically complicates everything:
+	- state-changing methods can change one or more of the state flags at once
+	depending on the initial state and the method.
+	- state-changing methods must have specified behavior for all possible
+	state transitions: state0 -> method -> state1.
+	- state-changing methods must specify if the change is guaranteed or not.
+	- state-changing methods must specify if the change is synchronous or not.
+	- state transitions must result in a well-specified chain of events.
+	- ideally, an orthogonal change_state(v, m, M, f) that can transition from
+	any state to any state would be preferred. however, orthogonality is
+	a rare diamond on our primitive planet, so we have to define more complex
+	semantics to work around the arbitrary restrictions of our OSs. especially
+	hard is changing the maximized and fullscreen flags while minimized.
+	- state-changing methods must specify possible extra behavior:
+		- window activation and/or deactivation.
+		- window moving and/or resizing.
+	- problem: state-changing methods are not always synchronous.
+	- problem: state-changing methods do not always succeed in changing the state.
+]]
+
+--initial state --------------------------------------------------------------
+
+add('init-defaults', function()
+	local win = app:window(winpos{visible = false})
+	assert(not win:visible())
+	assert(not win:minimized())
+	assert(not win:fullscreen())
+	assert(not win:maximized())
+	assert(win:title() == '')
+	assert(win:frame() == 'normal')
+	assert(not win:topmost())
+	assert(win:minimizable())
+	assert(win:maximizable())
+	assert(win:closeable())
+	assert(win:resizeable())
+	assert(win:fullscreenable())
+	assert(not win:autoquit())
+	assert(win:edgesnapping() == 'screen')
+end)
+
+local function waitsee()
+	print('waiting '..seetime)
+	sleep(seetime)
+end
+
+local function waitdo()
+	print('waiting '..dotime)
+	sleep(dotime)
+end
+
+local function waitquit(xtime)
+	print('waiting before quit '..xtime)
+	app:runafter(xtime, function()
+		app:quit()
+	end)
+	app:run()
+end
+
+local function waitseequit() waitquit(seetime) end
+local function waitdoquit() waitquit(dotime) end
+
+add('init-visible-check', function()
+	local win = app:window(winpos{visible = true})
+	waitseequit()
+end)
+
+add('init-hidden-check', function()
+	local win = app:window(winpos{visible = false})
+	waitsee()
+	win:show()
+	waitseequit()
+end)
+
+add('init-minimized-check', function()
+	local win = app:window(winpos{visible = true, minimized = true})
+	waitdoquit()
+end)
+
+add('init-maximized-check', function()
+	local win = app:window(winpos{visible = true, maximized = true})
+	waitdoquit()
+end)
+
+add('init-minimized-maximized-check', function()
+	local win = app:window(winpos{visible = true, minimized = true, maximized = true})
+	waitdoquit()
+end)
+
+add('init-hidden-minimized-check', function()
+	local win = app:window(winpos{visible = false, minimized = true})
+	waitsee()
+	win:show()
+	waitdoquit()
+end)
+
+add('init-hidden-maximized-check', function()
+	local win = app:window(winpos{visible = false, maximized = true})
+	waitsee()
+	win:show()
+	waitdoquit()
+end)
+
+add('init-hidden-minimized-maximized-check', function()
+	local win = app:window(winpos{visible = false, minimized = true, maximized = true})
+	waitsee()
+	win:show()
+	waitdoquit()
+end)
+
+--state transitions ----------------------------------------------------------
+
+add('state1-restore-minimized', function()
+	local win = app:window(winpos{minimized = true})
+	app:runafter(0, function()
+		waitsee()
+		win:restore()
+		waitsee()
+		app:quit()
+	end)
+	app:run()
+end)
+
+add('state1-maximize-minimized', function()
+	local win = app:window(winpos{minimized = true})
+	app:runafter(0, function()
+		waitsee()
+		win:maximize()
+		waitsee()
+		app:quit()
+	end)
+	app:run()
+end)
+
+add('state1-maximize-hidden', function()
+	local win = app:window(winpos{visible = false})
+	app:runafter(0, function()
+		waitsee()
+		win:maximize()
+		waitsee()
+		app:quit()
+	end)
+	app:run()
+end)
+
+add('state1-maximize-minimized-hidden', function()
+	local win = app:window(winpos{visible = false, minimized = true})
+	app:runafter(0, function()
+		waitsee()
+		win:maximize()
+		waitsee()
+		app:quit()
+	end)
+	app:run()
+end)
+
+add('state1-minimize-hide-show', function()
+	local win = app:window(winpos{minimized = true})
+	app:runafter(0, function()
+		--waitsee()
+		--win:minimize()
+		waitsee()
+		win:hide()
+		waitsee()
+		waitsee()
+		win:show()
+		waitsee()
+		app:quit()
+	end)
+	app:run()
+end)
+
+--window visibility ----------------------------------------------------------
+
+--no changed event is triggered
+add('visible-init-hidden-changed', function()
+	local rec = recorder()
+	function app:window_created(win)
+		rec'created'
+		function win:changed()
+			assert(false)
+		end
+	end
+	local win = app:window(winpos{visible = false})
+	win.changed = nil
+	rec{'created'}
+end)
+
+--changed event is triggered synchronously
+add('visible-init-visible-changed', function()
+	local rec = recorder()
+	function app:window_created(win)
+		rec'created'
+		function win:changed()
+			rec(self:visible() and 'shown')
+		end
+	end
+	local win = app:window(winpos{visible = true})
+	rec{'created', 'shown'}
+	--TODO: Windows sends changed() event when the window is destroyed,
+	--but Linux and OSX don't.
+end)
+
+--window minimization --------------------------------------------------------
+
+add('minimized-init-default', function()
+	local win = app:window(winpos())
+	assert(not win:minimized())
+end)
+
+add('minimized-init-check', function()
+	local win = app:window(winpos{minimized = true})
+	app:run()
+end)
+
+add('minimized-init-restore', function()
+	local win = app:window(winpos{minimized = true})
+	assert(win:minimized())
+	win:restore()
+	assert(not win:minimized())
+end)
+
+add('minimized-init-restore-check', function()
+	local win = app:window(winpos{minimized = true})
+	app:runafter(1, function()
+		win:restore()
+	end)
+	app:run()
+end)
+
+--window maximization --------------------------------------------------------
+
+add('maximized-init-default', function()
+	local win = app:window(winpos())
+	assert(not win:maximized())
+end)
+
+add('maximized-init-check', function()
+	local win = app:window(winpos{maximized = true})
+	app:run()
+end)
+
+add('maximized-init-restore', function()
+	local win = app:window(winpos{maximized = true})
+	assert(win:maximized())
+	win:restore()
+	assert(not win:maximized())
+end)
+
+add('maximized-init-restore-check', function()
+	local win = app:window(winpos{maximized = true})
+	app:runafter(1, function()
+		win:restore()
+	end)
+	app:run()
+end)
 
 --window states --------------------------------------------------------------
 
@@ -1087,12 +1202,13 @@ for i,test in ipairs({
 		--compose test name.
 		local t = {}
 		t[#t+1] = init_flags.visible == false and 'hidden' or nil
+		t[#t+1] = init_flags.minimized and 'minimized' or nil
 		t[#t+1] = init_flags.maximized and 'maximized' or nil
 		glue.extend(t, commands1, commands2)
 		glue.append(t, init_flags.frame == 'none' and 'noframe' or nil)
 		local test_name = table.concat(t, '-')
 
-		add('state-'..test_name, process(function()
+		add('state-'..test_name, function()
 
 			app:autoquit(false)
 			local win = app:window(winpos(init_flags))
@@ -1122,7 +1238,6 @@ for i,test in ipairs({
 				for i, command in ipairs(commands) do
 
 					local flags1 = flags_string()
-					print(flags1, command)
 
 					local fs = nw:os'OSX' and (win:fullscreen() or command == 'enter_fullscreen')
 					if command == 'enter_fullscreen' then
@@ -1167,7 +1282,7 @@ for i,test in ipairs({
 			assert(win:dead())
 			--collectgarbage()
 
-		end))
+		end)
 	end
 
 	make_test{}
@@ -2601,6 +2716,7 @@ add('xlib', function()
 	}
 
 	function win1:repaint()
+		do return end
 		local bmp = self:bitmap()
 		local _, setpixel = require'bitmap'.pixel_interface(bmp)
 		for y=0,bmp.h-1 do
@@ -2610,8 +2726,7 @@ add('xlib', function()
 		end
 		--ffi.fill(bmp.data, bmp.stride * 10, 0x80)
 	end
-
-	win1:invalidate()
+	--win1:invalidate()
 	win1:show()
 
 	app:runevery(2, function()
@@ -2634,9 +2749,34 @@ add('xlib', function()
 		--win1:fullscreen(not win1:fullscreen())
 	end)
 	--local win2 = app:window{x = 20, y = 40, cw = 300, ch = 200, parent = win1}
-	function app:event(...) print('app', ...) end
-	function win1:event(...) print('win1', ...) end
+	--function app:event(...) print('app', ...) end
+	--function win1:event(...) print('win1', ...) end
 	--function win2:event(...) print('win2', ...) end
+
+	local win2 = app:window{cw = 500, ch = 300}
+
+	app:runevery(0, function()
+		if win1:minimized() then
+			win1:restore()
+			assert(not win1:minimized())
+			print'restored'
+		else
+			win1:minimize()
+			assert(win1:minimized())
+			print'minimized'
+		end
+
+		if win2:minimized() then
+			win2:restore()
+			assert(not win2:minimized())
+			print'restored'
+		else
+			win2:minimize()
+			assert(win2:minimized())
+			print'minimized'
+		end
+	end)
+
 	app:run()
 end)
 

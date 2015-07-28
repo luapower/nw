@@ -835,8 +835,9 @@ function window:minsize(w, h)
 	if not w and not h then
 		return self.backend:get_minsize()
 	else
+		--clamp to maxsize to avoid undefined behavior in the backend
 		local maxw, maxh = self:maxsize()
-		if w and maxw then w = math.min(w, maxw) end --avoid undefined behavior
+		if w and maxw then w = math.min(w, maxw) end
 		if h and maxh then h = math.min(h, maxh) end
 		self.backend:set_minsize(w, h)
 	end
@@ -846,8 +847,9 @@ function window:maxsize(w, h)
 	if not w and not h then
 		return self.backend:get_maxsize()
 	else
+		--clamp to minsize to avoid undefined behavior in the backend
 		local minw, minh = self:minsize()
-		if w and minw then w = math.max(w, minw) end --avoid undefined behavior
+		if w and minw then w = math.max(w, minw) end
 		if h and minh then h = math.max(h, minh) end
 		self.backend:set_maxsize(w, h)
 	end

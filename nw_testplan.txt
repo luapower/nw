@@ -3,12 +3,11 @@
 - minsize, maxsize
 - resizeable
 
-
 ------------------------------------------------------------------------------
 init | action | change | get | query | event | flag || assert | check
 ------------------------------------------------------------------------------
 
-REMOVE
+TO-REMOVE
 ------------------------------------------------------------------------------
 - init: activable (not working on linux)
 - init: transparent (not working on windows / remote desktop)
@@ -23,7 +22,7 @@ INIT/PLATFORM VERSION
 
 LOOP
 ------------------------------------------------------------------------------
-- assert: events start after loop starts
+- assert: activation events start after loop starts
 - assert: loop can end and be started again
 - get: running
 - TODO...
@@ -86,9 +85,8 @@ FRAME=NONE
 FRAME=TOOLBOX
 ------------------------------------------------------------------------------
 - init: frame=toolbox
-	- check: has toolbox frame (windows)
-	- check: not on taskbar
 	- assert: has parent
+	- check: has toolbox frame (windows)
 
 POSITIONING
 ------------------------------------------------------------------------------
@@ -163,13 +161,36 @@ STATE
 	- assert: minimized, maximized, fullscreen
 	- assert/check: restore -> fullscreen -> maximized -> normal
 - action: hide
+	- assert: ignored if hidden
+	- assert: save minimized state
+	- assert: hide children
+	- assert: changed event
 - action: show
+	- assert: ignored if visible
+	- assert: restore minimized
+	- assert: show children
+	- assert: changed event
+	- assert: raise
+	- assert: activate
 - action: minimize
-- action: maximize
+	- assert: ignore if minimized
+	- assert: show if hidden
+	- assert:
 - action: restore
-- action: shownormal
+	- assert: ignore if normal visible
+	- assert: show if hidden
+	- assert: minimize if hidden minimized
+	- assert: show normal if visible minimized
+- action: maximize
 - action: enter fullscreen
+	- assert:
 - action: exit fullscreen
+	- assert:
+- action: shownormal
+	- assert: show if hidden
+	- assert: unmaximize if maximized
+	- assert: unminimize if minimized
+	- assert: exit fullscreen if fullscreen
 
 TITLE
 ------------------------------------------------------------------------------
@@ -191,10 +212,15 @@ ENABLED
 	- assert: get
 	- check: enabled/disabled
 
-CLOSING & QUITTING
+CLOSING
 ------------------------------------------------------------------------------
 - query: closing
+- action: close
+	- assert: deactivate and changed events precede closed event
 - event: closed
+
+QUITTING
+------------------------------------------------------------------------------
 - query: quitting
 - event: quit
 - flag: app autoquit
@@ -321,9 +347,9 @@ LOG
 ------------------------------------------------------------------------------
 23/07 - inventory
 24/07 - list of tests
-25/07 - ...
-26/07
-27/07
+25/07 - starting state tests
+26/07 - talk about what to remove (nothing); more tests
+27/07 - testing states (made transitions synchronous)
 28/07
 29/07
 30/07
