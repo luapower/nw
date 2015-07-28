@@ -40,6 +40,7 @@ function app:new(frontend)
 	self   = glue.inherit({frontend = frontend}, self)
 	xlib   = xlib.connect()
 	poll_until = xlib.poll_until
+	self:_resolve_evprop_names()
 	return self
 end
 
@@ -47,23 +48,7 @@ function app:virtual_roots()
 	return get_window_list_prop(xlib.screen.root, '_NET_VIRTUAL_ROOTS')
 end
 
---message loop ---------------------------------------------------------------
-
-local ev = {} --{event_code = event_handler}
-
---how much to wait before polling again.
---checking more often increases CPU usage!
-app._poll_interval = 0.02
-
-local last_poll_time
-
-function app:_sleep()
-	local busy_interval = time.clock() - last_poll_time
-	local sleep_interval = self._poll_interval - busy_interval
-	if sleep_interval > 0 then
-		time.sleep(sleep_interval)
-	end
-end
+--event debugging ------------------------------------------------------------
 
 local etypes = glue.index{
 	KeyPress             = 2,
@@ -109,25 +94,41 @@ local function evstr(e)
 	return '--> '..(etypes[e.type] or e.type)..s
 end
 
+--message loop ---------------------------------------------------------------
+
+local ev = {}     --{event_code = event_handler}
+local evprop = {} --{property_name = PropertyNotify_handler}
+
+function app:_resolve_evprop_names()
+	for name, handler in pairs(evprop) do
+		local atom = xlib.atom(name)
+		if atom then
+			evprop[atom] = handler
+		end
+	end
+end
+
 function app:_poll()
-	last_poll_time = time.clock()
-	local e = xlib.poll()
-	if e then
+	while true do
+		local timeout = self:_pull_timers()
+		if self._stop then
+			break
+		end
+		local e = xlib.poll(timeout)
+		if not e then
+			break
+		end
 		print('EVENT', evstr(e))
 		local f = ev[tonumber(e.type)]
 		if f then f(e) end
-	else
-		self:_check_timers()
-		self:_sleep()
+		return e
 	end
-	return e
 end
 
 function app:_poll_until(func)
 	while not self._stop do
 		local e = self:_poll()
-		print('EVENT', evstr(e))
-		if func(e) then
+		if e and func(e) then
 			break
 		end
 	end
@@ -140,6 +141,14 @@ end
 
 function app:stop()
 	self._stop = true
+end
+
+--PropertyNotify dispatcher --------------------------------------------------
+
+ev[C.PropertyNotify] = function(e)
+	e = e.xproperty
+	local handler = evprop[e.atom]
+	if handler then handler(e) end
 end
 
 --time -----------------------------------------------------------------------
@@ -159,28 +168,38 @@ local function cmp(t1, t2)
 end
 local timers = heap.valueheap{cmp = cmp}
 
-function app:_check_timers()
+local select_accuracy = 0.01 --assume 10ms accuracy of select()
+
+--pull and execute all expired timers and return the timeout until the next one.
+function app:_pull_timers()
 	while timers:length() > 0 do
 		local t = timers:peek()
 		local now = time.clock()
-		if now + self._poll_interval / 2 > t.time then
-			if t.func() == false then
+		if now + select_accuracy / 2 > t.time then
+			if t.func() == false then --func wants timer to stop
 				timers:pop()
-			else
+			else --func wants timer to keep going
 				t.time = now + t.interval
 				timers:replace(1, t)
-				--break to the loop to avoid infinite looping the same timer
-				--without other events having a chance to be pulled.
-				break
+				--break to avoid recurrent timers to starve the event loop.
+				return 0
 			end
 		else
-			break
+			return t.time - now --wait till next scheduled timer
 		end
 	end
+	return true --block indefinitely
 end
 
 function app:runevery(seconds, func)
 	timers:push({time = time.clock() + seconds, interval = seconds, func = func})
+end
+
+--xsettings ------------------------------------------------------------------
+
+function evprop._XSETTINGS_SETTINGS(e)
+	if e.window ~= xlib.get_xsettings_window() then return end
+	--TODO:
 end
 
 --windows --------------------------------------------------------------------
@@ -372,17 +391,6 @@ ev[C.ClientMessage] = function(e)
 			xlib.pong(e)
 		end
 	end
-end
-
-ev[C.PropertyNotify] = function(e)
-	e = e.xproperty
-	--[[
-	if e.window == xlib.get_xsettings_window() then
-		print('XSETTINGS PROPERTY_NOTIFY')
-	end
-	]]
-	local self = winmap[xid(e.window)]
-	if not self then return end
 end
 
 ev[C.ConfigureNotify] = function(e)
@@ -696,6 +704,16 @@ function window:set_enabled(enabled)
 	self._disabled = not enabled
 end
 
+--state/events ---------------------------------------------------------------
+
+function evprop.WM_STATE()
+	print'WM_STATE changed'
+end
+
+function evprop._NET_WM_STATE()
+	print'_NET_WM_STATE changed'
+end
+
 --positioning/conversions ----------------------------------------------------
 
 function window:to_screen(x, y)
@@ -706,37 +724,42 @@ function window:to_client(x, y)
 	return xlib.translate_coords(xlib.screen.root, self.win, x, y)
 end
 
-local function frame_extents(frame, has_menu)
-
-	if frame == 'none' then
-		return {0, 0, 0, 0}
-	end
-
-	--create a dummy window
-	local win = xlib.create_window{width = 200, height = 200}
-
-	--the WM should have set the frame extents by now.
-	local w1, h1, w2, h2 = xlib.frame_extents(win)
-	local timeout = time.clock() + 0.5
-	while not w1 do
-		--sometimes the WM sets the extents later or not at all so we have to poll.
-		w1, h1, w2, h2 = xlib.frame_extents(win)
-		if w1 or time.clock() > timeout then break end
-		time.sleep(0.01)
+local function unmapped_frame_extents(win)
+	local w1, h1, w2, h2
+	if xlib.frame_extents_supported() then
+		xlib.request_frame_extents(win)
+		w1, h1, w2, h2 = xlib.get_frame_extents(win)
+		--some WMs set the extents later or not at all so we have to poll.
+		if not w1 then
+			local timeout = time.clock() + 0.2
+			local period = 0.01
+			while true do
+				w1, h1, w2, h2 = xlib.get_frame_extents(win)
+				if w1 or time.clock() > timeout then break end
+				time.sleep(period)
+				period = period * 2
+			end
+		end
 	end
 	if not w1 then --bail out with wrong values.
 		w1, h1, w2, h2 = 0, 0, 0, 0
 	end
-
-	--destroy the window
-	xlib.destroy_window(win)
-
-	--compute/return the frame rectangle
-	return {w1, h1, w2, h2}
+	return w1, h1, w2, h2
 end
 
---TODO: invalidate this on e.type == C.PropertyNotify and e.xproperty.atom == atom'_NET_FRAME_EXTENTS'
-local frame_extents = glue.memoize(frame_extents)
+local frame_extents = glue.memoize(function(frame, has_menu)
+	if frame == 'none' then
+		return {0, 0, 0, 0}
+	end
+	--create a dummy window
+	local win = xlib.create_window{width = 200, height = 200}
+	--get its frame extents
+	local w1, h1, w2, h2 = unmapped_frame_extents(win)
+	--destroy the window
+	xlib.destroy_window(win)
+	--compute/return the frame rectangle
+	return {w1, h1, w2, h2}
+end)
 
 local frame_extents = function(frame, has_menu)
 	return unpack(frame_extents(frame, has_menu))
@@ -766,7 +789,10 @@ end
 --positioning/rectangles -----------------------------------------------------
 
 function window:_frame_extents()
-	return xlib.frame_extents(self.win, self:menubar() and true or false)
+	if self.frame == 'none' then
+		return 0, 0, 0, 0
+	end
+	return unmapped_frame_extents(self.win)
 end
 
 function window:get_normal_rect()

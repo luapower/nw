@@ -239,6 +239,7 @@ add('timer-fast', function()
 			--stopping is done on the next loop. if the app stops
 			--then it means that it reached the top of the loop.
 			app:stop()
+			return false
 		end
 	end)
 	app:run()
@@ -248,12 +249,14 @@ end)
 --timers stop when the loop is stopped, and resume after the loop is resumed.
 add('timer-resume', function()
 	local rec = recorder()
-	local i = 1
+	local i, j = 1, 1
 	app:runevery(0, function()
 		rec(i)
 		i = i + 1
 		if i > 3 then
 			app:stop()
+			j = j + 1
+			return j < 3 --remove the timer on the second app run.
 		end
 	end)
 	app:run()
@@ -2697,7 +2700,7 @@ add('xlib', function()
 
 	--app:autoquit(false)
 
-	local win1 = app:window{x = 2, y = 26, cw = 500, ch = 300,
+	local win1 = app:window{x = 12, y = 36, cw = 500, ch = 300,
 		title = 'Hello 1',
 		--resizeable = false,
 		--frame = 'none',
@@ -2729,8 +2732,8 @@ add('xlib', function()
 	--win1:invalidate()
 	win1:show()
 
+	--[[
 	app:runevery(2, function()
-		--[[
 		local mw, mh = win1:maxsize()
 		mw = mw - 10
 		mh = mh - 10
@@ -2745,9 +2748,9 @@ add('xlib', function()
 		else
 			win1:restore()
 		end
-		]]
 		--win1:fullscreen(not win1:fullscreen())
 	end)
+	]]
 	--local win2 = app:window{x = 20, y = 40, cw = 300, ch = 200, parent = win1}
 	--function app:event(...) print('app', ...) end
 	--function win1:event(...) print('win1', ...) end
@@ -2755,6 +2758,7 @@ add('xlib', function()
 
 	local win2 = app:window{cw = 500, ch = 300}
 
+	--[[
 	app:runevery(0, function()
 		if win1:minimized() then
 			win1:restore()
@@ -2776,6 +2780,7 @@ add('xlib', function()
 			print'minimized'
 		end
 	end)
+	]]
 
 	app:run()
 end)

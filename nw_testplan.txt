@@ -350,7 +350,7 @@ LOG
 25/07 - starting state tests
 26/07 - talk about what to remove (nothing); more tests
 27/07 - testing states (made transitions synchronous)
-28/07
+28/07 - replaced sleep with select in loop
 29/07
 30/07
 31/07
