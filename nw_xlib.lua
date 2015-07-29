@@ -34,12 +34,9 @@ nw.min_os = 'Linux 11.0'
 local app = {}
 nw.app = app
 
-local poll_until
-
 function app:new(frontend)
 	self   = glue.inherit({frontend = frontend}, self)
 	xlib   = xlib.connect()
-	poll_until = xlib.poll_until
 	self:_resolve_evprop_names()
 	return self
 end
@@ -86,12 +83,17 @@ local etypes = glue.index{
 	MappingNotify        = 34,
 	GenericEvent         = 35,
 }
+local t0
 local function evstr(e)
-	local s = ''
+	t0 = t0 or time.clock()
+	local t1 = time.clock()
+	local s = '   '..('.'):rep((t1 - t0) * 20)..' EVENT'
+	t0 = t1
+	s = s..' '..(etypes[e.type] or e.type)
 	if e.type == C.PropertyNotify then
-		s = ': '..xlib.atom_name(e.xproperty.atom)..' = '..e.xproperty.state
+		s = s..': '..xlib.atom_name(e.xproperty.atom)
 	end
-	return '--> '..(etypes[e.type] or e.type)..s
+	return s
 end
 
 --message loop ---------------------------------------------------------------
@@ -118,7 +120,7 @@ function app:_poll()
 		if not e then
 			break
 		end
-		print('EVENT', evstr(e))
+		--print(evstr(e))
 		local f = ev[tonumber(e.type)]
 		if f then f(e) end
 		return e
@@ -149,16 +151,6 @@ ev[C.PropertyNotify] = function(e)
 	e = e.xproperty
 	local handler = evprop[e.atom]
 	if handler then handler(e) end
-end
-
---time -----------------------------------------------------------------------
-
-function app:time()
-	return time.clock()
-end
-
-function app:timediff(start_time, end_time)
-	return end_time - start_time
 end
 
 --timers ---------------------------------------------------------------------
@@ -331,7 +323,7 @@ function window:new(app, frontend, t)
 	})
 
 	--set info for _NET_WM_PING to allow the user to kill a non-responsive process.
-	xlib.set_netwm_ping_info(self.win)
+	xlib.set_net_wm_ping_info(self.win)
 
 	if t.title then
 		xlib.set_title(self.win, t.title)
@@ -511,10 +503,10 @@ end
 --wait until the window is mapped or minimized to emulate Windows behavior.
 function window:_wait_map(minimized)
 	if minimized then
-		poll_until(function(e) print(evstr(e)) return self:minimized() end)
+		xlib.poll_until(function(e) return self:_get_minimized_state() end)
 		--while not self:minimized() do time.sleep(0.01) end
 	else
-		poll_until(function(e) return e.type == C.MapNotify end)
+		xlib.poll_until(function(e) return e.type == C.MapNotify end)
 		--self.app:_poll_until(function(e) return e.type == C.MapNotify end)
 	end
 end
@@ -527,8 +519,8 @@ function window:show()
 	if self._visible then return end
 
 	--set the _NET_WM_STATE property before mapping the window.
-	--later on we have to use change_netwm_state() to change these values.
-	xlib.set_netwm_state(self.win, {
+	--later on we have to use change_net_wm_state() to change these values.
+	xlib.set_net_wm_state(self.win, {
 		_NET_WM_STATE_MAXIMIZED_HORZ = self._maximized or nil,
 		_NET_WM_STATE_MAXIMIZED_VERT = self._maximized or nil,
 		_NET_WM_STATE_ABOVE = self._topmost or nil,
@@ -541,8 +533,8 @@ function window:show()
 		xlib.set_wm_hints(self.win, {initial_state = C.IconicState})
 	end
 	xlib.map(self.win)
-	self._visible = true
 	self:_wait_map(self._minimized)
+	self._visible = true
 	self.frontend:_backend_changed()
 
 	if not self._minimized then
@@ -561,7 +553,7 @@ function window:hide()
 	xlib.withdraw(self.win)
 	if not self._minimized then
 		--wait until the window is unmapped to emulate Windows behavior.
-		poll_until(function(e) return e.type == C.UnmapNotify end)
+		xlib.poll_until(function(e) return e.type == C.UnmapNotify end)
 	else
 		--NOTE: no event is generated when unmapping a minimized window.
 	end
@@ -570,13 +562,45 @@ function window:hide()
 	self.frontend:_backend_changed()
 end
 
+function window:_mapped()
+	if self._visible then return end
+	self.frontend:_backend_was_shown()
+	self._visible = true
+end
+
+function window:_unmapped()
+	if self._visible then return end --minimized, ignore
+	self.frontend:_backend_was_hidden()
+	self._visible = false
+end
+
+--NOTE: unminimizating means mapping
+ev[C.MapNotify] = function(e)
+	local e = e.xmap
+	local win = winmap[xid(e.window)]
+	if not win then return end
+	win:_mapped()
+end
+
+--NOTE: minimizating means unmapping
+ev[C.UnmapNotify] = function(e)
+	local e = e.xunmap
+	local win = winmap[xid(e.window)]
+	if not win then return end
+	win:_unmapped()
+end
+
 --state/minimizing -----------------------------------------------------------
+
+function window:_get_minimized_state()
+	return xlib.get_wm_state(self.win) == C.IconicState
+end
 
 function window:minimized()
 	if not self._visible then
 		return self._minimized
 	end
-	return xlib.get_wm_state(self.win) == C.IconicState
+	return self:_get_minimized_state()
 end
 
 function window:minimize()
@@ -592,20 +616,46 @@ function window:minimize()
 	end
 end
 
+function window:_wm_state_changed()
+	local min = self:_get_minimized_state()
+	if min ~= self._minimized then
+		if min then
+			self.frontend:_backend_was_minimized()
+		else
+			self.frontend:_backend_was_unminimized()
+		end
+		self._minimized = min
+	end
+end
+
+function evprop.WM_STATE(e)
+	local win = winmap[xid(e.window)]
+	if not win then return end
+	win:_wm_state_changed()
+end
+
+--state/maximized+fullscreen -------------------------------------------------
+
+function window:_get_net_wm_state(flag)
+	local st = xlib.get_net_wm_state(self.win)
+	return st and st[flag] or false
+end
+
 --state/maximizing -----------------------------------------------------------
+
+function window:_get_maximized_state()
+	return self:_get_net_wm_state'_NET_WM_STATE_MAXIMIZED_HORZ'
+end
 
 function window:maximized()
 	if not self._visible then
 		return self._maximized
 	end
-	local st = xlib.get_netwm_state(self.win)
-	return st and
-		st[xlib.atom'_NET_WM_STATE_MAXIMIZED_HORZ'] and
-		st[xlib.atom'_NET_WM_STATE_MAXIMIZED_VERT'] or false
+	return self:_get_maximized_state()
 end
 
 function window:_set_maximized(onoff)
-	xlib.change_netwm_state(self.win, onoff,
+	xlib.change_net_wm_state(self.win, onoff,
 		'_NET_WM_STATE_MAXIMIZED_HORZ',
 		'_NET_WM_STATE_MAXIMIZED_VERT')
 end
@@ -628,6 +678,36 @@ function window:maximize()
 		while not self:maximized() do time.sleep(0.01) end
 		self.frontend:_backend_changed()
 	end
+end
+
+function window:_net_wm_state_changed()
+
+	local fs = self:_get_fullscreen_state()
+	if fs ~= self._fullscreen then
+		if fs then
+			self.frontend:_backend_entered_fullscreen()
+		else
+			self.frontend:_backend_exited_fullscreen()
+		end
+		self._fullscreen = fs
+	end
+
+	local max = self:_get_maximized_state()
+	if max ~= self._maximized then
+		if max then
+			self.frontend:_backend_was_maximized()
+		else
+			self.frontend:_backend_was_unmaximized()
+		end
+		self._maximized = max
+	end
+
+end
+
+function evprop._NET_WM_STATE(e)
+	local win = winmap[xid(e.window)]
+	if not win then return end
+	win:_net_wm_state_changed()
 end
 
 --state/restoring ------------------------------------------------------------
@@ -656,10 +736,14 @@ function window:shownormal()
 		end
 		self:show()
 	elseif self:minimized() then
-		self._visible = false
-		self._maximized = false
-		self._fullscreen = false
-		self:show()
+		if self:maximized() then
+			self:_set_maximized(false)
+		end
+		xlib.map(self.win)
+		while self:minimized() or self:maximized() do time.sleep(0.01) end
+		self.frontend:_backend_changed()
+		--activate window to emulate Windows behavior.
+		self:activate()
 	elseif self:maximized() then
 		self:_set_maximized(false)
 		while self:maximized() do time.sleep(0.01) end
@@ -669,17 +753,20 @@ end
 
 --state/fullscreen -----------------------------------------------------------
 
+function window:_get_fullscreen_state()
+	return self:_get_net_wm_state'_NET_WM_STATE_FULLSCREEN'
+end
+
 function window:fullscreen()
 	if not self._visible then
 		return self._fullscreen
 	end
-	local st = xlib.get_netwm_state(self.win)
-	return st and st[xlib.atom'_NET_WM_STATE_FULLSCREEN'] or false
+	return self:_get_fullscreen_state()
 end
 
 function window:enter_fullscreen()
 	if self._visible then
-		xlib.change_netwm_state(self.win, true, '_NET_WM_STATE_FULLSCREEN')
+		xlib.change_net_wm_state(self.win, true, '_NET_WM_STATE_FULLSCREEN')
 		while not self:fullscreen() do time.sleep(0.01) end
 	else
 		self._fullscreen = true
@@ -691,7 +778,7 @@ function window:enter_fullscreen()
 end
 
 function window:exit_fullscreen()
-	xlib.change_netwm_state(self.win, false, '_NET_WM_STATE_FULLSCREEN')
+	xlib.change_net_wm_state(self.win, false, '_NET_WM_STATE_FULLSCREEN')
 end
 
 --state/enabled --------------------------------------------------------------
@@ -702,16 +789,6 @@ end
 
 function window:set_enabled(enabled)
 	self._disabled = not enabled
-end
-
---state/events ---------------------------------------------------------------
-
-function evprop.WM_STATE()
-	print'WM_STATE changed'
-end
-
-function evprop._NET_WM_STATE()
-	print'_NET_WM_STATE changed'
 end
 
 --positioning/conversions ----------------------------------------------------
@@ -897,16 +974,20 @@ end
 
 function window:get_topmost()
 	return self._topmost
-	--local st = xlib.get_netwm_state(self.win)
-	--return st and st[xlib.atom'_NET_WM_STATE_ABOVE'] or false
 end
 
 function window:set_topmost(topmost)
-	xlib.change_netwm_state(self.win, topmost, xlib.atom'_NET_WM_STATE_ABOVE')
+	xlib.change_net_wm_state(self.win, topmost, '_NET_WM_STATE_ABOVE')
 end
 
-function window:set_zorder(mode, relto)
-	--if relto
+function window:raise(relto)
+	assert(not relto, 'NYI')
+	xlib.raise(self.win)
+end
+
+function window:lower(relto)
+	assert(not relto, 'NYI')
+	xlib.lower(self.win)
 end
 
 --displays -------------------------------------------------------------------

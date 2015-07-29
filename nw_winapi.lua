@@ -75,21 +75,6 @@ function app:stop()
 	winapi.PostQuitMessage()
 end
 
---time -----------------------------------------------------------------------
-
-require'winapi.time'
-
-function app:time()
-	return winapi.QueryPerformanceCounter().QuadPart
-end
-
-local qpf
-function app:timediff(start_time, end_time)
-	qpf = qpf or tonumber(winapi.QueryPerformanceFrequency().QuadPart)
-	local interval = end_time - start_time
-	return tonumber(interval * 1000) / qpf --milliseconds
-end
-
 --timers ---------------------------------------------------------------------
 
 local timer_cb
@@ -135,6 +120,7 @@ function window:new(app, frontend, t)
 		max_cw = t.max_cw,
 		max_ch = t.max_ch,
 		visible = false,
+		minimized = t.minimized,
 		maximized = t.maximized,
 		enabled = t.enabled,
 		--frame
@@ -153,7 +139,7 @@ function window:new(app, frontend, t)
 		sizeable = framed and t.resizeable, --must be off for frameless windows!
 		activable = t.activable,
 		receive_double_clicks = false, --we do our own double-clicking
-		remember_maximized_pos = true, --to emulate OSX behavior for constrained maximized windows
+		remember_maximized_pos = true, --to emulate OSX behavior for maximized windows with minsize/maxsize constrains
 	}
 
 	--must set WS_CHILD **after** window is created for non-activable toolboxes!
@@ -178,6 +164,10 @@ function window:new(app, frontend, t)
 	self.win.frontend = frontend
 	self.win.backend = self
 	self.win.app = app
+
+	--disambiguation flags for 'restore' event
+	self._was_minimized = t.minimized
+	self._was_maximized = t.maximized
 
 	--init icon API
 	self:_init_icon_api()
@@ -342,7 +332,14 @@ function window:visible()
 end
 
 function window:show()
-	self.win:show()
+	if self.minimized then
+		--show minimized without activating, to emulate Linux behavior.
+		--TODO: make the call asynchronous, to emulate Linux behavior?
+		self.win:minimize(true)
+	else
+		--TODO: make the call asynchronous to emulate Linux behavior?
+		self.win:show()
+	end
 end
 
 function window:hide()
@@ -661,7 +658,10 @@ function Window:on_resized(flag)
 
 	if flag == 'minimized' then
 
+		self.frontend._was_minimized = true
+
 		self.frontend:_backend_resized()
+		self.frontend:_backend_was_minimized()
 
 	elseif flag == 'maximized' then
 
@@ -674,13 +674,38 @@ function Window:on_resized(flag)
 			self.nw_maximizing = false
 		end
 
+		--when restoring a maximized window, 'maximized' is triggered instead of 'restored'. fix that.
+		local was_unminimized =
+			self.frontend._was_minimized and
+			self.frontend._was_maximized
+		self.frontend._was_maximized = true
+		self.frontend._was_minimized = false
+
 		self.backend:invalidate()
 		self.frontend:_backend_resized()
+
+		if was_unminimized then
+			self.frontend:_backend_was_unminimized()
+		else
+			self.frontend:_backend_was_maximized()
+		end
 
 	elseif flag == 'restored' then --also triggered on show
 
+		local was_unminimized = self.frontend._was_minimized and not self.minimized
+		local was_unmaximized = self.frontend._was_maximized and not self.maximized
+		self.frontend._was_minimized = self.minimized
+		self.frontend._was_maximized = self.maximized
+
 		self.backend:invalidate()
 		self.frontend:_backend_resized()
+
+		if was_unminimized then
+			self.frontend:_backend_was_unminimized()
+		end
+		if was_unmaximized then
+			self.frontend:_backend_was_unmaximized()
+		end
 
 	end
 end
@@ -722,12 +747,12 @@ function window:set_topmost(topmost)
 	self.win.topmost = topmost
 end
 
-function window:set_zorder(mode, relto)
-	if mode == 'back' then
-		self.win:send_to_back(relto)
-	elseif mode == 'front' then
-		self.win:bring_to_front(relto)
-	end
+function window:raise(relto)
+	self.win:bring_to_front(relto)
+end
+
+function window:lower(relot)
+	self.win:send_to_back(relto)
 end
 
 --displays -------------------------------------------------------------------

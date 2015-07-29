@@ -933,6 +933,29 @@ end)
 
 --state transitions ----------------------------------------------------------
 
+add('state1-events-check', function()
+	local win = app:window(winpos{visible = false})
+	function win:was_minimized() print'was_minimized' end
+	function win:was_maximized() print'was_maximized' end
+	function win:was_unminimized() print'was_unminimized' end
+	function win:was_unmaximized() print'was_unmaximized' end
+	function win:was_shown() print'was_shown' end
+	function win:was_hidden() print'was_hidden' end
+	waitsee()
+	win:show()
+	print'shownormal in 5s'
+	app:runafter(5, function()
+		win:shownormal()
+	end)
+	waitquit(20)
+end)
+
+add('state1-minimized-events-check', function()
+	local win = app:window(winpos{minimized = true})
+	function win:event(...) print(...) end
+	waitquit(20)
+end)
+
 add('state1-restore-minimized', function()
 	local win = app:window(winpos{minimized = true})
 	app:runafter(0, function()
@@ -1818,10 +1841,10 @@ add('zorder', function()
 	end
 	function app:activated()
 		app:runafter(0.5, function()
-			app:windows()[3]:zorder'front'; assert(not app:windows()[3]:topmost())
-			app:windows()[5]:zorder'back' ; assert(not app:windows()[5]:topmost())
-			app:windows()[8]:zorder'front'; assert(app:windows()[8]:topmost())
-			app:windows()[10]:zorder'back'; assert(app:windows()[10]:topmost())
+			app:windows()[3]:raise(); assert(not app:windows()[3]:topmost())
+			app:windows()[5]:lower(); assert(not app:windows()[5]:topmost())
+			app:windows()[8]:raise(); assert(app:windows()[8]:topmost())
+			app:windows()[10]:lower(); assert(app:windows()[10]:topmost())
 		end)
 	end
 	app:run()

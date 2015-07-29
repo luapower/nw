@@ -5,6 +5,7 @@
 local ffi = require'ffi'
 local glue = require'glue'
 local box2d = require'box2d'
+local time = require'time'
 require'strict'
 
 local nw = {}
@@ -301,16 +302,6 @@ end
 
 function app:_backend_quitting()
 	self:quit()
-end
-
---time -----------------------------------------------------------------------
-
-function app:time()
-	return self.backend:time()
-end
-
-function app:timediff(start_time, end_time)
-	return self.backend:timediff(start_time, end_time or self:time())
 end
 
 --timers ---------------------------------------------------------------------
@@ -633,9 +624,15 @@ end
 
 --state/visibility -----------------------------------------------------------
 
-function window:visible()
+function window:visible(visible)
 	self:_check()
-	return self.backend:visible()
+	if visible == nil then
+		return self.backend:visible()
+	elseif visible then
+		self:show()
+	else
+		self:hide()
+	end
 end
 
 function window:show()
@@ -647,6 +644,14 @@ function window:hide()
 	self:_check()
 	if self:fullscreen() then return end --ignore because OSX can't do it
 	self.backend:hide()
+end
+
+function window:_backend_was_shown()
+	self:_event'was_shown'
+end
+
+function window:_backend_was_hidden()
+	self:_event'was_hidden'
 end
 
 --state/minimizing -----------------------------------------------------------
@@ -662,6 +667,14 @@ function window:minimize()
 	self.backend:minimize()
 end
 
+function window:_backend_was_minimized()
+	self:_event'was_minimized'
+end
+
+function window:_backend_was_unminimized()
+	self:_event'was_unminimized'
+end
+
 --state/maximizing -----------------------------------------------------------
 
 function window:maximized()
@@ -673,6 +686,14 @@ function window:maximize()
 	self:_check()
 	if self:fullscreen() then return end --ignore because OSX can't do it
 	self.backend:maximize()
+end
+
+function window:_backend_was_maximized()
+	self:_event'was_maximized'
+end
+
+function window:_backend_was_unmaximized()
+	self:_event'was_unmaximized'
 end
 
 --state/restoring ------------------------------------------------------------
@@ -705,6 +726,14 @@ function window:fullscreen(fullscreen)
 		if not self:fullscreen() then return end --ignore null transition
 		self.backend:exit_fullscreen()
 	end
+end
+
+function window:_backend_entered_fullscreen()
+	self:_event'entered_fullscreen'
+end
+
+function window:_backend_exited_fullscreen()
+	self:_event'exited_fullscreen'
 end
 
 --state/changed event --------------------------------------------------------
@@ -970,14 +999,16 @@ end
 
 window:_property'topmost'
 
-function window:zorder(zorder, relto)
+function window:raise(relto)
 	self:_check()
-	if relto then
-		relto:_check()
-	end
-	assert(zorder == 'front' or zorder == 'back',
-		'invalid zorder: "front" or "back" expected')
-	self.backend:set_zorder(zorder, relto)
+	if relto then relto:_check() end
+	self.backend:raise(relto)
+end
+
+function window:lower(relto)
+	self:_check()
+	if relto then relto:_check() end
+	slef.backend:lower(relto)
 end
 
 --titlebar -------------------------------------------------------------------
@@ -1163,14 +1194,14 @@ function window:_backend_mousedown(button, mx, my)
 	end
 
 	if t.count > 0
-		and self.app:timediff(t.time) < t.interval
+		and time.clock() - t.time < t.interval
 		and box2d.hit(mx, my, t.x, t.y, t.w, t.h)
 	then
 		t.count = t.count + 1
-		t.time = self.app:time()
+		t.time = time.clock()
 	else
 		t.count = 1
-		t.time = self.app:time()
+		t.time = time.clock()
 		t.interval = self.app.backend:double_click_time()
 		t.w, t.h = self.app.backend:double_click_target_area()
 		t.x = mx - t.w / 2

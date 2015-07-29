@@ -13,7 +13,6 @@ local _cbframe = objc.debug.cbframe
 objc.debug.cbframe = true --use cbframe for struct-by-val overrides.
 objc.load'Foundation'
 objc.load'AppKit'
-objc.load'System' --for mach_absolute_time
 objc.load'Carbon.HIToolbox' --for key codes
 objc.load'ApplicationServices.CoreGraphics'
 --objc.load'CoreGraphics' --for CGWindow*
@@ -113,22 +112,6 @@ function App:applicationShouldTerminate()
 	self.frontend:_backend_quitting() --calls quit() which calls stop().
 	--we never terminate the app, we just stop the loop instead.
 	return false
-end
-
---time -----------------------------------------------------------------------
-
-function app:time()
-	return objc.mach_absolute_time()
-end
-
-local tbf
-function app:timediff(start_time, end_time)
-	if not tbf then
-		local timebase = ffi.new'mach_timebase_info_data_t'
-		assert(objc.mach_timebase_info(timebase) == 0)
-		tbf = timebase.numer / timebase.denom / 10^6
-	end
-	return tonumber(end_time - start_time) * tbf
 end
 
 --timers ---------------------------------------------------------------------
@@ -287,6 +270,9 @@ function window:new(app, frontend, t)
 
 	--set visible state.
 	self._visible = false
+
+	--set minimized state
+	self._minimized = t.minimized
 
 	--set back references.
 	self.nswin.frontend = frontend
@@ -463,6 +449,7 @@ function window:show()
 	if self._visible then return end
 	if self._minimized then
 		--was minimized before hiding, minimize it back.
+		--TODO: does this activate the window? in Linux and Windows it does not.
 		self.nswin:miniaturize(nil)
 		--windowDidMiniaturize() is not called from hidden.
 		self:_did_minimize()
@@ -508,6 +495,7 @@ function window:minimize()
 	self.nswin:miniaturize(nil)
 	--windowDidMiniaturize() is not called from hidden.
 	if not self._visible then
+		self.frontend:_backend_was_shown()
 		self:_did_minimize()
 	end
 end
@@ -517,6 +505,7 @@ function window:_unminimize()
 	self.nswin:deminiaturize(nil)
 	--windowDidDeminiaturize() is not called from hidden.
 	if not self._visible then
+		self.frontend:_backend_was_shown()
 		self:_did_minimize()
 	end
 end
@@ -529,11 +518,13 @@ end
 
 --NOTE: windowDidMiniaturize() is not called if minimizing from hidden state.
 function Window:windowDidMiniaturize()
+	self.frontend:_backend_was_unminimized()
 	self.backend:_did_minimize()
 end
 
 --NOTE: windowDidDeminiaturize() is not called if restoring from hidden state.
 function Window:windowDidDeminiaturize()
+	self.frontend:_backend_was_minimized()
 	self.backend:_did_minimize()
 end
 
@@ -600,7 +591,7 @@ function window:_maximize_frame_manually()
 	self:_apply_constraints()
 end
 
---unmaximize the window frame manuall for when zoom() doesn't work.
+--unmaximize the window frame manually for when zoom() doesn't work.
 function window:_unmaximize_frame_manually()
 	self.nswin:setFrame_display(self._restore_frame, true)
 	self._restore_frame = nil
@@ -1148,17 +1139,15 @@ function window:get_topmost()
 end
 
 function window:set_topmost(topmost)
-	if topmost then
-		self.nswin:setLevel(objc.NSFloatingWindowLevel)
-	else
-		self.nswin:setLevel(objc.NSNormalWindowLevel)
-	end
+	self.nswin:setLevel(topmost and objc.NSFloatingWindowLevel or objc.NSNormalWindowLevel)
 end
 
-local modes = {front = objc.NSWindowAbove, back = objc.NSWindowBelow}
+function window:raise(relto)
+	self.nswin:orderWindow_relativeTo(objc.NSWindowAbove, relto and relto.backend.nswin or 0)
+end
 
-function window:set_zorder(zorder, relto)
-	self.nswin:orderWindow_relativeTo(modes[zorder], relto and relto.backend.nswin or 0)
+function window:lower(relto)
+	self.nswin:orderWindow_relativeTo(objc.NSWindowBelow, relto and relto.backend.nswin or 0)
 end
 
 --titlebar -------------------------------------------------------------------
