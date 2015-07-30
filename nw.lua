@@ -227,8 +227,36 @@ end
 
 --message loop ---------------------------------------------------------------
 
---start the main loop
-function app:run()
+local password = {} --distinguish yielding via app:sleep() from other yielding
+
+--sleep function that can be used inside the function passed to app:run().
+--unlike time.sleep(), it allows processing of events while waiting.
+function app:sleep(seconds) --no arg, true or false means sleep forever.
+	coroutine.yield(password, seconds or true)
+end
+
+--start the main loop and/or run a function asynchronously.
+function app:run(func)
+
+	--schedule to run a function asynchronously.
+	if func then
+		local proc = coroutine.wrap(function()
+			func()
+			coroutine.yield(password) --proc finished
+		end)
+		local function step()
+			local pwd, sleep_time = proc()
+			assert(pwd == password, 'yield in async proc')
+			if not sleep_time then --proc finished
+				self:stop()
+				return
+			end
+			if sleep_time == true then return end --sleep forever
+			self:runafter(sleep_time, step)
+		end
+		self:runafter(0, step)
+	end
+
 	if self._running then return end --ignore while running
 	self._running = true --run() barrier
 	self.backend:run()

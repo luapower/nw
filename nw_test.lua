@@ -8,7 +8,8 @@ local bit = require'bit'
 local box2d = require'box2d'
 local bitmap = require'bitmap'
 local pp = require'pp'
-local sleep = require'time'.sleep
+local time = require'time'
+local sleep = time.sleep
 
 --local objc = require'objc'
 --objc.debug.logtopics.refcount = true
@@ -263,6 +264,35 @@ add('timer-resume', function()
 	i = 1
 	app:run()
 	rec{1, 2, 3, 1, 2, 3}
+end)
+
+--app:sleep() works with an async func.
+add('timer-sleep', function()
+	local rec = recorder()
+	app:run(function()
+		for i=1,5 do
+			rec(i)
+			local t0 = time.clock()
+			local d = i/10 -- 0.1s -> 1s
+			app:sleep(d)
+			print(string.format('deviation: %d%%', (time.clock() - t0 - d) / d * 100))
+		end
+	end)
+	rec{1, 2, 3, 4, 5}
+end)
+
+add('timer-sleep-forever', function()
+	local rec = recorder()
+	app:runafter(0.2, function()
+		app:stop()
+		rec'stopped'
+	end)
+	app:run(function()
+		rec'forever'
+		app:sleep()
+		error'never here'
+	end)
+	rec{'forever', 'stopped'}
 end)
 
 --app running and stopping ---------------------------------------------------
@@ -809,7 +839,7 @@ add('app-hide', function()
 	rec{'hide', 'unhide'}
 end)
 
---window state ---------------------------------------------------------------
+--window states --------------------------------------------------------------
 
 --[[
 What you should know:
@@ -820,8 +850,8 @@ What you should know:
 	- f (fullscreen)
 - a window can be created with any combination of (v, m, M) but not f.
 - you can't change v, m or M from f (you can only exit fullscreen).
-- changing any of these flags must result in a single changed() event.
-- a single changed() event is preferrable for each single user action.
+- changing any of these flags must result in a single state-change event.
+- a single state-change event is preferrable for each single user action.
 - the ability to change the state programmatically complicates everything:
 	- state-changing methods can change one or more of the state flags at once
 	depending on the initial state and the method.
@@ -836,11 +866,132 @@ What you should know:
 	semantics to work around the arbitrary restrictions of our OSs. especially
 	hard is changing the maximized and fullscreen flags while minimized.
 	- state-changing methods must specify possible extra behavior:
-		- window activation and/or deactivation.
+		- window activation and/or deactivation or lack thereof.
 		- window moving and/or resizing.
 	- problem: state-changing methods are not always synchronous.
 	- problem: state-changing methods do not always succeed in changing the state.
+	- problem: waiting for an X11 window to reach a particular state can potentially
+	block the app forever.
 ]]
+
+local function state_string(win)
+	return
+		(win:visible() and 'v' or '')..
+		(win:minimized() and 'm' or '')..
+		(win:maximized() and 'M' or '')..
+		(win:fullscreen() and 'F' or '')
+end
+
+local function parse_initial_state_string(s)
+	local visible
+	if s:match'h' then visible = false elseif s:match'v' then visible = true end
+	return {
+		visible = s:match'v' and true or nil,
+		minimized = s:match'm' and true or nil,
+		maximized = s:match'M' and true or nil,
+		fullscreen = s:match'f' and true or nil,
+	}
+end
+
+--make a state-changing test from a test spec which has the form:
+--		{initial_state, actions, expected_state, actions, expected_state, ...}
+local function state_test(t)
+	return function()
+		app:run(function()
+
+			--parse initial state string
+			local initial_state
+			if type(t[1]) == 'string' then
+				initial_state = parse_initial_state_string(t[1])
+			else
+				initial_state = glue.update(parse_initial_state_string(t[1][1] or ''), t[1])
+			end
+
+			--create a window
+			local win = app:window(winpos(initial_state))
+
+			--wait for the window to be shown
+			if initial_state.visible == nil or initial_state.visible == true then
+				local t0 = time.clock()
+				while not win:visible() do
+					assert(time.clock() - t0 < 1, 'window not shown after 1s')
+					app:sleep(0.1)
+				end
+			end
+
+			--check initial state
+			assert(initial_state.visible ~= nil or win:visible())
+			assert(initial_state.visible ~= true or win:visible())
+			assert(initial_state.visible ~= false or not win:visible())
+			assert(not not initial_state.minimized == win:minimized())
+			assert(not not initial_state.maximized == win:maximized())
+			assert(not not initial_state.fullscreen == win:fullscreen())
+
+			--catch events
+			local events = {}
+			function win:event(event_name)
+				if event_name == 'changed' then return end
+				print('  EVENT: '..event_name)
+				events[#events+1] = event_name
+				events[event_name] = (events[event_name] or 0) + 1
+			end
+
+			--run the actions
+			for i=2,#t,2 do
+				local actions = t[i] --actions: 'action1 action2 ...'
+				local state = t[i+1] --state: '[vmMf] event1 event2...'
+				local expected_state = state:match'^[vmMf]+'
+				local expected_events = state:match'%s+(.*)' or ''
+				print(actions..' -> '..expected_state..' ('..expected_events..')')
+
+				--perform all the actions and record all synchronous events
+				events = {}
+				for action in glue.gsplit(actions, ' ') do
+					print('  ACTION: '..action)
+					win[action](win)
+				end
+
+				--poll the window until it reaches the expected state or a timeout expires.
+				local t0 = time.clock()
+				while state_string(win) ~= expected_state do
+					if time.clock() - t0 > 1 then break end --give up after a second.
+					app:sleep(0.1)
+				end
+
+				--wait a little more so that events announcing the state change can fire.
+				app:sleep(0.1)
+
+				--check that it did reach expected state.
+				if state_string(win) ~= expected_state then
+					error(state_string(win) .. ', expected ' .. expected_state .. ' after ' .. actions)
+				end
+
+				--check that all expected events were fired.
+				local i = 0
+				for event in glue.gsplit(expected_events, ' ') do
+					i = i + 1
+					if not events[event] then
+						error(table.concat(events, ' ') .. ', expected ' .. expected_events)
+					end
+					if events[event] > 1 then
+						error('multiple '..event)
+					end
+				end
+			end
+		end)
+	end
+end
+
+add('state-test', state_test{'',
+	'maximize', 'vM was_maximized',
+	'minimize', 'vmM was_minimized',
+	'restore', 'vM was_unminimized',
+})
+
+add('state-test3', state_test{'vM',
+	'minimize', 'vmM was_minimized',
+	'shownormal', 'v was_unmaximized was_unminimized',
+})
 
 --initial state --------------------------------------------------------------
 

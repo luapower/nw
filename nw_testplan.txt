@@ -138,59 +138,99 @@ STATE
 	* assert: visible
 	* check: visible
 	* assert: synchronous changed event
+	- event: was_shown
 - init: visible=false
 	* assert: not visible
 	* check: not visible
-- init: minimized
-	* assert: minimized -> normal
-	- check: minimized -> normal
 - init: maximized
 	- assert/check: maximized -> normal
-- init: fullscreen
-	- assert/check: fullscreen -> normal
+	- event: was_shown
+
+- init: minimized
+	- check: not activated
+	* assert: minimized -> normal
+	- check: minimized -> normal
 - init: minimized + maximized
+	- check: not activated
 	- assert: minimized, maximized
 	- assert/check: restore -> maximized -> normal
+
+- init: fullscreen
+	- assert/check: fullscreen -> normal
 - init: minimized + fullscreen
+	- check: not activated
 	- assert: minimized, fullscreen
 	- assert/check: restore -> fullscreen -> normal
 - init: maximized + fullscreen
 	- assert: maximized, fullscreen
 	- assert/check: restore -> maximized -> normal
 - init: minimized + maximized + fullscreen (?)
+	- check: not activated
 	- assert: minimized, maximized, fullscreen
 	- assert/check: restore -> fullscreen -> maximized -> normal
+
 - action: hide
-	- assert: ignored if hidden
+	- assert: hidden -> ignore
 	- assert: save minimized state
 	- assert: hide children
 	- assert: changed event
 - action: show
-	- assert: ignored if visible
-	- assert: restore minimized
+	- assert: visible -> ignore
+	- assert: minimized -> not minimized
 	- assert: show children
 	- assert: changed event
 	- assert: raise
 	- assert: activate
 - action: minimize
-	- assert: ignore if minimized
-	- assert: show if hidden
-	- assert:
+	- assert: minimized -> ignore
+	- assert: hidden -> visible
+	- assert: not activated
 - action: restore
 	- assert: ignore if normal visible
 	- assert: show if hidden
-	- assert: minimize if hidden minimized
-	- assert: show normal if visible minimized
+	- assert: hidden + minimized -> minimized + not activating
+	- assert: minimized -> normal
+	- assert: maximized -> normal
+	- assert: maximized + minimized -> maximized
+	- assert: fullscreen -> normal
+	- assert: maximized + fullscreen -> maximized
 - action: maximize
+	- assert: maximized -> ignore
+	- assert: hidden -> visible
+	- assert: minimized -> maximized
+- action: shownormal
+	- assert: hidden -> visible
+	- assert: maximized -> normal
+	- assert: minimized -> normal
+	- assert: minimized + maximized -> normal
+	- assert: fullscreen -> normal
+	- assert: maximized + fullscreen -> maximized
 - action: enter fullscreen
-	- assert:
+	- assert: normal -> fullscreen
+	- assert: maximized -> fullscreen
+	- assert: minimized -> fullscreen
+	- assert: minimized + maximized -> fullscreen
+	- event: entered_fullscreen
 - action: exit fullscreen
 	- assert:
-- action: shownormal
-	- assert: show if hidden
-	- assert: unmaximize if maximized
-	- assert: unminimize if minimized
-	- assert: exit fullscreen if fullscreen
+	- event: exited_fullscreen
+
+- event: was_minimized
+	- normal -> minimize
+	- maximized -> minimize
+	-
+- event: was_unminimized
+	- maximized, minimized -> restore
+- event: was_maximized
+	- normal -> maximize
+- event: was_unmaximized
+	- maximized -> restore
+- event: was_shown
+	- hidden -> show
+- event: was_hidden
+	- normal -> hidden
+- event: entered_fullscreen
+- event: exited_fullscreen
 
 TITLE
 ------------------------------------------------------------------------------
@@ -351,6 +391,6 @@ LOG
 26/07 - talk about what to remove (nothing); more tests
 27/07 - testing states (made transitions synchronous)
 28/07 - replaced sleep with select in loop; state-change events for Linux and Windows
-29/07 -
+29/07 - state transitions async test factory; app:run(func) + app:sleep(); errors in timers (windows)
 30/07
 31/07

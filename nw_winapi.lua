@@ -66,9 +66,7 @@ end
 
 function app:run()
 	self:_init_activate()
-	winapi.MessageLoop(function(msg)
-		--print(winapi.findname('WM_', msg.message))
-	end)
+	winapi.MessageLoop()
 end
 
 function app:stop()
@@ -77,21 +75,11 @@ end
 
 --timers ---------------------------------------------------------------------
 
-local timer_cb
-local timers = {}
+local appwin
 
 function app:runevery(seconds, func)
-	timer_cb = timer_cb or ffi.cast('TIMERPROC', function(hwnd, wm_timer, id, ellapsed_ms)
-		local id = tonumber(id)
-		local func = timers[id]
-		if not func then return end
-		if func() == false then
-			timers[id] = nil
-			winapi.KillTimer(nil, id)
-		end
-	end)
-	local id = tonumber(winapi.SetTimer(nil, 0, seconds * 1000, timer_cb))
-	timers[id] = func
+	appwin = appwin or winapi.Window{visible = false}
+	appwin:settimer(seconds, func)
 end
 
 --windows --------------------------------------------------------------------
@@ -332,13 +320,10 @@ function window:visible()
 end
 
 function window:show()
-	if self.minimized then
-		--show minimized without activating, to emulate Linux behavior.
-		--TODO: make the call asynchronous, to emulate Linux behavior?
-		self.win:minimize(true)
+	if self.win.minimized then
+		self:minimize() --show minimized without activating, to emulate Linux behavior
 	else
-		--TODO: make the call asynchronous to emulate Linux behavior?
-		self.win:show()
+		self.win:show(nil, true) --async call to emulate Linux behavior
 	end
 end
 
@@ -353,7 +338,7 @@ function window:minimized()
 end
 
 function window:minimize()
-	self.win:minimize()
+	self.win:minimize(true, true) --async call to emulate Linux behavior
 end
 
 --state/maximizing -----------------------------------------------------------
@@ -368,17 +353,17 @@ function window:maximized()
 end
 
 function window:maximize()
-	self.win:maximize()
+	self.win:maximize(nil, true) --async call to emulate Linux behavior
 end
 
 --state/restoring ------------------------------------------------------------
 
 function window:restore()
-	self.win:restore()
+	self.win:restore(nil, true) --async call to emulate Linux behavior
 end
 
 function window:shownormal()
-	self.win:shownormal()
+	self.win:shownormal(nil, true) --async call to emulate Linux behavior
 end
 
 --state/changed event --------------------------------------------------------

@@ -110,34 +110,24 @@ function app:_resolve_evprop_names()
 	end
 end
 
-function app:_poll()
-	while true do
-		local timeout = self:_pull_timers()
-		if self._stop then
-			break
-		end
-		local e = xlib.poll(timeout)
-		if not e then
-			break
-		end
-		--print(evstr(e))
-		local f = ev[tonumber(e.type)]
-		if f then f(e) end
-		return e
-	end
-end
-
-function app:_poll_until(func)
-	while not self._stop do
-		local e = self:_poll()
-		if e and func(e) then
-			break
-		end
-	end
+local function pull_event(timeout)
+	local e = xlib.poll(timeout)
+	if not e then return end
+	--print(evstr(e))
+	local f = ev[tonumber(e.type)]
+	if f then f(e) end --after this, e is invalid because f() can cause re-entering.
+	return true
 end
 
 function app:run()
-	self:_poll_until(function() end)
+	while not self._stop do
+		local timeout = self:_pull_timers()
+		if self._stop then --stop() called from timer
+			while pull_event() do end --empty the queue
+			break
+		end
+		pull_event(timeout)
+	end
 	self._stop = false
 end
 
@@ -500,17 +490,6 @@ end
 
 --state/visibility -----------------------------------------------------------
 
---wait until the window is mapped or minimized to emulate Windows behavior.
-function window:_wait_map(minimized)
-	if minimized then
-		xlib.poll_until(function(e) return self:_get_minimized_state() end)
-		--while not self:minimized() do time.sleep(0.01) end
-	else
-		xlib.poll_until(function(e) return e.type == C.MapNotify end)
-		--self.app:_poll_until(function(e) return e.type == C.MapNotify end)
-	end
-end
-
 function window:visible()
 	return self._visible
 end
@@ -533,9 +512,7 @@ function window:show()
 		xlib.set_wm_hints(self.win, {initial_state = C.IconicState})
 	end
 	xlib.map(self.win)
-	self:_wait_map(self._minimized)
 	self._visible = true
-	self.frontend:_backend_changed()
 
 	if not self._minimized then
 		--activate window to emulate Windows behavior.
@@ -549,17 +526,9 @@ function window:hide()
 	self._minimized = self:minimized()
 	self._maximized = self:maximized()
 	self._fullscreen = self:fullscreen()
-	--xlib.unmap(self.win)
 	xlib.withdraw(self.win)
-	if not self._minimized then
-		--wait until the window is unmapped to emulate Windows behavior.
-		xlib.poll_until(function(e) return e.type == C.UnmapNotify end)
-	else
-		--NOTE: no event is generated when unmapping a minimized window.
-	end
 
 	self._visible = false
-	self.frontend:_backend_changed()
 end
 
 function window:_mapped()
@@ -610,9 +579,6 @@ function window:minimize()
 		assert(self:minimized())
 	else
 		xlib.change_wm_state(self.win, C.IconicState)
-		--wait until the window is minimized to emulate Windows behavior.
-		while not self:minimized() do time.sleep(0.01) end
-		self.frontend:_backend_changed()
 	end
 end
 
@@ -666,17 +632,12 @@ function window:maximize()
 		self._minimized = false
 		self:show()
 		self:_set_maximized(true)
-		while not self:maximized() do time.sleep(0.01) end
-		assert(self:maximized())
 	elseif self:minimized() then
 		self:_set_maximized(true)
 		self:restore()
 		assert(self:maximized())
 	else
 		self:_set_maximized(true)
-		--wait until the window is maximized to emulate Windows behavior.
-		while not self:maximized() do time.sleep(0.01) end
-		self.frontend:_backend_changed()
 	end
 end
 
@@ -716,12 +677,8 @@ function window:restore()
 	if self._visible then
 		if self:minimized() then
 			xlib.map(self.win)
-			self:_wait_map()
-			self.frontend:_backend_changed()
 		elseif self:maximized() then
 			self:_set_maximized(false)
-			while self:maximized() do time.sleep(0.01) end
-			self.frontend:_backend_changed()
 		end
 	else
 		self:show()
@@ -740,14 +697,10 @@ function window:shownormal()
 			self:_set_maximized(false)
 		end
 		xlib.map(self.win)
-		while self:minimized() or self:maximized() do time.sleep(0.01) end
-		self.frontend:_backend_changed()
 		--activate window to emulate Windows behavior.
 		self:activate()
 	elseif self:maximized() then
 		self:_set_maximized(false)
-		while self:maximized() do time.sleep(0.01) end
-		self.frontend:_backend_changed()
 	end
 end
 
@@ -767,13 +720,11 @@ end
 function window:enter_fullscreen()
 	if self._visible then
 		xlib.change_net_wm_state(self.win, true, '_NET_WM_STATE_FULLSCREEN')
-		while not self:fullscreen() do time.sleep(0.01) end
 	else
 		self._fullscreen = true
 		self._minimized = false
 		self:show()
 		self:enter_fullscreen()
-		--while not self:fullscreen() do time.sleep(0.1) end
 	end
 end
 
