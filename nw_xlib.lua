@@ -343,12 +343,14 @@ function window:new(app, frontend, t)
 		t.maximizable and C.MWM_DECOR_MAXIMIZE or 0)
 	xlib.set_motif_wm_hints(self.win, hints)
 
+	--disambiguation flag for show/hide vs minimize/unminimize
+	self._hidden = true
+
 	--remembered window state while hidden
 	self._minimized = t.minimized or false
 	self._maximized = t.maximized or false
 	self._fullscreen = t.fullscreen or false
 	self._topmost = t.topmost or false
-	self._visible = false
 
 	winmap[self.win] = self
 
@@ -491,11 +493,12 @@ end
 --state/visibility -----------------------------------------------------------
 
 function window:visible()
-	return self._visible
+	local st = xlib.get_wm_state(self.win)
+	return st and st ~= C.WithdrawnState
 end
 
 function window:show()
-	if self._visible then return end
+	if self:visible() then return end
 
 	--set the _NET_WM_STATE property before mapping the window.
 	--later on we have to use change_net_wm_state() to change these values.
@@ -512,7 +515,6 @@ function window:show()
 		xlib.set_wm_hints(self.win, {initial_state = C.IconicState})
 	end
 	xlib.map(self.win)
-	self._visible = true
 
 	if not self._minimized then
 		--activate window to emulate Windows behavior.
@@ -521,29 +523,27 @@ function window:show()
 end
 
 function window:hide()
-	if not self._visible then return end
+	if not self:visible() then return end
 	--remember window state while hidden.
 	self._minimized = self:minimized()
 	self._maximized = self:maximized()
 	self._fullscreen = self:fullscreen()
+	self._hidden = true
 	xlib.withdraw(self.win)
-
-	self._visible = false
 end
 
 function window:_mapped()
-	if self._visible then return end
+	if not self._hidden then return end --unminimized, ignore
+	self._hidden = false
 	self.frontend:_backend_was_shown()
-	self._visible = true
 end
 
 function window:_unmapped()
-	if self._visible then return end --minimized, ignore
+	if not self._hidden then return end --minimized, ignore
 	self.frontend:_backend_was_hidden()
-	self._visible = false
 end
 
---NOTE: unminimizating means mapping
+--NOTE: unminimizing means mapping too
 ev[C.MapNotify] = function(e)
 	local e = e.xmap
 	local win = winmap[xid(e.window)]
@@ -551,7 +551,7 @@ ev[C.MapNotify] = function(e)
 	win:_mapped()
 end
 
---NOTE: minimizating means unmapping
+--NOTE: minimizing means unmapping too
 ev[C.UnmapNotify] = function(e)
 	local e = e.xunmap
 	local win = winmap[xid(e.window)]
@@ -566,14 +566,14 @@ function window:_get_minimized_state()
 end
 
 function window:minimized()
-	if not self._visible then
+	if not self:visible() then
 		return self._minimized
 	end
 	return self:_get_minimized_state()
 end
 
 function window:minimize()
-	if not self._visible then
+	if not self:visible() then
 		self._minimized = true
 		self:show()
 		assert(self:minimized())
@@ -614,7 +614,7 @@ function window:_get_maximized_state()
 end
 
 function window:maximized()
-	if not self._visible then
+	if not self:visible() then
 		return self._maximized
 	end
 	return self:_get_maximized_state()
@@ -627,7 +627,7 @@ function window:_set_maximized(onoff)
 end
 
 function window:maximize()
-	if not self._visible then
+	if not self:visible() then
 		self._maximized = true
 		self._minimized = false
 		self:show()
@@ -674,7 +674,7 @@ end
 --state/restoring ------------------------------------------------------------
 
 function window:restore()
-	if self._visible then
+	if self:visible() then
 		if self:minimized() then
 			xlib.map(self.win)
 		elseif self:maximized() then
@@ -686,7 +686,7 @@ function window:restore()
 end
 
 function window:shownormal()
-	if not self._visible then
+	if not self:visible() then
 		self._minimized = false
 		if self:maximized() then
 			self:_set_maximized(false)
@@ -711,14 +711,14 @@ function window:_get_fullscreen_state()
 end
 
 function window:fullscreen()
-	if not self._visible then
+	if not self:visible() then
 		return self._fullscreen
 	end
 	return self:_get_fullscreen_state()
 end
 
 function window:enter_fullscreen()
-	if self._visible then
+	if self:visible() then
 		xlib.change_net_wm_state(self.win, true, '_NET_WM_STATE_FULLSCREEN')
 	else
 		self._fullscreen = true

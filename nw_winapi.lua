@@ -156,6 +156,7 @@ function window:new(app, frontend, t)
 	--disambiguation flags for 'restore' event
 	self._was_minimized = t.minimized
 	self._was_maximized = t.maximized
+	self._was_visible = false
 
 	--init icon API
 	self:_init_icon_api()
@@ -328,7 +329,7 @@ function window:show()
 end
 
 function window:hide()
-	self.win:hide()
+	self.win:hide(true) --async call to emulate Linux behavior
 end
 
 --state/minimizing -----------------------------------------------------------
@@ -364,13 +365,6 @@ end
 
 function window:shownormal()
 	self.win:shownormal(nil, true) --async call to emulate Linux behavior
-end
-
---state/changed event --------------------------------------------------------
-
-function Window:on_pos_changed(winpos)
-	if not self.frontend then return end --not yet hooked
-	self.frontend:_backend_changed()
 end
 
 --state/fullscreen -----------------------------------------------------------
@@ -417,7 +411,6 @@ function window:enter_fullscreen()
 	self._norepaint = false
 	self.frontend:events(events)
 	self.frontend:_backend_resized()
-	self.frontend:_backend_changed()
 	self:invalidate()
 end
 
@@ -443,7 +436,6 @@ function window:exit_fullscreen()
 	self._norepaint = false
 	self.frontend:events(events)
 	self.frontend:_backend_resized()
-	self.frontend:_backend_changed()
 	self:invalidate()
 end
 
@@ -636,6 +628,15 @@ function Window:on_moved()
 	self.frontend:_backend_resized()
 end
 
+function Window:on_show(shown, how)
+	if how then return end --we're only interested in ShowWindow calls
+	if shown then
+		self.frontend:_backend_was_shown()
+	else
+		self.frontend:_backend_was_hidden()
+	end
+end
+
 function Window:on_resized(flag)
 
 	--early event, ignore.
@@ -693,6 +694,8 @@ function Window:on_resized(flag)
 		end
 
 	end
+
+
 end
 
 --positioning/magnets --------------------------------------------------------

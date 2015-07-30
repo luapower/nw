@@ -391,6 +391,6 @@ LOG
 26/07 - talk about what to remove (nothing); more tests
 27/07 - testing states (made transitions synchronous)
 28/07 - replaced sleep with select in loop; state-change events for Linux and Windows
-29/07 - state transitions async test factory; app:run(func) + app:sleep(); errors in timers (windows)
+29/07 - state transitions async test factory; app:run(func) + app:sleep(); errors in timers (windows); was_shown and was_hidden
 30/07
 31/07

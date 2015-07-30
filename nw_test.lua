@@ -1092,13 +1092,16 @@ add('state1-events-check', function()
 	function win:was_unmaximized() print'was_unmaximized' end
 	function win:was_shown() print'was_shown' end
 	function win:was_hidden() print'was_hidden' end
-	waitsee()
-	win:show()
-	print'shownormal in 5s'
-	app:runafter(5, function()
-		win:shownormal()
+	app:run(function()
+		app:sleep(0.1)
+		win:show()
+		app:sleep(0.1)
+		win:hide()
+		app:sleep(0.1)
+		win:show()
+		app:sleep(10)
+		app:stop()
 	end)
-	waitquit(20)
 end)
 
 add('state1-minimized-events-check', function()
