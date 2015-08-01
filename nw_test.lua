@@ -18,9 +18,7 @@ local app --global app object
 local seetime = 1
 local dotime = 5
 
---testing helpers ------------------------------------------------------------
-
---collecting and running tests
+--helpers / collecting and running tests -------------------------------------
 
 local tests = {} --{name = test} also {test1, ...} also {test = name}
 
@@ -47,7 +45,7 @@ local function run_all_matching(patt)
 	end
 end
 
---window position generators
+--helpers / window position generators ---------------------------------------
 
 local x = 100
 local y = 100
@@ -69,7 +67,7 @@ local function cascadepos(t)
 	return glue.update({x = x, y = y, w = 240, h = 190}, t)
 end
 
---event recorder/checker
+--helpers / event recorder/checker -------------------------------------------
 
 local function recorder()
 	local t = {n = 0}
@@ -92,38 +90,6 @@ local function recorder()
 			check(e)
 		else
 			record(e, ...)
-		end
-	end
-end
-
---add key bindings for window commands for interactive tests.
-
-local function make_interactive(win)
-	function win:keydown(key)
-		if key == 'S' then
-			self:show()
-		elseif key == 'H' then
-			self:hide()
-		elseif key == 'R' then
-			self:restore()
-		elseif key == 'F' then
-			self:fullscreen(true)
-		elseif key == 'G' then
-			self:fullscreen(false)
-		elseif key == 'M' then
-			self:maximize()
-		elseif key == 'N' then
-			self:minimize()
-		else
-			print[[
-S    show
-H    hide
-R    restore
-F    enter fullscreen
-G    exit fullscreen
-M    maximize
-N    minimize
-]]
 		end
 	end
 end
@@ -696,7 +662,7 @@ end)
 --instead, it flashes the window on the taskbar waiting for the user
 --to click on it (or alt-tab to it) and activate it.
 --this is an interactive test: you must activate another app to see it.
-add('activation-app-activate-flashing', function()
+add('check-activation-app-activate-flashing', function()
 	local win = app:window(winpos())
 	function win:activated() print'win-activated' end
 	function app:activated() print'app-activated' end
@@ -714,7 +680,7 @@ end)
 --app:activate() works, activating the app continuously.
 --this is an interactive test: you must activate another app to see it.
 --note: on OSX, the app is not activated immediately but on the next message loop.
-add('activation-app-activate', function()
+add('check-activation-app-activate', function()
 	function app:activated() print'app-activated' end
 	function app:deactivated() print'app-deactivated' end
 	local win = app:window(winpos())
@@ -731,7 +697,7 @@ end)
 --(there's no concept of an app outside the concept of windows), while
 --in OSX the app's main menu is activated.
 --this is an interactive test: you must activate another app to see it.
-add('activation-app-activate-no-windows', function()
+add('check-activation-app-activate-no-windows', function()
 	function app:activated() print'activated' end
 	function app:deactivated() print'deactivated' end
 	local win = app:window(winpos{visible = false})
@@ -745,7 +711,7 @@ end)
 --app:active() works (returns true only if the app is active).
 --app:active_window() works (always returns nil if the app is not active).
 --this is an interactive test: you must activate another app to see it.
-add('activation-app-active', function()
+add('check-activation-app-active', function()
 	local win = app:window(winpos())
 	app:runevery(0.1, function()
 		if app:active() then
@@ -760,7 +726,7 @@ end)
 
 --when the app is inactive, window:activate() is deferred to when the app becomes active.
 --this is an interactive test: you must activate win2 and then activate another app to see it.
-add('activation-window-activate-defer', function()
+add('check-activation-window-activate-defer', function()
 	local win1 = app:window(winpos()); win1.name = 'w1'
 	local win2 = app:window(winpos()); win2.name = 'w2'
 	function win1:activated() print'win1-activated' end
@@ -792,7 +758,7 @@ end)
 --window:activate() doesn't do anything for hidden windows.
 --when the window is finally shown, the app doesn't activate.
 --this is an interactive test: you must activate another app to see it.
-add('activation-window-activate-hidden', function()
+add('check-activation-window-activate-hidden', function()
 	local rec = recorder()
 	local win1 = app:window(winpos{visible = false})
 	local win2 = app:window(winpos{visible = false})
@@ -816,7 +782,7 @@ end)
 
 --activable flag works for child toolbox windows.
 --this is an interactive test: move the child window and it doesn't activate.
-add('activation-window-nonactivable', function()
+add('check-activation-window-nonactivable', function()
 	local win1 = app:window{x = 100, y = 100, w = 500, h = 200}
 	local win2 = app:window{x = 200, y = 130, w = 200, h = 300,
 		activable = false, frame = 'toolbox', parent = win1}
@@ -839,39 +805,46 @@ add('app-hide', function()
 	rec{'hide', 'unhide'}
 end)
 
---window states --------------------------------------------------------------
+--default initial properties -------------------------------------------------
+
+add('init-defaults', function()
+	local win = app:window(winpos{visible = false})
+	print_events(win)
+	assert(not win:visible())
+	assert(not win:minimized())
+	assert(not win:fullscreen())
+	assert(not win:maximized())
+	assert(win:title() == '')
+	assert(win:frame() == 'normal')
+	assert(not win:topmost())
+	assert(win:minimizable())
+	assert(win:maximizable())
+	assert(win:closeable())
+	assert(win:resizeable())
+	assert(win:fullscreenable())
+	assert(not win:autoquit())
+	assert(win:edgesnapping() == 'screen')
+	app:run(function() print'ok' end)
+end)
+
+--interactive tests ----------------------------------------------------------
 
 --[[
-What you should know:
+What you should know about window states:
 - there are four state flags making up the window state:
 	- v (visible)
 	- m (minimized)
 	- M (maximized)
 	- f (fullscreen)
 - a window can be created with any combination of (v, m, M) but not f.
-- you can't change v, m or M from f (you can only exit fullscreen).
-- changing any of these flags must result in a single state-change event.
-- a single state-change event is preferrable for each single user action.
-- the ability to change the state programmatically complicates everything:
-	- state-changing methods can change one or more of the state flags at once
-	depending on the initial state and the method.
-	- state-changing methods must have specified behavior for all possible
-	state transitions: state0 -> method -> state1.
-	- state-changing methods must specify if the change is guaranteed or not.
-	- state-changing methods must specify if the change is synchronous or not.
-	- state transitions must result in a well-specified chain of events.
-	- ideally, an orthogonal change_state(v, m, M, f) that can transition from
-	any state to any state would be preferred. however, orthogonality is
-	a rare diamond on our primitive planet, so we have to define more complex
-	semantics to work around the arbitrary restrictions of our OSs. especially
-	hard is changing the maximized and fullscreen flags while minimized.
-	- state-changing methods must specify possible extra behavior:
-		- window activation and/or deactivation or lack thereof.
-		- window moving and/or resizing.
-	- problem: state-changing methods are not always synchronous.
-	- problem: state-changing methods do not always succeed in changing the state.
-	- problem: waiting for an X11 window to reach a particular state can potentially
-	block the app forever.
+- you can't change v, m or M from f (you can only restore from fullscreen).
+- state-changing methods can change one or more of the state flags at once
+  depending on the initial state and the method.
+- state-changing methods change the state asynchronously.
+- state-changing methods do not always succeed in changing the state.
+- state changes trigger specific state-changing events, and can also trigger:
+	- window activation and/or deactivation.
+	- window moving and/or resizing.
 ]]
 
 local function state_string(win)
@@ -882,6 +855,246 @@ local function state_string(win)
 		(win:fullscreen() and 'F' or '')
 end
 
+local function init_check(t, child)
+	return function()
+
+		app:autoquit(true)
+
+		--make a control window that receive key presses when win gets hidden
+		local win1 = app:window(winpos{w = 200, h = 50})
+
+		if child then t.parent = win1 end
+		t.min_cw = 100
+		t.min_ch = 100
+
+		local win, help
+		local function create()
+			win = app:window(winpos(t))
+
+			function win1:keypress(key)
+				win:keypress(key)
+			end
+
+			local function print_state(s, ...)
+				if win:dead() then return end
+				print(s, state_string(win), ...)
+			end
+
+			function win:was_minimized()   print_state'was_minimized' end
+			function win:was_maximized()   print_state'was_maximized' end
+			function win:was_unminimized() print_state'was_unminimized' end
+			function win:was_unmaximized() print_state'was_unmaximized' end
+
+			function win:was_shown()       print_state'was_shown' end
+			function win:was_hidden()      print_state'was_hidden' end
+
+			function win:activated()       print_state'   activated' end
+			function win:deactivated()     print_state'   deactivated' end
+			function app:activated()       print_state'      app activated' end
+			function app:deactivated()     print_state'      app deactivated' end
+
+			function win:resizing(...)     print_state('      resizing', ...) end
+			function win:resized(...)      print_state('         resized', ...) end
+			function win:start_resize(...) print_state('   start_resize', ...) end
+			function win:end_resize(...)   print_state('   end_resize', ...) end
+
+			function win:closing()         print_state'closing' end
+			function win:closed()          print'closed' end
+
+			function app:quitting()        print_state'quitting' end
+
+			function app:window_created()  print'window_created' end
+			function app:window_closed()   print'window_closed' end
+
+			function app:was_unhidden()    print'app was_unhidden' end
+			function app:was_hidden()      print'app was_hidden' end
+
+			function app:displays_changed() print'displays_changed' end
+
+			help = [[
+
+	F1     help
+	H      hide
+	S      show
+	esc    restore
+	D      shownormal
+	F      toggle fullscreen
+	M      maximize
+	N      minimize
+	A      activate win1
+	B      activate win2
+	Z      zoom in
+	X      zoom out
+	num+   zoom in (normal rect)
+	num-   zoom out (normal rect)
+	arrows move
+	1      toggle enabled
+	2      toggle allow close
+	3      toggle autoquit
+	4      toggle minsize
+	5      toggle maxsize
+	<      lower rel. to win1
+	>      raise rel. to win1
+	[      lower
+	]      raise
+	T      set title
+	0      hide / unhide app
+	C      close / create
+	Q      quit
+	enter  print state
+]]
+			local allow_close = true
+
+			local function next_cursor()
+				return cursors[i]
+			end
+
+			function win:keypress(key)
+				if key == 'H' then
+					self:hide()
+				elseif key == 'S' then
+					self:show()
+				elseif key == 'D' then
+					self:shownormal()
+				elseif key == 'esc' then
+					self:restore()
+				elseif key == 'F' then
+					self:fullscreen(not self:fullscreen())
+				elseif key == 'G' then
+					self:fullscreen(false)
+				elseif key == 'M' then
+					self:maximize()
+				elseif key == 'N' then
+					self:minimize()
+				elseif key == 'A' then
+					self:activate()
+				elseif key == 'B' then
+					win1:activate()
+				elseif key == 'Z' then
+					local x, y, w, h = win:frame_rect()
+					win:frame_rect(x-10, y-10, w+20, h+20)
+				elseif key == 'X' then
+					local x, y, w, h = win:frame_rect()
+					win:frame_rect(x+10, y+10, w-20, h-20)
+				elseif key == 'left' or key == 'right' or key == 'up' or key == 'down' then
+					local x, y = win:frame_rect()
+					win:frame_rect(
+						x + (key == 'left' and -10 or key == 'right' and 10 or 0),
+						y + (key == 'up'   and -10 or key == 'down'  and 10 or 0))
+				elseif key == 'num+' then
+					local x, y, w, h = win:normal_rect()
+					win:normal_rect(x-10, y-10, w+20, h+20)
+				elseif key == 'num-' then
+					local x, y, w, h = win:normal_rect()
+					win:normal_rect(x+10, y+10, w-20, h-20)
+				elseif key == '1' then
+					win:enabled(not win:enabled())
+				elseif key == 'C' then
+					if self:dead() then
+						create()
+					else
+						self:close()
+					end
+				elseif key == '2' then
+					allow_close = not allow_close
+				elseif key == '3' then
+					win:autoquit(not win:autoquit())
+				elseif key == '0' then
+					app:hidden(not app:hidden())
+				elseif key == '4' then
+					if win:minsize() then
+						win:minsize(false)
+					else
+						win:minsize(200, 200)
+					end
+				elseif key == '5' then
+					if win:maxsize() then
+						win:maxsize(false)
+					else
+						win:maxsize(400, 400)
+					end
+				elseif key == ',' then
+					win:lower(win1)
+				elseif key == '.' then
+					win:raise(win1)
+				elseif key == '[' then
+					win:lower()
+				elseif key == ']' then
+					win:raise()
+				elseif key == 'T' then
+					win:title(win:title() .. '!')
+				elseif key == 'tab' then
+					win:cursor(next_cursor())
+				elseif key == 'Q' then
+					self.app:quit()
+				elseif key == 'F1' then
+					print(help)
+				elseif key == 'enter' then
+					win1.name = 'win1'
+					win.name = 'win'
+					print('state          ', state_string(win))
+					print('active         ', win:active())
+					print('active window  ', app:active_window() and app:active_window().name)
+					print('app active     ', app:active())
+					print('enabled        ', win:enabled())
+					print('frame_rect     ', win:frame_rect())
+					print('normal_rect    ', win:normal_rect())
+					print('client_rect    ', win:client_rect())
+					print('display        ', pp.format(win:display()))
+					print('display_count  ', app:display_count())
+					print('active_display ', pp.format(app:active_display()))
+				end
+			end
+
+			function win:repaint()
+				local bmp = win:bitmap()
+				ffi.fill(bmp.data, bmp.size, 0x80)
+			end
+			win:invalidate()
+
+			function win:closing()
+				return allow_close
+			end
+
+		end
+		create()
+		print(help)
+		app:run()
+	end
+end
+
+--init states
+add('check', init_check{})
+add('check-init-hidden', init_check{visible = false})
+add('check-init-minimized', init_check{visible = true, minimized = true})
+add('check-init-maximized', init_check{visible = true, maximized = true})
+add('check-init-minimized-maximized', init_check{visible = true, minimized = true, maximized = true})
+add('check-init-hidden-minimized', init_check{visible = false, minimized = true})
+add('check-init-hidden-maximized', init_check{visible = false, maximized = true})
+add('check-init-hidden-minimized-maximized', init_check{visible = false, minimized = true, maximized = true})
+add('check-init-disabled', init_check({enabled = false}))
+
+--restrictions
+add('check-non-minimizable', init_check{minimizable = false})
+add('check-non-maximizable', init_check{maximizable = false})
+add('check-non-closeable', init_check{closeable = false})
+add('check-non-resizeable', init_check{resizeable = false}) --implies non-maximizable
+add('check-non-activable', init_check({activable = false, frame = 'toolbox'}, true))
+--restriction combinations
+add('check-non-minimizable-non-maximizable', init_check{minimizable = false, maximizable = false})
+add('check-non-minimizable-non-maximizable-non-closeable', init_check{minimizable = false, maximizable = false})
+
+--other read-only properties
+add('check-topmost', init_check({topmost = true}))
+add('check-parent', init_check({}, true))
+add('check-parent-non-sticky', init_check({sticky = false}, true))
+add('check-frame=none', init_check({frame = 'none'}))
+add('check-frame=toolbox', init_check({frame = 'toolbox'}, true))
+add('check-frame=toolbox-non-activable', init_check({frame = 'toolbox', activable = false}, true))
+add('check-frame=none-transparent', init_check({frame = 'none', transparent = true}, true))
+
+--state automated tests ------------------------------------------------------
+
 local function parse_initial_state_string(s)
 	local visible
 	if s:match'h' then visible = false elseif s:match'v' then visible = true end
@@ -891,6 +1104,18 @@ local function parse_initial_state_string(s)
 		maximized = s:match'M' and true or nil,
 		fullscreen = s:match'f' and true or nil,
 	}
+end
+
+--wait for a predicate on a timeout.
+--uses app:sleep() instead of time.sleep() so that events can be recorded while waiting.
+local function waitfor(func, timeout)
+	timeout = timeout or 2 --2s is enough for all animations
+	local t0 = time.clock()
+	while not func() do
+		if time.clock() - t0 > timeout then return end --give up after timeout
+		app:sleep(0.1)
+	end
+	return true
 end
 
 --make a state-changing test from a test spec which has the form:
@@ -911,12 +1136,8 @@ local function state_test(t)
 			local win = app:window(winpos(initial_state))
 
 			--wait for the window to be shown
-			if initial_state.visible == nil or initial_state.visible == true then
-				local t0 = time.clock()
-				while not win:visible() do
-					assert(time.clock() - t0 < 1, 'window not shown after 1s')
-					app:sleep(0.1)
-				end
+			if initial_state.visible ~= false then
+				assert(waitfor(function() return win:visible() end), 'window not visible')
 			end
 
 			--check initial state
@@ -931,7 +1152,7 @@ local function state_test(t)
 			local events = {}
 			function win:event(event_name)
 				if event_name == 'changed' then return end
-				print('  EVENT: '..event_name)
+				print('   EVENT: '..event_name)
 				events[#events+1] = event_name
 				events[event_name] = (events[event_name] or 0) + 1
 			end
@@ -940,23 +1161,19 @@ local function state_test(t)
 			for i=2,#t,2 do
 				local actions = t[i] --actions: 'action1 action2 ...'
 				local state = t[i+1] --state: '[vmMf] event1 event2...'
-				local expected_state = state:match'^[vmMf]+'
+				local expected_state = state:match'^[vmMf]*'
 				local expected_events = state:match'%s+(.*)' or ''
-				print(actions..' -> '..expected_state..' ('..expected_events..')')
+				print(state_string(win)..' -> '..actions..' -> '..expected_state..' ('..expected_events..')')
 
 				--perform all the actions and record all synchronous events
 				events = {}
 				for action in glue.gsplit(actions, ' ') do
-					print('  ACTION: '..action)
+					print('   ACTION: '..action)
 					win[action](win)
 				end
 
 				--poll the window until it reaches the expected state or a timeout expires.
-				local t0 = time.clock()
-				while state_string(win) ~= expected_state do
-					if time.clock() - t0 > 1 then break end --give up after a second.
-					app:sleep(0.1)
-				end
+				waitfor(function() return state_string(win) == expected_state end)
 
 				--wait a little more so that events announcing the state change can fire.
 				app:sleep(0.1)
@@ -978,6 +1195,12 @@ local function state_test(t)
 					end
 				end
 			end
+
+			--close the window
+			win:close()
+
+			--wait for it to be closed
+			assert(waitfor(function() return win:dead() end), 'window not dead')
 		end)
 	end
 end
@@ -988,272 +1211,12 @@ add('state-test', state_test{'',
 	'restore', 'vM was_unminimized',
 })
 
-add('state-test3', state_test{'vM',
-	'minimize', 'vmM was_minimized',
-	'shownormal', 'v was_unmaximized was_unminimized',
-})
-
---initial state --------------------------------------------------------------
-
-add('init-defaults', function()
-	local win = app:window(winpos{visible = false})
-	assert(not win:visible())
-	assert(not win:minimized())
-	assert(not win:fullscreen())
-	assert(not win:maximized())
-	assert(win:title() == '')
-	assert(win:frame() == 'normal')
-	assert(not win:topmost())
-	assert(win:minimizable())
-	assert(win:maximizable())
-	assert(win:closeable())
-	assert(win:resizeable())
-	assert(win:fullscreenable())
-	assert(not win:autoquit())
-	assert(win:edgesnapping() == 'screen')
-end)
-
-local function waitsee()
-	print('waiting '..seetime)
-	sleep(seetime)
-end
-
-local function waitdo()
-	print('waiting '..dotime)
-	sleep(dotime)
-end
-
-local function waitquit(xtime)
-	print('waiting before quit '..xtime)
-	app:runafter(xtime, function()
-		app:quit()
-	end)
-	app:run()
-end
-
-local function waitseequit() waitquit(seetime) end
-local function waitdoquit() waitquit(dotime) end
-
-add('init-visible-check', function()
-	local win = app:window(winpos{visible = true})
-	waitseequit()
-end)
-
-add('init-hidden-check', function()
-	local win = app:window(winpos{visible = false})
-	waitsee()
-	win:show()
-	waitseequit()
-end)
-
-add('init-minimized-check', function()
-	local win = app:window(winpos{visible = true, minimized = true})
-	waitdoquit()
-end)
-
-add('init-maximized-check', function()
-	local win = app:window(winpos{visible = true, maximized = true})
-	waitdoquit()
-end)
-
-add('init-minimized-maximized-check', function()
-	local win = app:window(winpos{visible = true, minimized = true, maximized = true})
-	waitdoquit()
-end)
-
-add('init-hidden-minimized-check', function()
-	local win = app:window(winpos{visible = false, minimized = true})
-	waitsee()
-	win:show()
-	waitdoquit()
-end)
-
-add('init-hidden-maximized-check', function()
-	local win = app:window(winpos{visible = false, maximized = true})
-	waitsee()
-	win:show()
-	waitdoquit()
-end)
-
-add('init-hidden-minimized-maximized-check', function()
-	local win = app:window(winpos{visible = false, minimized = true, maximized = true})
-	waitsee()
-	win:show()
-	waitdoquit()
-end)
-
---state transitions ----------------------------------------------------------
-
-add('state1-events-check', function()
-	local win = app:window(winpos{visible = false})
-	function win:was_minimized() print'was_minimized' end
-	function win:was_maximized() print'was_maximized' end
-	function win:was_unminimized() print'was_unminimized' end
-	function win:was_unmaximized() print'was_unmaximized' end
-	function win:was_shown() print'was_shown' end
-	function win:was_hidden() print'was_hidden' end
-	app:run(function()
-		app:sleep(0.1)
-		win:show()
-		app:sleep(0.1)
-		win:hide()
-		app:sleep(0.1)
-		win:show()
-		app:sleep(10)
-		app:stop()
-	end)
-end)
-
-add('state1-minimized-events-check', function()
-	local win = app:window(winpos{minimized = true})
-	function win:event(...) print(...) end
-	waitquit(20)
-end)
-
-add('state1-restore-minimized', function()
-	local win = app:window(winpos{minimized = true})
-	app:runafter(0, function()
-		waitsee()
-		win:restore()
-		waitsee()
-		app:quit()
-	end)
-	app:run()
-end)
-
-add('state1-maximize-minimized', function()
-	local win = app:window(winpos{minimized = true})
-	app:runafter(0, function()
-		waitsee()
-		win:maximize()
-		waitsee()
-		app:quit()
-	end)
-	app:run()
-end)
-
-add('state1-maximize-hidden', function()
-	local win = app:window(winpos{visible = false})
-	app:runafter(0, function()
-		waitsee()
-		win:maximize()
-		waitsee()
-		app:quit()
-	end)
-	app:run()
-end)
-
-add('state1-maximize-minimized-hidden', function()
-	local win = app:window(winpos{visible = false, minimized = true})
-	app:runafter(0, function()
-		waitsee()
-		win:maximize()
-		waitsee()
-		app:quit()
-	end)
-	app:run()
-end)
-
-add('state1-minimize-hide-show', function()
-	local win = app:window(winpos{minimized = true})
-	app:runafter(0, function()
-		--waitsee()
-		--win:minimize()
-		waitsee()
-		win:hide()
-		waitsee()
-		waitsee()
-		win:show()
-		waitsee()
-		app:quit()
-	end)
-	app:run()
-end)
-
---window visibility ----------------------------------------------------------
-
---no changed event is triggered
-add('visible-init-hidden-changed', function()
-	local rec = recorder()
-	function app:window_created(win)
-		rec'created'
-		function win:changed()
-			assert(false)
-		end
-	end
-	local win = app:window(winpos{visible = false})
-	win.changed = nil
-	rec{'created'}
-end)
-
---changed event is triggered synchronously
-add('visible-init-visible-changed', function()
-	local rec = recorder()
-	function app:window_created(win)
-		rec'created'
-		function win:changed()
-			rec(self:visible() and 'shown')
-		end
-	end
-	local win = app:window(winpos{visible = true})
-	rec{'created', 'shown'}
-	--TODO: Windows sends changed() event when the window is destroyed,
-	--but Linux and OSX don't.
-end)
-
---window minimization --------------------------------------------------------
-
-add('minimized-init-default', function()
-	local win = app:window(winpos())
-	assert(not win:minimized())
-end)
-
-add('minimized-init-check', function()
-	local win = app:window(winpos{minimized = true})
-	app:run()
-end)
-
-add('minimized-init-restore', function()
-	local win = app:window(winpos{minimized = true})
-	assert(win:minimized())
-	win:restore()
-	assert(not win:minimized())
-end)
-
-add('minimized-init-restore-check', function()
-	local win = app:window(winpos{minimized = true})
-	app:runafter(1, function()
-		win:restore()
-	end)
-	app:run()
-end)
-
---window maximization --------------------------------------------------------
-
-add('maximized-init-default', function()
-	local win = app:window(winpos())
-	assert(not win:maximized())
-end)
-
-add('maximized-init-check', function()
-	local win = app:window(winpos{maximized = true})
-	app:run()
-end)
-
-add('maximized-init-restore', function()
-	local win = app:window(winpos{maximized = true})
-	assert(win:maximized())
-	win:restore()
-	assert(not win:maximized())
-end)
-
-add('maximized-init-restore-check', function()
-	local win = app:window(winpos{maximized = true})
-	app:runafter(1, function()
-		win:restore()
-	end)
-	app:run()
-end)
+add('state-show', state_test{'h', 'show', 'v was_shown'})
+add('state-show', state_test{'v', 'hide', ' was_hidden'})
+add('state-maximize', state_test{'v', 'maximize', 'vM was_maximized'})
+add('state-minimize', state_test{'v', 'minimize', 'vm was_minimized'})
+add('state-restore', state_test{'v', 'restore', 'v'})
+add('state-shownormal', state_test{'v', 'shownormal', 'v'})
 
 --window states --------------------------------------------------------------
 
@@ -1472,7 +1435,7 @@ end
 --state/enabled --------------------------------------------------------------
 
 --interactive test showing modal operation based on `enabled` and `parent` properties.
-add('enabled', function()
+add('check-enabled', function()
 	local win1 = app:window(winpos{x = 100, y = 100, w = 500, h = 300, enabled = false})
 	local win2 = app:window(winpos{x = 200, y = 150, w = 300, h = 200, parent = win1,
 		minimizable = false, maximizable = false, resizeable = false})
@@ -1837,7 +1800,7 @@ add('pos-set-event', function()
 end)
 
 --interactive test showing resizing events.
-add('pos-events', function()
+add('check-pos-events', function()
 	local win = app:window(winpos())
 	function win:mousemove(x, y)
 		--print('mousemove', x, y)
@@ -1931,7 +1894,7 @@ add('pos-frame-to-client', function()
 end)
 
 --edge snapping. interactive test: move and resize windows around.
-add('pos-snap', function()
+add('check-pos-snap', function()
 	app:window(winpos{w = 300, title = 'no snap', edgesnapping = false})
 	app:window(winpos{w = 300, title = 'snap to: default'})
 	app:window(winpos{w = 300, title = 'snap to: screen', edgesnapping = 'screen'})
@@ -1946,7 +1909,7 @@ end)
 
 --children are sticky: they follow parent on move (but not on resize, maximize, etc).
 --interactive test: move the parent to see child moving too.
-add('pos-children', function()
+add('check-pos-children', function()
 	local win1 = app:window{x = 100, y = 100, w = 500, h = 200}
 	local win2 = app:window{x = 200, y = 130, w = 200, h = 300, parent = win1}
 	app:run()
@@ -1965,7 +1928,7 @@ end)
 --z-order --------------------------------------------------------------------
 
 --interactive test showing topmost.
-add('topmost', function()
+add('check-topmost', function()
 	local win = app:window(winpos{title = 'top1', x = 100, y = 100, topmost = true, autoquit = true})
 	assert(win:topmost())
 	win:topmost(false)

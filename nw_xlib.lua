@@ -308,8 +308,8 @@ function window:new(app, frontend, t)
 	--declare the X protocols that the window supports.
 	xlib.set_atom_map_prop(self.win, 'WM_PROTOCOLS', {
 		WM_DELETE_WINDOW = true, --don't close the connection when a window is closed
-		WM_TAKE_FOCUS = true,    --allow focusing the window programatically
-		_NET_WM_PING = true,     --respond to ping events
+		WM_TAKE_FOCUS = t.activable or nil, --allow focusing the window programatically
+		_NET_WM_PING = true, --respond to ping events
 	})
 
 	--set info for _NET_WM_PING to allow the user to kill a non-responsive process.
@@ -320,7 +320,7 @@ function window:new(app, frontend, t)
 	end
 
 	if t.parent then
-		xlib.set_transient_for(t.parent.backend.win)
+		xlib.set_transient_for(self.win, t.parent.backend.win)
 	end
 
 	--set motif hints before mapping the window.
@@ -342,6 +342,10 @@ function window:new(app, frontend, t)
 		t.minimizable and C.MWM_DECOR_MINIMIZE or 0,
 		t.maximizable and C.MWM_DECOR_MAXIMIZE or 0)
 	xlib.set_motif_wm_hints(self.win, hints)
+
+	--activable state for setting later via set_wm_hints().
+	--TODO: this doesn't actually work!
+	self._activable = t.activable
 
 	--disambiguation flag for show/hide vs minimize/unminimize
 	self._hidden = true
@@ -432,6 +436,7 @@ ev[C.FocusIn] = function(e)
 	self.frontend:_backend_activated()
 end
 
+--NOTE: set after UnmapNotify when hiding.
 ev[C.FocusOut] = function(e)
 	local e = e.xfocus
 	local self = winmap[xid(e.window)]
@@ -511,25 +516,39 @@ function window:show()
 
 	--set WM_HINTS property before mapping the window.
 	--later on we have to use change_wm_state() to minimize the window.
-	if self._minimized then
-		xlib.set_wm_hints(self.win, {initial_state = C.IconicState})
+	if self._minimized or not self._activable then
+		xlib.set_wm_hints(self.win, {
+			initial_state = self._minimized and C.IconicState or nil,
+			input = not self._activable and 0 or nil, --TODO: doesn't actually work!
+		})
 	end
+
 	xlib.map(self.win)
 
 	if not self._minimized then
 		--activate window to emulate Windows behavior.
 		self:activate()
+	else
+		--if minimized, MapNotify is not sent, but PropertyNotify/WM_STATE is.
+		self._wm_state_cmd = self._minimized and 'map'
 	end
 end
 
 function window:hide()
 	if not self:visible() then return end
+
 	--remember window state while hidden.
 	self._minimized = self:minimized()
 	self._maximized = self:maximized()
 	self._fullscreen = self:fullscreen()
 	self._hidden = true
+
 	xlib.withdraw(self.win)
+
+	if self._minimized then
+		--if minimized, UnmapNotify is not sent, but PropertyNotify/WM_STATE is.
+		self._wm_state_cmd = self._minimized and 'unmap'
+	end
 end
 
 function window:_mapped()
@@ -543,7 +562,7 @@ function window:_unmapped()
 	self.frontend:_backend_was_hidden()
 end
 
---NOTE: unminimizing means mapping too
+--NOTE: unminimizing triggers this too.
 ev[C.MapNotify] = function(e)
 	local e = e.xmap
 	local win = winmap[xid(e.window)]
@@ -551,7 +570,7 @@ ev[C.MapNotify] = function(e)
 	win:_mapped()
 end
 
---NOTE: minimizing means unmapping too
+--NOTE: minimizing triggers this too.
 ev[C.UnmapNotify] = function(e)
 	local e = e.xunmap
 	local win = winmap[xid(e.window)]
@@ -583,6 +602,18 @@ function window:minimize()
 end
 
 function window:_wm_state_changed()
+	if self._hidden then
+		local cmd = self._wm_state_cmd
+		self._wm_state_cmd = nil
+		if cmd then
+			if cmd == 'map' then
+				self:_mapped()
+			else
+				self:_unmapped()
+			end
+		end
+		return
+	end
 	local min = self:_get_minimized_state()
 	if min ~= self._minimized then
 		if min then
@@ -677,6 +708,8 @@ function window:restore()
 	if self:visible() then
 		if self:minimized() then
 			xlib.map(self.win)
+			--activate window to emulate Windows behavior.
+			self:activate()
 		elseif self:maximized() then
 			self:_set_maximized(false)
 		end
@@ -839,7 +872,9 @@ end
 
 function window:set_frame_rect(x, y, w, h)
 	local cx, cy, cw, ch = unframe_rect(x, y, w, h, self:_frame_extents())
-	xlib.config(self.win, {x = x, y = y, width = w, height = h, border_width = 0})
+	cw = math.max(cw, 1)
+	ch = math.max(ch, 1)
+	xlib.config(self.win, {x = x, y = y, width = cw, height = ch, border_width = 0})
 end
 
 function window:get_size()
@@ -877,6 +912,8 @@ function window:_apply_constraints()
 
 	--resize the window if dimensions changed
 	if cw ~= cw0 or ch ~= ch0 then
+		cw = math.max(cw, 1)
+		ch = math.max(ch, 1)
 		xlib.config(self.win, {width = cw, height = ch, border_width = 0})
 	end
 end
@@ -987,6 +1024,96 @@ end
 
 --keyboard -------------------------------------------------------------------
 
+local keynames = {
+	[C.XK_semicolon]    = ';',  --on US keyboards
+	[C.XK_equal]        = '=',
+	[C.XK_comma]        = ',',
+	[C.XK_minus]        = '-',
+	[C.XK_period]       = '.',
+	[C.XK_slash]        = '/',
+	[C.XK_quoteleft]    = '`',
+	[C.XK_bracketleft]  = '[',
+	[C.XK_backslash]    = '\\',
+	[C.XK_bracketright] = ']',
+	[C.XK_apostrophe]   = '\'',
+
+	[C.XK_BackSpace] = 'backspace',
+	[C.XK_Tab]       = 'tab',
+	[C.XK_space]     = 'space',
+	[C.XK_Escape]    = 'esc',
+	[C.XK_Return]    = 'enter!',
+
+	[C.XK_F1]  = 'F1',
+	[C.XK_F2]  = 'F2',
+	[C.XK_F3]  = 'F3',
+	[C.XK_F4]  = 'F4',
+	[C.XK_F5]  = 'F5',
+	[C.XK_F6]  = 'F6',
+	[C.XK_F7]  = 'F7',
+	[C.XK_F8]  = 'F8',
+	[C.XK_F9]  = 'F9',
+	[C.XK_F10] = 'F10',
+	[C.XK_F11] = 'F11',
+	[C.XK_F12] = 'F12',
+
+	[C.XK_Caps_Lock]   = 'capslock',
+
+	[C.XK_Print]       = 'printscreen', --taken (take screenshot); shift+printscreen works
+	[C.XK_Scroll_Lock] = 'scrolllock',
+	[C.XK_Pause]       = 'break',
+
+	[C.XK_Left]        = 'left!',
+	[C.XK_Up]          = 'up!',
+	[C.XK_Right]       = 'right!',
+	[C.XK_Down]        = 'down!',
+
+	[C.XK_Prior]       = 'pageup!',
+	[C.XK_Next]        = 'pagedown!',
+	[C.XK_Home]        = 'home!',
+	[C.XK_End]         = 'end!',
+	[C.XK_Insert]      = 'insert!',
+	[C.XK_Delete]      = 'delete!',
+
+	[C.XK_Num_Lock]    = 'numlock',
+	[C.XK_KP_Divide]   = 'num/',
+	[C.XK_KP_Multiply] = 'num*',
+	[C.XK_KP_Subtract] = 'num-',
+	[C.XK_KP_Add]      = 'num+',
+	[C.XK_KP_Enter]    = 'numenter',
+	[C.XK_KP_Delete]   = 'numdelete',
+	[C.XK_KP_End]      = 'numend',
+	[C.XK_KP_Down]     = 'numdown',
+	[C.XK_KP_Next]     = 'numpagedown',
+	[C.XK_KP_Left]     = 'numleft',
+	[C.XK_KP_Begin]    = 'num5',
+	[C.XK_KP_Right]    = 'numright',
+	[C.XK_KP_Home]     = 'numhome',
+	[C.XK_KP_Up]       = 'numup',
+	[C.XK_KP_Prior]    = 'numpageup',
+	[C.XK_KP_Insert]   = 'numinsert',
+
+	[C.XK_Control_L]   = 'lctrl',
+	[C.XK_Control_R]   = 'rctrl',
+	[C.XK_Shift_L]     = 'lshift',
+	[C.XK_Shift_R]     = 'rshift',
+	[C.XK_Alt_L]       = 'lalt',
+	[C.XK_Alt_R]       = 'ralt',
+
+	[C.XK_Super_L]     = 'lwin',
+	[C.XK_Super_R]     = 'rwin',
+	[C.XK_Menu]        = 'menu',
+}
+
+local function keyname(c, keycode)
+	local sym = C.XKeycodeToKeysym(c, keycode, 0)
+	if sym >= C.XK_a and sym <= C.XK_z then
+		return string.char(('A'):byte() + sym - C.XK_a)
+	elseif sym >= C.XK_0 and sym <= C.XK_9 then
+		return string.char(('0'):byte() + sym - C.XK_0)
+	end
+	return keynames[sym] or sym
+end
+
 ev[C.KeyPress] = function(e)
 	local e = e.xkey
 	local self = winmap[xid(e.window)]
@@ -996,7 +1123,7 @@ ev[C.KeyPress] = function(e)
 		self._keypressed = false
 		return
 	end
-	local key = e.keycode
+	local key = keyname(xlib.display, e.keycode)
 	--print('sequence: ', e.sequence)
 	--print('state:    ', e.state)
 	self.frontend:_backend_keydown(key)

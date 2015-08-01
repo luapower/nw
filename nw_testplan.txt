@@ -9,9 +9,7 @@ init | action | change | get | query | event | flag || assert | check
 
 TO-REMOVE
 ------------------------------------------------------------------------------
-- init: activable (not working on linux)
 - init: transparent (not working on windows / remote desktop)
-- init/change: alpha (not working on linux)
 
 INIT/PLATFORM VERSION
 ------------------------------------------------------------------------------
@@ -56,6 +54,8 @@ RESTRICTIONS
 	- check: no fullscreen button/command/shortcut
 - init: closeable
 	- check: no close button/command/shortcut
+- init: activable
+	- implement
 
 TOPMOST
 ------------------------------------------------------------------------------

@@ -289,7 +289,7 @@ end
 function app:_canquit()
 	self._quitting = true --quit() barrier
 
-	local allow = self:_query'quitting'
+	local allow = self:_query'quitting' ~= false
 
 	for i,win in ipairs(self:windows()) do
 		if not win:dead() and not win:parent() then
@@ -404,20 +404,22 @@ local defaults = {
 	activable = true, --only for 'toolbox' frames
 	autoquit = false, --quit the app on closing
 	edgesnapping = 'screen',
+	sticky = false, --only for child windows
+}
+
+local defaults_toplevel = {}
+local defaults_child = {
+	minimizable = false,
+	maximizable = false,
+	fullscreenable = false,
+	edgesnapping = 'parent siblings screen',
+	sticky = true,
 }
 
 local frame_defaults = {}
 frame_defaults.normal = {}
 frame_defaults.none = {}
-frame_defaults.toolbox = {
-	minimizable = false,
-	maximizable = false,
-	fullscreenable = false,
-	edgesnapping = 'parent siblings screen',
-}
-
-local defaults_toplevel = {}
-local defaults_child = frame_defaults.toolbox
+frame_defaults.toolbox = defaults_child
 
 function app:window(t)
 	return window:_new(self, self.backend.window, t)
@@ -448,6 +450,10 @@ function window:_new(app, backend_class, useropt)
 		--child windows can't be maximizable or fullscreenable (X11 limitation).
 		assert(not opt.maximizable,    'child windows cannot be maximizable')
 		assert(not opt.fullscreenable, 'child windows cannot be fullscreenable')
+	end
+
+	if opt.sticky then
+		assert(opt.parent, 'sticky windows must have a parent')
 	end
 
 	--top-level toolboxes don't make sense because they don't show in taskbar
@@ -513,6 +519,7 @@ function window:_new(app, backend_class, useropt)
 	self._fullscreenable = opt.fullscreenable
 	self._activable = opt.activable
 	self._autoquit = opt.autoquit
+	self._sticky = opt.sticky
 	self:edgesnapping(opt.edgesnapping)
 
 	self.app:_window_created(self)
@@ -533,7 +540,7 @@ function window:_canclose()
 
 	self._closing = true --_backend_closing() and _canclose() barrier
 
-	local allow = self:_query'closing'
+	local allow = self:_query'closing' ~= false
 
 	--children must agree too
 	for i,win in ipairs(self:children()) do
@@ -627,9 +634,15 @@ end
 
 --state/app visibility (OSX only) --------------------------------------------
 
-function app:hidden()
+function app:hidden(hidden)
 	if not self.nw:os'OSX' then return false end
-	return self.backend:hidden()
+	if hidden == nil then
+		return self.backend:hidden()
+	elseif hidden then
+		self:hide()
+	else
+		self:unhide()
+	end
 end
 
 function app:unhide()
@@ -643,11 +656,11 @@ function app:hide()
 end
 
 function app:_backend_did_unhide()
-	self:_event'did_unhide'
+	self:_event'was_unhidden'
 end
 
 function app:_backend_did_hide()
-	self:_event'did_hide'
+	self:_event'was_hidden'
 end
 
 --state/visibility -----------------------------------------------------------
@@ -764,13 +777,7 @@ function window:_backend_exited_fullscreen()
 	self:_event'exited_fullscreen'
 end
 
---state/changed event --------------------------------------------------------
-
-function window:_backend_changed()
-	self:_event'changed'
-end
-
---state/synthesis ------------------------------------------------------------
+--current state --------------------------------------------------------------
 
 function window:state()
 	return
@@ -888,27 +895,27 @@ end
 
 --positioning/constraints ----------------------------------------------------
 
-function window:minsize(w, h)
-	if not w and not h then
+function window:minsize(w, h) --pass false to disable
+	if w == nil and h == nil then
 		return self.backend:get_minsize()
 	else
 		--clamp to maxsize to avoid undefined behavior in the backend
 		local maxw, maxh = self:maxsize()
 		if w and maxw then w = math.min(w, maxw) end
 		if h and maxh then h = math.min(h, maxh) end
-		self.backend:set_minsize(w, h)
+		self.backend:set_minsize(w or nil, h or nil)
 	end
 end
 
-function window:maxsize(w, h)
-	if not w and not h then
+function window:maxsize(w, h) --pass false to disable
+	if w == nil and h == nil then
 		return self.backend:get_maxsize()
 	else
 		--clamp to minsize to avoid undefined behavior in the backend
 		local minw, minh = self:minsize()
 		if w and minw then w = math.max(w, minw) end
 		if h and minh then h = math.max(h, minh) end
-		self.backend:set_maxsize(w, h)
+		self.backend:set_maxsize(w or nil, h or nil)
 	end
 end
 
@@ -1036,7 +1043,7 @@ end
 function window:lower(relto)
 	self:_check()
 	if relto then relto:_check() end
-	slef.backend:lower(relto)
+	self.backend:lower(relto)
 end
 
 --titlebar -------------------------------------------------------------------
@@ -1056,7 +1063,7 @@ function display:rect()
 end
 
 function display:client_rect()
-	return self.client_x, self.client_y, self.client_w, self.client_h
+	return self.cx, self.cy, self.cw, self.ch
 end
 
 function app:displays()
@@ -1106,6 +1113,7 @@ function window:closeable() self:_check(); return self._closeable end
 function window:resizeable() self:_check(); return self._resizeable end
 function window:fullscreenable() self:_check(); return self._fullscreenable end
 function window:activable() self:_check(); return self._activable end
+function window:sticky() self:_check(); return self._sticky end
 
 function window:autoquit(autoquit)
 	self:_check()

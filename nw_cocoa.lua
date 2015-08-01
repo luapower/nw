@@ -140,8 +140,6 @@ local nswin_map = {} --nswin->window
 
 local Window = objc.class('Window', 'NSWindow <NSWindowDelegate, NSDraggingDestination>')
 
---NOTE: windows are created hidden.
-
 local cascadePoint
 
 function window:new(app, frontend, t)
@@ -168,7 +166,7 @@ function window:new(app, frontend, t)
 	local frame_rect = objc.NSMakeRect(flip_screen_rect(nil, t.x or 0, t.y or 0, t.w, t.h))
 	local content_rect = objc.NSWindow:contentRectForFrameRect_styleMask(frame_rect, style)
 
-	--create window.
+	--create window (windows are created hidden).
 	self.nswin = Window:alloc():initWithContentRect_styleMask_backing_defer(
 							content_rect, style, objc.NSBackingStoreBuffered, false)
 
@@ -463,8 +461,8 @@ function window:show()
 end
 
 --NOTE: orderOut() is ignored on a minimized window (known bug from 2008).
---NOTE: orderOut() is buggy: don't use it before starting the message loop.
---You'll get a window that is not hidden but doesn't respond to mouse events.
+--NOTE: orderOut() is buggy: calling it before starting the message loop
+--results in a window that is not hidden and doesn't respond to mouse events.
 function window:hide()
 	if not self._visible then return end
 	self._minimized = self.nswin:isMiniaturized()
@@ -475,7 +473,7 @@ end
 function window:_hidden()
 	self._hiding = nil
 	self._visible = false
-	self.frontend:_backend_changed()
+	self.frontend:_backend_was_hidden()
 end
 
 --state/minimizing -----------------------------------------------------------
@@ -484,14 +482,14 @@ end
 function window:minimized()
 	if self._minimized ~= nil then
 		return self._minimized
-	else
-		return self.nswin:isMiniaturized()
 	end
+	return self.nswin:isMiniaturized()
 end
 
 --NOTE: miniaturize() in fullscreen mode is ignored.
 --NOTE: miniaturize() shows the window if hidden.
 function window:minimize()
+	--TODO: does this activate the window? in Linux and Windows it does not.
 	self.nswin:miniaturize(nil)
 	--windowDidMiniaturize() is not called from hidden.
 	if not self._visible then
@@ -1167,7 +1165,7 @@ end
 function app:_display(main_h, screen)
 	local t = {}
 	t.x, t.y, t.w, t.h = flip_screen_rect(main_h, unpack_nsrect(screen:frame()))
-	t.client_x, t.client_y, t.client_w, t.client_h =
+	t.cx, t.cy, t.cw, t.ch =
 		flip_screen_rect(main_h, unpack_nsrect(screen:visibleFrame()))
 	return self.frontend:_display(t)
 end
@@ -1395,6 +1393,7 @@ local keynames = {
 
 	[110] = 'menu', --win keyboard
 
+	--TODO: sort these out
 	[objc.kVK_F13] = 'F11', --taken (show desktop)
 	[objc.kVK_F14] = 'F12', --taken (show the wachamacalit wall with the calendar and clock)
 	[objc.kVK_F13] = 'F13', --mac keyboard; win keyboard 'printscreen' key

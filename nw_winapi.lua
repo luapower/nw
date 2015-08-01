@@ -96,6 +96,7 @@ function window:new(app, frontend, t)
 
 	local framed = t.frame == 'normal' or t.frame == 'toolbox'
 	self._layered = t.transparent
+	self._sticky = t.sticky
 
 	self.win = Window{
 		--state
@@ -224,7 +225,6 @@ function app:_init_activate()
 end
 
 function app:_activated()
-
 	if not self._started then
 		--defer app activation if the app is not started, to emulate OSX behavior.
 		self._activate = true
@@ -322,7 +322,10 @@ end
 
 function window:show()
 	if self.win.minimized then
-		self:minimize() --show minimized without activating, to emulate Linux behavior
+		--show minimized without activating to emulate Linux behavior.
+		--self.win:show() also shows the window in minimized state, but it
+		--selects the window on the taskbar (it activates it).
+		self:minimize()
 	else
 		self.win:show(nil, true) --async call to emulate Linux behavior
 	end
@@ -602,14 +605,16 @@ function Window:nw_frame_changing(how, rect)
 			winapi.SetWindowPos(self.hwnd, nil, x, y, w, h, 0)
 		end
 
-		--move children too, to emulate OSX behavior.
-		local x, y = rect.x, rect.y
-		local x0, y0 = self.backend:get_frame_rect()
-		local dx = x - x0
-		local dy = y - y0
-		for _,win in ipairs(self.frontend:children()) do
-			local x, y = win:frame_rect()
-			win:frame_rect(x + dx, y + dy)
+		--move children too to emulate default OSX behavior.
+		if self.frontend:sticky() then
+			local x, y = rect.x, rect.y
+			local x0, y0 = self.backend:get_frame_rect()
+			local dx = x - x0
+			local dy = y - y0
+			for _,win in ipairs(self.frontend:children()) do
+				local x, y = win:frame_rect()
+				win:frame_rect(x + dx, y + dy)
+			end
 		end
 
 	end
@@ -736,11 +741,11 @@ function window:set_topmost(topmost)
 end
 
 function window:raise(relto)
-	self.win:bring_to_front(relto)
+	self.win:bring_to_front(relto and relto.backend.win)
 end
 
-function window:lower(relot)
-	self.win:send_to_back(relto)
+function window:lower(relto)
+	self.win:send_to_back(relto and relto.backend.win)
 end
 
 --displays -------------------------------------------------------------------
@@ -755,10 +760,10 @@ function app:_display(monitor)
 		y = info.monitor_rect.y,
 		w = info.monitor_rect.w,
 		h = info.monitor_rect.h,
-		client_x = info.work_rect.x,
-		client_y = info.work_rect.y,
-		client_w = info.work_rect.w,
-		client_h = info.work_rect.h,
+		cx = info.work_rect.x,
+		cy = info.work_rect.y,
+		cw = info.work_rect.w,
+		ch = info.work_rect.h,
 	}
 end
 
