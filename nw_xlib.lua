@@ -37,12 +37,9 @@ nw.app = app
 function app:new(frontend)
 	self   = glue.inherit({frontend = frontend}, self)
 	xlib   = xlib.connect()
+	xlib.synchronize(true) --shave off one source of unpredictability
 	self:_resolve_evprop_names()
 	return self
-end
-
-function app:virtual_roots()
-	return get_window_list_prop(xlib.screen.root, '_NET_VIRTUAL_ROOTS')
 end
 
 --event debugging ------------------------------------------------------------
@@ -99,23 +96,14 @@ end
 --message loop ---------------------------------------------------------------
 
 local ev = {}     --{event_code = event_handler}
-local evprop = {} --{property_name = PropertyNotify_handler}
-
-function app:_resolve_evprop_names()
-	for name, handler in pairs(evprop) do
-		local atom = xlib.atom(name)
-		if atom then
-			evprop[atom] = handler
-		end
-	end
-end
 
 local function pull_event(timeout)
 	local e = xlib.poll(timeout)
 	if not e then return end
 	--print(evstr(e))
 	local f = ev[tonumber(e.type)]
-	if f then f(e) end --after this, e is invalid because f() can cause re-entering.
+	if f then f(e) end
+	--NOTE: right here e is invalid because f() can cause re-entering!
 	return true
 end
 
@@ -137,9 +125,20 @@ end
 
 --PropertyNotify dispatcher --------------------------------------------------
 
+local evprop = {} --{property_name -> PropertyNotify_handler}
+
+function app:_resolve_evprop_names()
+	for name, handler in pairs(evprop) do
+		local atom = xlib.atom(name)
+		if atom then
+			evprop[atom] = handler
+		end
+	end
+end
+
 ev[C.PropertyNotify] = function(e)
 	e = e.xproperty
-	local handler = evprop[e.atom]
+	local handler = evprop[tonumber(e.atom)]
 	if handler then handler(e) end
 end
 
@@ -191,6 +190,7 @@ app.window = window
 
 local winmap = {} --{Window (always a number) -> window object}
 
+--constrain the client size (cw, ch) based on current size constraints.
 local function clamp_opt(x, min, max)
 	if min then x = math.max(x, min) end
 	if max then x = math.min(x, max) end
@@ -225,12 +225,6 @@ function window:new(app, frontend, t)
 	--say that we don't want the server to keep a pixmap for the window.
 	attrs.background_pixmap = 0
 
-	--paint the background black
-	attrs.background_pixel = 0
-
-	--needed if we want to set a value for colormap too!
-	attrs.border_pixel = 0
-
 	--declare what events we want to receive.
 	attrs.event_mask = bit.bor(
 		C.KeyPressMask,
@@ -251,7 +245,7 @@ function window:new(app, frontend, t)
 		C.ExposureMask,
 		C.VisibilityChangeMask,
 		C.StructureNotifyMask,
-		--C.ResizeRedirectMask,
+		--C.ResizeRedirectMask, --not working
 		C.SubstructureNotifyMask,
 		--C.SubstructureRedirectMask,
 		C.FocusChangeMask,
@@ -260,12 +254,20 @@ function window:new(app, frontend, t)
 		C.OwnerGrabButtonMask,
 	0)
 
-	attrs.visual = find_bgra8_visual(xlib.screen)
-	if attrs.visual then
-		attrs.depth = 32
-		--creating a 32bit-depth window with alpha requires creating a colormap!
-		attrs.colormap = xlib.create_colormap(xlib.screen.root, attrs.visual)
+	if t.transparent then
+		--find a 32bit BGRA8 visual so we can create a window with alpha.
+		attrs.visual = find_bgra8_visual(xlib.screen)
+		if attrs.visual then
+			attrs.depth = 32
+			--creating a 32bit-depth window requires creating a colormap!
+			attrs.colormap = xlib.create_colormap(xlib.screen.root, attrs.visual)
+			--setting a colormap requires setting border_pixel!
+			attrs.border_pixel = 0
+		end
 	end
+
+	--store window's depth for put_image()
+	self._depth = attrs.depth or xlib.screen.root_depth
 
 	--get client size from frame size
 	local _, _, cw, ch = app:frame_to_client(t.frame, t.menu, 0, 0, t.w, t.h)
@@ -276,12 +278,15 @@ function window:new(app, frontend, t)
 	self._max_cw = t.max_cw
 	self._max_ch = t.max_ch
 	cw, ch = self:__constrain(cw, ch)
-
-	attrs.x = t.x
-	attrs.y = t.y
 	attrs.width = cw
 	attrs.height = ch
+
+	--set position (optional: t.x and/or t.y can be missing)
+	attrs.x = t.x
+	attrs.y = t.y
+
 	self.win = xlib.create_window(attrs)
+	xlib.flush() --lame: XSynchronize() didn't do it's job here
 
 	--NOTE: WMs ignore the initial position unless we set WM_NORMAL_HINTS too
 	--(values don't matter, but we're using the same t.x and t.y just in case).
@@ -308,7 +313,6 @@ function window:new(app, frontend, t)
 	--declare the X protocols that the window supports.
 	xlib.set_atom_map_prop(self.win, 'WM_PROTOCOLS', {
 		WM_DELETE_WINDOW = true, --don't close the connection when a window is closed
-		WM_TAKE_FOCUS = t.activable or nil, --allow focusing the window programatically
 		_NET_WM_PING = true, --respond to ping events
 	})
 
@@ -350,7 +354,8 @@ function window:new(app, frontend, t)
 	--disambiguation flag for show/hide vs minimize/unminimize
 	self._hidden = true
 
-	--remembered window state while hidden
+	--window state to be reported while hidden == true.
+	--also used while hidden == false for separating individual changes.
 	self._minimized = t.minimized or false
 	self._maximized = t.maximized or false
 	self._fullscreen = t.fullscreen or false
@@ -370,39 +375,24 @@ ev[C.ClientMessage] = function(e)
 	local v = e.data.l[0]
 	if e.message_type == xlib.atom'WM_PROTOCOLS' then
 		if v == xlib.atom'WM_DELETE_WINDOW' then
-			if self.frontend:_backend_closing() then
-				self:forceclose()
-			end
-		elseif v == xlib.atom'WM_TAKE_FOCUS' then
-			--ha?
+			self.frontend:close()
 		elseif v == xlib.atom'_NET_WM_PING' then
 			xlib.pong(e)
 		end
 	end
 end
 
-ev[C.ConfigureNotify] = function(e)
-	e = e.xconfigure
-	local self = winmap[xid(e.window)]
-	if not self then return end
-	--local x = e.x
-	--local y = e.y
-	--local w = e.width
-	--local h = e.height
-end
-
 function window:forceclose()
-	if self._closing then return end
-	self._closing = true --forceclose() barrier
+
 	--force-close child windows first to emulate Windows behavior.
 	for i,win in ipairs(self.frontend:children()) do
-		win.backend:forceclose()
+		win:close(true)
 	end
-	--hide first to trigger changed() and to allow minimized(), maximized(),
-	--fullscreen() to continue to work in closed() event.
-	self:hide()
-	xlib.destroy_window(self.win) --doesn't trigger WM_DELETE_WINDOW
+
+	--trigger closed event after children are closed but before destroying the window.
 	self.frontend:_backend_closed()
+
+	xlib.destroy_window(self.win)
 	winmap[self.win] = nil
 	self.win = nil
 end
@@ -410,16 +400,15 @@ end
 --activation -----------------------------------------------------------------
 
 --how much to wait for another window to become active after a window
---is deactivated, before triggering a 'app deactivated' event.
+--is deactivated, before triggering an 'app deactivated' event.
 local focus_out_timeout = 0.1
 local last_focus_out
 local focus_timer_started
-local app_active
 local last_active_window
 
 function app:_check_activated()
-	if app_active then return end
-	app_active = true
+	if self._active then return end
+	self._active = true
 	self.frontend:_backend_activated()
 end
 
@@ -452,7 +441,7 @@ ev[C.FocusOut] = function(e)
 		self.app.frontend:runafter(focus_out_timeout, function()
 			if last_focus_out and time.clock() - last_focus_out > focus_out_timeout then
 				last_focus_out = nil
-				app_active = false
+				self.app._active = false
 				self.app.frontend:_backend_deactivated()
 			end
 			focus_timer_started = false
@@ -465,12 +454,12 @@ end
 
 --if the app was active but the
 function app:_check_app_deactivate()
-	if not app_active then return end
+	if not self._active then return end
 	self.frontend:_backend_deactivated()
 end
 
 function app:activate()
-	if app_active then return end
+	if self._active then return end
 	--unlike OSX, in X you don't activate an app, you have to activate a specific window.
 	--activating this app means activating the last window that was active.
 	local win = last_active_window
@@ -480,11 +469,12 @@ function app:activate()
 end
 
 function app:active_window()
-	return app_active and winmap[xlib.get_input_focus()] or nil
+	--return the active window only if the app is active, to emulate OSX behavior.
+	return self._active and winmap[xlib.get_input_focus()] or nil
 end
 
 function app:active()
-	return app_active
+	return self._active
 end
 
 function window:activate()
@@ -503,7 +493,7 @@ function window:visible()
 end
 
 function window:show()
-	if self:visible() then return end
+	if not self._hidden then return end
 
 	--set the _NET_WM_STATE property before mapping the window.
 	--later on we have to use change_net_wm_state() to change these values.
@@ -526,34 +516,34 @@ function window:show()
 	xlib.map(self.win)
 
 	if not self._minimized then
-		--activate window to emulate Windows behavior.
+		--except when minimized, activate window to emulate Windows behavior.
 		self:activate()
 	else
 		--if minimized, MapNotify is not sent, but PropertyNotify/WM_STATE is.
-		self._wm_state_cmd = self._minimized and 'map'
+		self._wm_state_cmd = 'map'
 	end
 end
 
 function window:hide()
-	if not self:visible() then return end
+	if self._hidden then return end
 
 	--remember window state while hidden.
 	self._minimized = self:minimized()
 	self._maximized = self:maximized()
 	self._fullscreen = self:fullscreen()
-	self._hidden = true
+	self._hidden = true --switch to stored state
 
 	xlib.withdraw(self.win)
 
 	if self._minimized then
 		--if minimized, UnmapNotify is not sent, but PropertyNotify/WM_STATE is.
-		self._wm_state_cmd = self._minimized and 'unmap'
+		self._wm_state_cmd = 'unmap'
 	end
 end
 
 function window:_mapped()
 	if not self._hidden then return end --unminimized, ignore
-	self._hidden = false
+	self._hidden = false --switch to real state
 	self.frontend:_backend_was_shown()
 end
 
@@ -585,17 +575,16 @@ function window:_get_minimized_state()
 end
 
 function window:minimized()
-	if not self:visible() then
+	if self._hidden then
 		return self._minimized
 	end
 	return self:_get_minimized_state()
 end
 
 function window:minimize()
-	if not self:visible() then
+	if self._hidden then
 		self._minimized = true
 		self:show()
-		assert(self:minimized())
 	else
 		xlib.change_wm_state(self.win, C.IconicState)
 	end
@@ -604,24 +593,22 @@ end
 function window:_wm_state_changed()
 	if self._hidden then
 		local cmd = self._wm_state_cmd
-		self._wm_state_cmd = nil
-		if cmd then
-			if cmd == 'map' then
-				self:_mapped()
+		self._wm_state_cmd = nil --one-time thing
+		if cmd == 'map' then
+			self:_mapped()
+		elseif cmd == 'unmap' then
+			self:_unmapped()
+		end
+	else
+		local min = self:_get_minimized_state()
+		if min ~= self._minimized then
+			if min then
+				self.frontend:_backend_was_minimized()
 			else
-				self:_unmapped()
+				self.frontend:_backend_was_unminimized()
 			end
+			self._minimized = min
 		end
-		return
-	end
-	local min = self:_get_minimized_state()
-	if min ~= self._minimized then
-		if min then
-			self.frontend:_backend_was_minimized()
-		else
-			self.frontend:_backend_was_unminimized()
-		end
-		self._minimized = min
 	end
 end
 
@@ -631,34 +618,27 @@ function evprop.WM_STATE(e)
 	win:_wm_state_changed()
 end
 
---state/maximized+fullscreen -------------------------------------------------
-
-function window:_get_net_wm_state(flag)
-	local st = xlib.get_net_wm_state(self.win)
-	return st and st[flag] or false
-end
-
 --state/maximizing -----------------------------------------------------------
 
 function window:_get_maximized_state()
-	return self:_get_net_wm_state'_NET_WM_STATE_MAXIMIZED_HORZ'
+	return xlib.get_net_wm_state(self.win, '_NET_WM_STATE_MAXIMIZED_HORZ') or false
 end
 
 function window:maximized()
-	if not self:visible() then
+	if self._hidden then
 		return self._maximized
 	end
 	return self:_get_maximized_state()
 end
 
-function window:_set_maximized(onoff)
-	xlib.change_net_wm_state(self.win, onoff,
+function window:_set_maximized(maximized)
+	xlib.change_net_wm_state(self.win, maximized,
 		'_NET_WM_STATE_MAXIMIZED_HORZ',
 		'_NET_WM_STATE_MAXIMIZED_VERT')
 end
 
 function window:maximize()
-	if not self:visible() then
+	if self._hidden then
 		self._maximized = true
 		self._minimized = false
 		self:show()
@@ -666,7 +646,6 @@ function window:maximize()
 	elseif self:minimized() then
 		self:_set_maximized(true)
 		self:restore()
-		assert(self:maximized())
 	else
 		self:_set_maximized(true)
 	end
@@ -705,7 +684,9 @@ end
 --state/restoring ------------------------------------------------------------
 
 function window:restore()
-	if self:visible() then
+	if self._hidden then
+		self:show()
+	else
 		if self:minimized() then
 			xlib.map(self.win)
 			--activate window to emulate Windows behavior.
@@ -713,13 +694,11 @@ function window:restore()
 		elseif self:maximized() then
 			self:_set_maximized(false)
 		end
-	else
-		self:show()
 	end
 end
 
 function window:shownormal()
-	if not self:visible() then
+	if self._hidden then
 		self._minimized = false
 		if self:maximized() then
 			self:_set_maximized(false)
@@ -740,24 +719,25 @@ end
 --state/fullscreen -----------------------------------------------------------
 
 function window:_get_fullscreen_state()
-	return self:_get_net_wm_state'_NET_WM_STATE_FULLSCREEN'
+	return xlib.get_net_wm_state(self.win, '_NET_WM_STATE_FULLSCREEN') or false
 end
 
 function window:fullscreen()
-	if not self:visible() then
+	if self._hidden then
 		return self._fullscreen
 	end
 	return self:_get_fullscreen_state()
 end
 
 function window:enter_fullscreen()
-	if self:visible() then
-		xlib.change_net_wm_state(self.win, true, '_NET_WM_STATE_FULLSCREEN')
-	else
+	if self._hidden then
+		--NOTE: currently the frontend doesn't allow this because of OSX.
 		self._fullscreen = true
 		self._minimized = false
 		self:show()
 		self:enter_fullscreen()
+	else
+		xlib.change_net_wm_state(self.win, true, '_NET_WM_STATE_FULLSCREEN')
 	end
 end
 
@@ -871,8 +851,8 @@ function window:get_frame_rect()
 end
 
 function window:set_frame_rect(x, y, w, h)
-	local cx, cy, cw, ch = unframe_rect(x, y, w, h, self:_frame_extents())
-	cw = math.max(cw, 1)
+	local _, _, cw, ch = unframe_rect(x, y, w, h, self:_frame_extents())
+	cw = math.max(cw, 1) --prevent error
 	ch = math.max(ch, 1)
 	xlib.config(self.win, {x = x, y = y, width = cw, height = ch, border_width = 0})
 end
@@ -886,7 +866,7 @@ end
 
 function window:_apply_constraints()
 
-	--get current client size and new (constrained) client size
+	--get the current client size and the new (constrained) client size
 	local cw0, ch0 = self:get_size()
 	local cw, ch = self:__constrain(cw0, ch0)
 
@@ -912,7 +892,7 @@ function window:_apply_constraints()
 
 	--resize the window if dimensions changed
 	if cw ~= cw0 or ch ~= ch0 then
-		cw = math.max(cw, 1)
+		cw = math.max(cw, 1) --prevent error
 		ch = math.max(ch, 1)
 		xlib.config(self.win, {width = cw, height = ch, border_width = 0})
 	end
@@ -938,15 +918,17 @@ end
 
 --positioning/resizing -------------------------------------------------------
 
---self.frontend:_backend_start_resize(how)
---self.frontend:_backend_end_resize(how)
---self.frontend:_backend_resizing(how, unpack_rect(rect)))
---self.frontend:_backend_resized()
+ev[C.ConfigureNotify] = function(e)
+	local e = e.xconfigure
+	local self = winmap[xid(e.window)]
+	if not self then return end
+	self.frontend:_backend_resized()
+end
 
 --positioning/magnets --------------------------------------------------------
 
-function window:magnets()
-end
+--not useful since we can't intervene in window resizing.
+function window:magnets() end
 
 --titlebar -------------------------------------------------------------------
 
@@ -1104,8 +1086,9 @@ local keynames = {
 	[C.XK_Menu]        = 'menu',
 }
 
-local function keyname(c, keycode)
-	local sym = C.XKeycodeToKeysym(c, keycode, 0)
+local function keyname(keycode)
+	local c = xlib.display
+	local sym = xid(C.XKeycodeToKeysym(c, keycode, 0))
 	if sym >= C.XK_a and sym <= C.XK_z then
 		return string.char(('A'):byte() + sym - C.XK_a)
 	elseif sym >= C.XK_0 and sym <= C.XK_9 then
@@ -1123,9 +1106,7 @@ ev[C.KeyPress] = function(e)
 		self._keypressed = false
 		return
 	end
-	local key = keyname(xlib.display, e.keycode)
-	--print('sequence: ', e.sequence)
-	--print('state:    ', e.state)
+	local key = keyname(e.keycode)
 	self.frontend:_backend_keydown(key)
 	self.frontend:_backend_keypress(key)
 end
@@ -1135,7 +1116,7 @@ ev[C.KeyRelease] = function(e)
 	local self = winmap[xid(e.window)]
 	if not self then return end
 	if self._disabled then return end
-	local key = e.keycode
+	local key = keyname(e.keycode)
 
 	--peek next message to distinguish between key release and key repeat
  	local e1 = xlib.peek()
@@ -1191,7 +1172,7 @@ ev[C.ButtonRelease] = function(e)
 end
 
 function app:double_click_time() --milliseconds
-	return 500
+	return 500 --TODO: get from xsettings?
 end
 
 function app:double_click_target_area()
@@ -1239,7 +1220,7 @@ local function slow_resize_buffer(ctype, shrink_factor, reserve_factor)
 	end
 end
 
-local function make_bitmap(w, h, win, ssbuf)
+local function make_bitmap(w, h, win, win_depth, ssbuf)
 
 	local stride = w * 4
 	local size = stride * h
@@ -1287,11 +1268,11 @@ local function make_bitmap(w, h, win, ssbuf)
 		local data = ssbuf(size)
 		bitmap.data = data
 
-		local pix = xlib.create_pixmap(win, w, h, 32)
+		local pix = xlib.create_pixmap(win, w, h, win_depth)
 		local gc = xlib.create_gc(win)
 
 		function paint()
-			xlib.put_image(gc, data, size, w, h, 32, pix)
+			xlib.put_image(gc, data, size, w, h, win_depth, pix)
 			xlib.copy_area(gc, pix, 0, 0, w, h, win)
 		end
 
@@ -1309,20 +1290,21 @@ end
 --a dynamic bitmap is an API that creates a new bitmap everytime its size
 --changes. user supplies the :size() function, :get() gets the bitmap,
 --and :freeing(bitmap) is triggered before the bitmap is freed.
-local function dynbitmap(api, win)
+local function dynbitmap(api, win, depth)
 
 	api = api or {}
 
-	local w0, h0, bitmap, free, paint
+	local w, h, bitmap, free, paint
 	local ssbuf = slow_resize_buffer('char', 2, 1.2)
 
 	function api:get()
-		local w, h = api:size()
-		if not bitmap or w ~= w0 or h ~= h0 then
+		local w1, h1 = api:size()
+		if not bitmap or w1 ~= w or h1 ~= h then
 			if bitmap then
 				free()
 			end
-			bitmap, free, paint = make_bitmap(w, h, win, ssbuf)
+			bitmap, free, paint = make_bitmap(w1, h1, win, depth, ssbuf)
+			w, h = w1, h1
 		end
 		return bitmap
 	end
@@ -1345,10 +1327,24 @@ end
 
 ev[C.Expose] = function(e)
 	local e = e.xexpose
-	if e.count ~= 0 then return end --subregion rendering
+	if e.count ~= 0 then return end --subregion rendering, skip
 	local self = winmap[xid(e.window)]
 	if not self then return end
-	self:invalidate()
+
+	--skip subregion rendering unless explicitly requested.
+	--TODO: if (e.count ~= 0) == (not self.frontend:subregion_rendering()) then return end
+
+	--can't paint the bitmap while the window is unmapped.
+	if self._hidden or self:minimized() then return end
+
+	--let the user request the bitmap and draw on it.
+	self.frontend:_backend_repaint(e.x, e.y, e.width, e.height)
+
+	--if it did, paint the bitmap onto the window.
+	if self._dynbitmap then
+		--TODO: paint subregion
+		self._dynbitmap:paint()
+	end
 end
 
 function window:bitmap()
@@ -1360,16 +1356,17 @@ function window:bitmap()
 			freeing = function(_, bitmap)
 				self.frontend:_backend_free_bitmap(bitmap)
 			end,
-		}, self.win)
+		}, self.win, self._depth)
 	end
 	return self._dynbitmap:get()
 end
 
-function window:invalidate()
-	--let the user request the bitmap and draw on it.
-	self.frontend:_backend_repaint()
-	if not self._dynbitmap then return end
-	self._dynbitmap:paint()
+function window:invalidate(x, y, w, h)
+	if x and y and w and h then
+		xlib.clear_area(self.win, x, y, w, h)
+	else
+		xlib.clear_area(self.win, 0, 0, 2^24, 2^24)
+	end
 end
 
 function window:_free_bitmap()

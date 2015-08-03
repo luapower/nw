@@ -1,7 +1,116 @@
-- initial positioning
-- client frame and outer frame
-- minsize, maxsize
-- resizeable
+TODO
+------------------------------------------------------------------------------
+easy:
+	- test invalidate(x, y, w, h)
+	- mouse events
+	- keychar events
+	- shm
+	- displays
+	- cairo view
+	- gl view
+	- subregion repaint()
+	- jank control?
+
+hard:
+	- activable
+	- enabled
+	- expose while minimized
+
+
+APP
+------------------------------------------------------------------------------
+events:
+	window_created
+	window_closed
+	activated deactivated
+	was_unhidden was_hidden
+
+WINDOW
+------------------------------------------------------------------------------
+
+read-only fixed properties:
+	parent
+	frame
+	minimizable
+	maximizable
+	activable
+	fullscreenable
+	resizeable
+	closeable
+	transparent
+	topmost
+
+read-only state properties:
+	dead
+	visible
+	minimized maximized fullscreen state
+	size frame_rect client_rect normal_rect
+	display
+	active
+	children
+	bitmap
+	mouse
+	key
+
+read-write inert properties:
+	title
+	sticky
+	autoquit
+	edgesnapping
+
+read-write state properties:
+	enabled
+	minsize maxsize
+	size frame_rect client_rect normal_rect
+	cursor
+
+utilities:
+	to_client to_screen
+
+commands:
+	close
+	show hide
+	minimize maximize restore shownormal
+	activate
+	raise lower
+	invalidate
+
+events:
+	quitting
+	closing
+	resizing
+	magnets
+	created closed
+	activated deactivated
+	was_shown was_hidden
+	was_minimized was_unminimized
+	was_maximized was_unmaximized
+	entered_fullscreen exited_fullscreen
+	start_resize end_resize resizing resized
+	displays_changed
+	keydown keypress keyup keychar
+	mousedown mouseup
+	mousewheel mousehwheel
+	mouseenter mouseleave
+	mousemove
+	repaint free_bitmap
+
+meta:
+	observe
+	override
+	events
+	event
+
+extra:
+	views view_count
+	menubar popup
+	icon
+	glview cairoview
+events:
+	dropfiles dragging
+
+------------------------------------------------------------------------------
+
 
 ------------------------------------------------------------------------------
 init | action | change | get | query | event | flag || assert | check
@@ -113,7 +222,7 @@ POSITIONING
 - event: resized
 - event: moved
 
-MINSIZE/MAXSIZE
+SIZE RESTRICTIONS
 ------------------------------------------------------------------------------
 - init: minsize/maxsize
 	- assert: maxsize clamped to minsize
@@ -392,5 +501,6 @@ LOG
 27/07 - testing states (made transitions synchronous)
 28/07 - replaced sleep with select in loop; state-change events for Linux and Windows
 29/07 - state transitions async test factory; app:run(func) + app:sleep(); errors in timers (windows); was_shown and was_hidden
-30/07
-31/07
+30/07 - ?
+31/07 - all-in-one interactive test
+01/07 - day off

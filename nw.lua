@@ -306,7 +306,7 @@ function app:_forcequit()
 
 	for i,win in ipairs(self:windows()) do
 		if not win:dead() and not win:parent() then
-			win:_forceclose()
+			win:close(true)
 		end
 	end
 
@@ -445,6 +445,8 @@ function window:_new(app, backend_class, useropt)
 		useropt)
 
 	if opt.parent then
+		--prevent creating child windows in parent's closed() event or after.
+		assert(not opt.parent._closed, 'parent is closed')
 		--child windows can't be minimizable because they don't show in taskbar.
 		assert(not opt.minimizable,    'child windows cannot be minimizable')
 		--child windows can't be maximizable or fullscreenable (X11 limitation).
@@ -551,13 +553,9 @@ function window:_canclose()
 	return allow
 end
 
-function window:_forceclose()
-	self.backend:forceclose()
-end
-
-function window:close()
-	if self:_backend_closing() then
-		self:_forceclose()
+function window:close(force)
+	if force or self:_backend_closing() then
+		self.backend:forceclose()
 	end
 end
 
@@ -565,10 +563,11 @@ function window:_backend_closing()
 	if self._closed then return false end --reject if closed
 	if self._closing then return false end --reject while closing
 
-	if self:autoquit() or (self.app:autoquit()
+	if self:autoquit() or (
+		self.app:autoquit()
 		and not self:parent() --closing a top-level window
-		and self.app:window_count'top-level' == 1) --of which there's only one
-	then
+		and self.app:window_count'top-level' == 1 --the only one
+	) then
 		self._quitting = true
 		return self.app:_canquit()
 	else
@@ -578,11 +577,14 @@ end
 
 function window:_backend_closed()
 	if self._closed then return end --ignore if closed
-
 	self._closed = true --_backend_closing() and _backend_closed() barrier
+
 	self:_event'closed'
 	self:_free_views()
+
+	--trigger closed event before declaring the window dead.
 	self.app:_window_closed(self)
+
 	self._dead = true
 
 	if self._quitting then
@@ -885,12 +887,21 @@ function window:client_rect(x1, y1, w1, h1)
 	end
 end
 
-function window:size() --returns w, h
+function window:size(cw, ch) --sets or returns cw, ch
 	self:_check()
-	if self:minimized() then
-		return 0, 0
+	if cw or ch then
+		if not cw or not ch then
+			local cw0, ch0 = self:size()
+			cw = cw or cw0
+			ch = ch or ch0
+		end
+		self:client_rect(nil, nil, cw, ch)
+	else
+		if self:minimized() then
+			return 0, 0
+		end
+		return self.backend:get_size()
 	end
-	return self.backend:get_size()
 end
 
 --positioning/constraints ----------------------------------------------------
@@ -1292,8 +1303,8 @@ function window:invalidate()
 	return self.backend:invalidate()
 end
 
-function window:_backend_repaint()
-	self:_event'repaint'
+function window:_backend_repaint(x, y, w, h)
+	self:_event('repaint', x, y, w, h)
 end
 
 function window:_backend_free_bitmap(bitmap)
@@ -1378,6 +1389,12 @@ function window:glview(t)
 	--check that the window is not layered (winapi limitation)
 	assert(not self:transparent(), 'opengl views cannot render on transparent windows')
 	return glview:_new(self, self.backend.glview, t)
+end
+
+local cairoview = glue.inherit({}, view)
+
+function window:cairoview(t)
+	return cairoview:_new(self, self.backend.cairoview, t)
 end
 
 --menus ----------------------------------------------------------------------
@@ -1563,11 +1580,6 @@ end
 
 function notifyicon:_backend_free_bitmap(bitmap)
 	self:_event('free_bitmap', bitmap)
-end
-
-function window:rect()
-	self:_check()
-	return self.backend:rect()
 end
 
 notifyicon:_property'tooltip'

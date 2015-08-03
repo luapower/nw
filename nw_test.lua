@@ -849,6 +849,7 @@ What you should know about window states:
 
 local function state_string(win)
 	return
+		(win:dead() and 'x' or '')..
 		(win:visible() and 'v' or '')..
 		(win:minimized() and 'm' or '')..
 		(win:maximized() and 'M' or '')..
@@ -884,22 +885,25 @@ local function init_check(t, child)
 			function win:was_maximized()   print_state'was_maximized' end
 			function win:was_unminimized() print_state'was_unminimized' end
 			function win:was_unmaximized() print_state'was_unmaximized' end
+			function win:entered_fullscreen() print_state'entered_fullscreen' end
+			function win:exited_fullscreen()  print_state'exited_fullscreen' end
 
 			function win:was_shown()       print_state'was_shown' end
 			function win:was_hidden()      print_state'was_hidden' end
+
+			function win:closed()      print'   closed' end
 
 			function win:activated()       print_state'   activated' end
 			function win:deactivated()     print_state'   deactivated' end
 			function app:activated()       print_state'      app activated' end
 			function app:deactivated()     print_state'      app deactivated' end
 
+			function win:start_resize(...) print_state('   start_resize', ...) end
 			function win:resizing(...)     print_state('      resizing', ...) end
 			function win:resized(...)      print_state('         resized', ...) end
-			function win:start_resize(...) print_state('   start_resize', ...) end
 			function win:end_resize(...)   print_state('   end_resize', ...) end
 
 			function win:closing()         print_state'closing' end
-			function win:closed()          print'closed' end
 
 			function app:quitting()        print_state'quitting' end
 
@@ -913,35 +917,36 @@ local function init_check(t, child)
 
 			help = [[
 
-	F1     help
-	H      hide
-	S      show
-	esc    restore
-	D      shownormal
-	F      toggle fullscreen
-	M      maximize
-	N      minimize
-	A      activate win1
-	B      activate win2
-	Z      zoom in
-	X      zoom out
-	num+   zoom in (normal rect)
-	num-   zoom out (normal rect)
-	arrows move
-	1      toggle enabled
-	2      toggle allow close
-	3      toggle autoquit
-	4      toggle minsize
-	5      toggle maxsize
-	<      lower rel. to win1
-	>      raise rel. to win1
-	[      lower
-	]      raise
-	T      set title
-	0      hide / unhide app
-	C      close / create
-	Q      quit
-	enter  print state
+	F1       help
+	H        hide
+	S        show
+	esc      restore
+	D        shownormal
+	F        toggle fullscreen
+	M        maximize
+	N        minimize
+	A        activate win1
+	B        activate win2
+	Z        zoom in
+	X        zoom out
+	num+     zoom in (normal rect)
+	num-     zoom out (normal rect)
+	arrows   move
+	1        toggle enabled
+	2        toggle allow close
+	3        toggle autoquit
+	4        toggle minsize
+	5        toggle maxsize
+	6        toggle sticky
+	<        lower rel. to win1
+	>        raise rel. to win1
+	[        lower
+	]        raise
+	T        set title
+	0        hide / unhide app
+	C        close / create
+	Q        quit
+	enter    print state
 ]]
 			local allow_close = true
 
@@ -1013,6 +1018,8 @@ local function init_check(t, child)
 					else
 						win:maxsize(400, 400)
 					end
+				elseif key == '6' then
+					win:sticky(not win:sticky())
 				elseif key == ',' then
 					win:lower(win1)
 				elseif key == '.' then
@@ -1037,23 +1044,50 @@ local function init_check(t, child)
 					print('active window  ', app:active_window() and app:active_window().name)
 					print('app active     ', app:active())
 					print('enabled        ', win:enabled())
+					print('sticky         ', win:sticky())
 					print('frame_rect     ', win:frame_rect())
 					print('normal_rect    ', win:normal_rect())
 					print('client_rect    ', win:client_rect())
+					print('size           ', win:size())
+					print('minsize        ', win:minsize())
+					print('maxsize        ', win:maxsize())
+					print('cursor         ', win:cursor())
+					print('edgesnapping   ', win:edgesnapping())
+					print('autoquit       ', win:autoquit())
+					print('app autoquit   ', app:autoquit())
 					print('display        ', pp.format(win:display()))
 					print('display_count  ', app:display_count())
 					print('active_display ', pp.format(app:active_display()))
 				end
 			end
 
+			local i = 0
+			app:runevery(0.01, function()
+				i = i + 10
+				win:invalidate()
+			end)
+
 			function win:repaint()
 				local bmp = win:bitmap()
-				ffi.fill(bmp.data, bmp.size, 0x80)
+				local _, setpixel = bitmap.pixel_interface(bmp)
+				for y = 0, bmp.h-1 do
+					for x = 0, bmp.w-1 do
+						local i = (i % bmp.w)
+						local c = x >= i and x <= i + 50 and 255 or 0
+						setpixel(x, y, c, c, c, 255)
+					end
+				end
 			end
 			win:invalidate()
 
 			function win:closing()
 				return allow_close
+			end
+
+			for k,v in pairs(getmetatable(win).__index) do
+				if type(k) == 'string' and not k:find'^_' then
+					print(k)
+				end
 			end
 
 		end
@@ -1423,7 +1457,7 @@ for i,test in ipairs({
 			if was_fs then sleep(1.5) end
 
 			assert(win:dead())
-			--collectgarbage()
+			collectgarbage()
 
 		end)
 	end
@@ -2859,7 +2893,6 @@ add('xlib', function()
 	}
 
 	function win1:repaint()
-		do return end
 		local bmp = self:bitmap()
 		local _, setpixel = require'bitmap'.pixel_interface(bmp)
 		for y=0,bmp.h-1 do

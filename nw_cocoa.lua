@@ -305,6 +305,7 @@ end
 
 function Window:windowWillClose()
 	self.backend._closing = nil
+
 	if self.backend._hiding then
 		self.backend:_hidden()
 		return
@@ -313,16 +314,16 @@ function Window:windowWillClose()
 	--force-close child windows first to emulate Windows behavior.
 	if self:childWindows() then
 		for i,win in objc.ipairs(self:childWindows()) do
-			win.backend:forceclose()
+			win:close(true)
 		end
 	end
 
 	if self.backend:active() then
 		--fake deactivation now because having close() not be async is more important.
+		--TODO: win:active() and app:active_window() are not consistent with this event.
 		self.frontend:_backend_deactivated()
 	end
 
-	self.frontend:_backend_changed()
 	self.frontend:_backend_closed()
 	self.backend:_free_bitmap()
 
@@ -352,6 +353,7 @@ function app:activate()
 			objc.NSApplicationActivateAllWindows))
 end
 
+--NOTE: keyWindow() only returns the active window if the app itself is active.
 function app:active_window()
 	return nswin_map[objc.nptr(self.nsapp:keyWindow())]
 end
@@ -1841,8 +1843,12 @@ function window:_free_bitmap()
 	self._dynbitmap:free()
 end
 
-function window:invalidate()
-	self.nswin:contentView():setNeedsDisplay(true)
+function window:invalidate(x, y, w, h)
+	if x and y and w and h then
+		self.nswin:contentView():setNeedsDisplayInRect(objc.NSMakeRect(x, y, w, h))
+	else
+		self.nswin:contentView():setNeedsDisplay(true)
+	end
 end
 
 --views ----------------------------------------------------------------------

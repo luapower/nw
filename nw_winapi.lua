@@ -1493,13 +1493,17 @@ function window:_update_layered()
 	self._dynbitmap:update_layered(self.win)
 end
 
-function window:invalidate()
+function window:invalidate(x, y, w, h)
 	if self._norepaint then return end
 	if self._layered then
 		self.frontend:_backend_repaint()
 		self:_update_layered()
 	else
-		self.win:invalidate()
+		if x and y and w and h then
+			self.win:invalidate(winapi.RECT(x, y, x + w, y + h))
+		else
+			self.win:invalidate()
+		end
 	end
 end
 
