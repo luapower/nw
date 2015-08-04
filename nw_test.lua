@@ -2150,7 +2150,7 @@ end)
 add('input-click-time', function()
 	local t = app.backend:double_click_time()
 	print('double_click_time', t)
-	assert(t > 0 and t < 5000)
+	assert(t > 0 and t < 5)
 end)
 
 --target area is sane

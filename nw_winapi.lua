@@ -1156,8 +1156,8 @@ end
 
 require'winapi.mouse'
 
-function app:double_click_time() --milliseconds
-	return winapi.GetDoubleClickTime()
+function app:double_click_time()
+	return winapi.GetDoubleClickTime() / 1000 --seconds
 end
 
 function app:double_click_target_area()

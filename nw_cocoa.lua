@@ -1544,8 +1544,8 @@ end
 
 --mouse ----------------------------------------------------------------------
 
-function app:double_click_time() --milliseconds
-	return objc.NSEvent:doubleClickInterval() * 1000
+function app:double_click_time()
+	return objc.NSEvent:doubleClickInterval() --seconds
 end
 
 function app:double_click_target_area()

@@ -191,6 +191,10 @@ app.window = window
 
 local winmap = {} --{Window (always a number) -> window object}
 
+local function win(win) --window_id -> window_object
+	return winmap[xid(win)]
+end
+
 --constrain the client size (cw, ch) based on current size constraints.
 local function clamp_opt(x, min, max)
 	if min then x = math.max(x, min) end
@@ -235,7 +239,7 @@ function window:new(app, frontend, t)
 		C.EnterWindowMask,
 		C.LeaveWindowMask,
 		C.PointerMotionMask,
-		C.PointerMotionHintMask,
+		--C.PointerMotionHintMask, --disables MotionNotify!
 		C.Button1MotionMask,
 		C.Button2MotionMask,
 		C.Button3MotionMask,
@@ -370,9 +374,10 @@ end
 --closing --------------------------------------------------------------------
 
 ev[C.ClientMessage] = function(e)
-	e = e.xclient
-	local self = winmap[xid(e.window)]
+	local e = e.xclient
+	local self = win(e.window)
 	if not self then return end --not for us
+
 	local v = e.data.l[0]
 	if e.message_type == xlib.atom'WM_PROTOCOLS' then
 		if v == xlib.atom'WM_DELETE_WINDOW' then
@@ -415,7 +420,7 @@ end
 
 ev[C.FocusIn] = function(e)
 	local e = e.xfocus
-	local self = winmap[xid(e.window)]
+	local self = win(e.window)
 	if not self then return end
 
 	if last_active_window then return end --ignore duplicate events
@@ -429,7 +434,7 @@ end
 --NOTE: set after UnmapNotify when hiding.
 ev[C.FocusOut] = function(e)
 	local e = e.xfocus
-	local self = winmap[xid(e.window)]
+	local self = win(e.window)
 	if not self then return end
 
 	if not last_active_window then return end --ignore duplicate events
@@ -556,17 +561,17 @@ end
 --NOTE: unminimizing triggers this too.
 ev[C.MapNotify] = function(e)
 	local e = e.xmap
-	local win = winmap[xid(e.window)]
-	if not win then return end
-	win:_mapped()
+	local self = win(e.window)
+	if not self then return end
+	self:_mapped()
 end
 
 --NOTE: minimizing triggers this too.
 ev[C.UnmapNotify] = function(e)
 	local e = e.xunmap
-	local win = winmap[xid(e.window)]
-	if not win then return end
-	win:_unmapped()
+	local self = win(e.window)
+	if not self then return end
+	self:_unmapped()
 end
 
 --state/minimizing -----------------------------------------------------------
@@ -921,7 +926,7 @@ end
 
 ev[C.ConfigureNotify] = function(e)
 	local e = e.xconfigure
-	local self = winmap[xid(e.window)]
+	local self = win(e.window)
 	if not self then return end
 	self.frontend:_backend_resized()
 end
@@ -1163,9 +1168,10 @@ end
 
 ev[C.KeyPress] = function(e)
 	local e = e.xkey
-	local self = winmap[xid(e.window)]
+	local self = win(e.window)
 	if not self then return end
 	if self._disabled then return end
+
 	if self._keypressed then
 		self._keypressed = false
 		return
@@ -1177,11 +1183,11 @@ end
 
 ev[C.KeyRelease] = function(e)
 	local e = e.xkey
-	local self = winmap[xid(e.window)]
+	local self = win(e.window)
 	if not self then return end
 	if self._disabled then return end
-	local key = keyname(e.keycode)
 
+	local key = keyname(e.keycode)
 	--peek next message to distinguish between key release and key repeat
  	local e1 = xlib.peek()
  	if e1 then
@@ -1213,19 +1219,26 @@ local btns = {'left', 'middle', 'right'}
 
 ev[C.ButtonPress] = function(e)
 	local e = e.xbutton
-	local self = winmap[xid(e.window)]
+	local self = win(e.window)
 	if not self then return end
 	if self._disabled then return end
 
+	local x, y = 0, 0
+	if e.button == C.Button4 then --wheel up
+		self.frontend:_backend_mousewheel(3, x, y)
+		return
+	elseif e.button == C.Button5 then --wheel down
+		self.frontend:_backend_mousewheel(-3, x, y)
+		return
+	end
 	local btn = btns[e.button]
 	if not btn then return end
-	local x, y = 0, 0
 	self.frontend:_backend_mousedown(btn, x, y)
 end
 
 ev[C.ButtonRelease] = function(e)
 	local e = e.xbutton
-	local self = winmap[xid(e.window)]
+	local self = win(e.window)
 	if not self then return end
 	if self._disabled then return end
 
@@ -1235,28 +1248,40 @@ ev[C.ButtonRelease] = function(e)
 	self.frontend:_backend_mouseup(btn, x, y)
 end
 
+ev[C.MotionNotify] = function(e)
+	local e = e.xmotion
+	local self = win(e.window)
+	if not self then return end
+	if self._disabled then return end
+
+	self.frontend:_backend_mousemove(e.x, e.y)
+end
+
+ev[C.EnterNotify] = function(e)
+	local e = e.xcrossing
+	local self = win(e.window)
+	if not self then return end
+	if self._disabled then return end
+
+	self.frontend:_backend_mouseenter()
+end
+
+ev[C.LeaveNotify] = function(e)
+	local e = e.xcrossing
+	local self = win(e.window)
+	if not self then return end
+	if self._disabled then return end
+
+	self.frontend:_backend_mouseleave()
+end
+
 function app:double_click_time() --milliseconds
-	return 500 --TODO: get from xsettings?
+	return .5 --TODO: get from xsettings?
 end
 
 function app:double_click_target_area()
 	return 4, 4 --like in windows
 end
-
---self.frontend:_backend_mousemove(x, y)
---self.frontend:_backend_mouseleave()
---self.frontend:_backend_mousedown('left', x, y)
---self.frontend:_backend_mousedown('middle', x, y)
---self.frontend:_backend_mousedown('right', x, y)
---self.frontend:_backend_mousedown('ex1', x, y)
---self.frontend:_backend_mousedown('ex2', x, y)
---self.frontend:_backend_mouseup('left', x, y)
---self.frontend:_backend_mouseup('middle', x, y)
---self.frontend:_backend_mouseup('right', x, y)
---self.frontend:_backend_mouseup('ex1', x, y)
---self.frontend:_backend_mouseup('ex2', x, y)
---self.frontend:_backend_mousewheel(delta, x, y)
---self.frontend:_backend_mousehwheel(delta, x, y)
 
 --bitmaps --------------------------------------------------------------------
 
