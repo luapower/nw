@@ -1,11 +1,9 @@
 TODO
 ------------------------------------------------------------------------------
 easy:
-	- test invalidate(x, y, w, h)
 	- mouse events
 	- keychar events
 	- shm
-	- displays
 	- cairo view
 	- gl view
 	- subregion repaint()
@@ -15,6 +13,7 @@ hard:
 	- activable
 	- enabled
 	- expose while minimized
+	- test invalidate(x, y, w, h)
 
 
 APP

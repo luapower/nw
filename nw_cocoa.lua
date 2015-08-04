@@ -1187,12 +1187,17 @@ function app:displays()
 	return displays
 end
 
-function app:active_display()
-	return self:_display(nil, objc.NSScreen:mainScreen())
+function app:display_count()
+	return tonumber(objc.NSScreen:screens():count())
 end
 
-function app:display_count()
-	return objc.NSScreen:screens():count()
+function app:main_display()
+	return self:_display(nil, screens:objectAtIndex(0)) --main screen always comes first
+end
+
+--NOTE: mainScreen() actually means the screen which has keyboard focus.
+function app:active_display()
+	return self:_display(nil, objc.NSScreen:mainScreen() or screens:objectAtIndex(0))
 end
 
 --NOTE: screen() works on an initially hidden window.

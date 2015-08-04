@@ -870,6 +870,9 @@ local function init_check(t, child)
 
 		local win, help
 		local function create()
+
+			t.w = 700
+			t.h = 300
 			win = app:window(winpos(t))
 
 			function win1:keypress(key)
@@ -1074,7 +1077,7 @@ local function init_check(t, child)
 					for x = 0, bmp.w-1 do
 						local i = (i % bmp.w)
 						local c = x >= i and x <= i + 50 and 255 or 0
-						setpixel(x, y, c, c, c, 255)
+						setpixel(x, y, c, c, c, 200)
 					end
 				end
 			end
@@ -1532,7 +1535,7 @@ end)
 
 --create a window off-screen. move a window off-screen.
 --NOTE: Windows can create windows off-screen but can't move them off-screen.
---NOTE: OSX can create and move windows off-screen when hidden, but
+--NOTE: OSX and X11 can create and move windows off-screen when hidden, but
 --it repositions them on the next show().
 --NOTE: X moves windows on-screen automatically.
 --NOTE: OSX can always create/move frameless windows off-screen.
@@ -2043,7 +2046,13 @@ add('display-list', function()
 	assert(n == app:display_count())
 end)
 
---active display returns a valid display.
+--main_display() returns a valid display.
+add('display-main', function()
+	local display = app:main_display()
+	test_display(display)
+end)
+
+--active_display() returns a valid display.
 add('display-active', function()
 	local display = app:active_display()
 	test_display(display)
@@ -2058,15 +2067,17 @@ add('display-hidden', function()
 
 	local win = app:window(winpos{})
 	win:hide()
-	assert(win:display())
+	local d = win:display()
+	assert(d)
 	win:close()
 
 	print'ok'
 end)
 
 --display is nil on an off-screen window.
+--NOTE: visible=false is because X11 moves off-screen windows back on screen.
 add('display-out', function()
-	local win = app:window(winpos{x = -5000, y = -5000, frame = 'none'})
+	local win = app:window(winpos{x = -5000, y = -5000, frame = 'none', visible = false})
 	local x, y = win:frame_rect()
 	assert(x == -5000)
 	assert(y == -5000)

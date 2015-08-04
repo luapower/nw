@@ -13,6 +13,7 @@ require'xlib_keysym_h'
 require'xlib_xshm_h'
 local time = require'time' --for timers
 local heap = require'heap' --for timers
+local box2d = require'box2d' --for win:display()
 local pp = require'pp'
 local cast = ffi.cast
 local free = glue.free
@@ -858,7 +859,7 @@ function window:set_frame_rect(x, y, w, h)
 end
 
 function window:get_size()
-	local x, y, w, h = xlib.get_geometry(self.win)
+	local _, _, w, h = xlib.get_geometry(self.win)
 	return w, h
 end
 
@@ -962,38 +963,101 @@ end
 
 --displays -------------------------------------------------------------------
 
-function app:_display(screen)
-	return self.frontend:_display{
-		x = 0, --TODO
-		y = 0,
-		w = xlib.screen.width_in_pixels,
-		h = xlib.screen.height_in_pixels,
-		client_x = 0, --TODO
-		client_y = 0,
-		client_w = 0,
-		client_h = 0,
-	}
-end
-
 function app:displays()
 	local t = {}
-	for screen in screens() do
-		t[#t+1] = self:_display(screen)
+	local screens, n = xlib.xinerama_screens() --the order is undefined
+	if screens and n > 1 then --multi-monitor setup
+		for i = 0, n-1 do
+			local scr = screens[i]
+			local x = scr.x_org
+			local y = scr.y_org
+			local w = scr.width
+			local h = scr.height
+
+			--TODO: find a way to get the workarea of each monitor in multi-monitor setups.
+			--NOTE: _NET_WORKAREA spans all monitors so it's no good here!
+			local cx, cy, cw, ch = x, y, w, h
+
+			t[#t+1] = self.frontend:_display{
+				x = x, y = y, w = w, h = h,
+				cx = cx, cy = cy, cw = cw, ch = ch}
+		end
+	else
+		--Xinerama not present or single monitor setup
+		local x = 0
+		local y = 0
+		local w = xlib.screen.width
+		local h = xlib.screen.height
+
+		local cx, cy, cw, ch
+
+		--get the workarea of the first virtual desktop
+		local wa = xlib.get_net_workarea(nil, 1)
+		if wa then
+			cx, cy, cw, ch = unpack(wa)
+		else
+			--_NET_WORKAREA not set, fallback to using screen area
+			cx, cy, cw, ch = x, y, w, h
+		end
+
+		t[1] = self.frontend:_display{
+			x = x, y = y, w = w, h = h,
+			cx = cx, cy = cy, cw = cw, ch = ch}
 	end
 	return t
 end
 
-function app:active_display()
+function app:display_count()
+	local _, n = xlib.xinerama_screens()
+	return n or 1
 end
 
-function app:display_count()
-	return 1--C.xcb_setup_roots_length(C.xcb_get_setup(c))
+function app:_display_overlapping(x, y, w, h)
+
+	--get all displays and the overlapping area between them and the window
+	local t = {}
+	for i,d in ipairs(self:displays()) do
+		local _, _, w1, h1 = box2d.clip(d.x, d.y, d.w, d.h, x, y, w, h)
+		t[#t+1] = {area = w1 * h1, display = d}
+	end
+
+	--sort displays by overlapping area in descending order.
+	table.sort(t, function(t1, t2) return t1.area > t2.area end)
+
+	--return nil if there's no overlapping area i.e. the window is off-screen
+	if t[1].area == 0 then return end
+
+	--return the display with the most overlapping
+	return t[1].display
+end
+
+function app:main_display()
+	for i,d in ipairs(self:displays()) do
+		if d.x == 0 and d.y == 0 then --main display is at (0, 0) by definition
+			return d
+		end
+	end
+end
+
+function app:active_display()
+	local display
+	local win = xlib.get_input_focus()
+	if win then
+		--get the client rect of the active window in screen space.
+		local cx, cy = xlib.translate_coords(win, xlib.screen.root, 0, 0)
+		local _, _, cw, ch = xlib.get_geometry(win)
+		--get the display overlapping the active window, if any.
+		display = self:_display_overlapping(cx, cy, cw, ch)
+	end
+	return display or self:main_display()
 end
 
 function window:display()
-	--
+	local x, y, w, h = self:get_frame_rect()
+	return self.app:_display_overlapping(x, y, w, h)
 end
 
+--TODO:
 --self.app.frontend:_backend_displays_changed()
 
 --cursors --------------------------------------------------------------------

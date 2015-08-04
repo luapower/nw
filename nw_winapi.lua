@@ -768,28 +768,36 @@ function app:_display(monitor)
 end
 
 function app:displays()
-	local monitors = winapi.EnumDisplayMonitors()
+	local monitors = winapi.EnumDisplayMonitors() --the order is undefined
 	local displays = {}
 	for i = 1, #monitors do
-		table.insert(displays, self:_display(monitors[i])) --invalid displays are skipped
+		local display = self:_display(monitors[i])
+		if display then
+			table.insert(displays, display)
+		end
 	end
 	return displays
 end
 
+function app:display_count()
+	return winapi.GetSystemMetrics'SM_CMONITORS'
+end
+
+function app:main_display()
+	local p = winapi.POINT(0,0) --primary display is at (0,0) by definition.
+	return self:_display(winapi.MonitorFromPoint(p, 'MONITOR_DEFAULTTOPRIMARY'))
+end
+
 function app:active_display()
+	--NOTE: we're using GetForegroundWindow() as opposed to GetActiveWindow()
+	--or GetFocus() which only return handles from our own process.
 	local hwnd = winapi.GetForegroundWindow()
 	if hwnd then
 		return self:_display(winapi.MonitorFromWindow(hwnd, 'MONITOR_DEFAULTTONEAREST'))
 	else
-		--in case there's no foreground window, fallback to the display
-		--where the mouse pointer is. if there's no mouse, then fallback to the primary display.
-		local p = winapi.GetCursorPos()
-		return self:_display(winapi.MonitorFromPoint(p, 'MONITOR_DEFAULTTOPRIMARY'))
+		--in case there's no foreground window, fallback the primary display.
+		return self:main_display()
 	end
-end
-
-function app:display_count()
-	return winapi.GetSystemMetrics'SM_CMONITORS'
 end
 
 --NOTE: the default flag for self.win.monitor is MONITOR_DEFAULTTONULL,

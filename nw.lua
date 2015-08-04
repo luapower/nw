@@ -1085,8 +1085,11 @@ function app:display_count()
 	return self.backend:display_count()
 end
 
---the display containing the window with the keyboard focus.
-function app:active_display()
+function app:main_display() --the display at (0,0)
+	return self.backend:main_display()
+end
+
+function app:active_display() --the display which has the keyboard focus
 	return self.backend:active_display()
 end
 
