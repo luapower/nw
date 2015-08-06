@@ -2228,13 +2228,13 @@ add('input', function()
 		--print(self:key('ctrl+shift+F10'))
 	end
 	function win1:keypress(...)
-		self:printkey('keypress', ...)
+		self:printkey('   keypress', ...)
 	end
 	function win1:keyup(...)
 		self:printkey('keyup', ...)
 	end
-	function win1:keychar(char)
-		--print('keychar ', char)
+	function win1:keychar(s)
+		print('      keychar ', s)
 	end
 	win2.keydown = win1.keydown
 	win2.keypress = win1.keypress

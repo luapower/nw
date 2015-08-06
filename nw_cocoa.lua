@@ -7,6 +7,7 @@ local bit = require'bit'
 local glue = require'glue'
 local box2d = require'box2d'
 local objc = require'objc'
+--objc.debug.logtopics.refcount = true
 local cbframe = require'cbframe'
 
 local _cbframe = objc.debug.cbframe
@@ -1239,7 +1240,7 @@ local hi_cursors = {
 }
 
 local load_hicursor = objc.memoize(function(name)
-	basepath = basepath or (objc.findframework(
+	basepath = basepath or objc.findframework(
 		'ApplicationServices.HIServices/Versions/Current/Resources/cursors')
 	local curpath = string.format('%s/%s/cursor.pdf', basepath, name)
 	local infopath = string.format('%s/%s/info.plist', basepath, name)
@@ -1448,6 +1449,13 @@ function Window:keyDown(event)
 		self.frontend:_backend_keydown(key)
 	end
 	self.frontend:_backend_keypress(key)
+
+	local s = objc.tolua(event:characters()) --NOTE: #s can be > 1
+	if s ~= '' then --not a dead key
+		if s:byte(1) > 31 and s:byte(1) < 127 then --not a control key
+			self.frontend:_backend_keychar(s)
+		end
+	end
 end
 
 function Window:keyUp(event)

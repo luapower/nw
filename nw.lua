@@ -535,6 +535,10 @@ function window:_new(app, backend_class, useropt)
 	return self
 end
 
+function window:_backend_changed()
+	--TODO: remove this after fixing cocoa
+end
+
 --closing --------------------------------------------------------------------
 
 function window:_canclose()
@@ -1201,8 +1205,8 @@ function window:_backend_keyup(key)
 	self:_event('keyup', translate_key(key))
 end
 
-function window:_backend_keychar(char)
-	self:_event('keychar', char)
+function window:_backend_keychar(s)
+	self:_event('keychar', s)
 end
 
 function window:key(keys)
