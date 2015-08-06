@@ -39,6 +39,7 @@ function app:new(frontend)
 	self   = glue.inherit({frontend = frontend}, self)
 	xlib   = xlib.connect()
 	xlib.synchronize(true) --shave off one source of unpredictability
+	xlib.set_xsettings_change_notify() --setup to receive XSETTINGS changes
 	self:_resolve_evprop_names()
 	return self
 end
@@ -138,7 +139,7 @@ function app:_resolve_evprop_names()
 end
 
 ev[C.PropertyNotify] = function(e)
-	e = e.xproperty
+	local e = e.xproperty
 	local handler = evprop[tonumber(e.atom)]
 	if handler then handler(e) end
 end
@@ -179,9 +180,18 @@ end
 
 --xsettings ------------------------------------------------------------------
 
+local xsettings
+
 function evprop._XSETTINGS_SETTINGS(e)
-	if e.window ~= xlib.get_xsettings_window() then return end
-	--TODO:
+	xsettings = nil
+end
+
+function app:_xsettings(key)
+	if xsettings == nil then
+		xsettings = xlib.get_xsettings() or false
+	end
+	if not xsettings then return end
+	return xsettings[key] and xsettings[key].value
 end
 
 --windows --------------------------------------------------------------------
@@ -246,7 +256,7 @@ function window:new(app, frontend, t)
 		C.Button4MotionMask,
 		C.Button5MotionMask,
 		C.ButtonMotionMask,
-		C.KeymapStateMask,
+		--C.KeymapStateMask, --KeymapNotify
 		C.ExposureMask,
 		C.VisibilityChangeMask,
 		C.StructureNotifyMask,
@@ -476,7 +486,7 @@ end
 
 function app:active_window()
 	--return the active window only if the app is active, to emulate OSX behavior.
-	return self._active and winmap[xlib.get_input_focus()] or nil
+	return self._active and win(xlib.get_input_focus()) or nil
 end
 
 function app:active()
@@ -619,9 +629,9 @@ function window:_wm_state_changed()
 end
 
 function evprop.WM_STATE(e)
-	local win = winmap[xid(e.window)]
-	if not win then return end
-	win:_wm_state_changed()
+	local self = win(e.window)
+	if not self then return end
+	self:_wm_state_changed()
 end
 
 --state/maximizing -----------------------------------------------------------
@@ -682,9 +692,9 @@ function window:_net_wm_state_changed()
 end
 
 function evprop._NET_WM_STATE(e)
-	local win = winmap[xid(e.window)]
-	if not win then return end
-	win:_net_wm_state_changed()
+	local self = win(e.window)
+	if not self then return end
+	self:_net_wm_state_changed()
 end
 
 --state/restoring ------------------------------------------------------------
@@ -1136,7 +1146,7 @@ local keynames = {
 	[C.XK_KP_Down]     = 'numdown',
 	[C.XK_KP_Next]     = 'numpagedown',
 	[C.XK_KP_Left]     = 'numleft',
-	[C.XK_KP_Begin]    = 'num5',
+	[C.XK_KP_Begin]    = 'numclear',
 	[C.XK_KP_Right]    = 'numright',
 	[C.XK_KP_Home]     = 'numhome',
 	[C.XK_KP_Up]       = 'numup',
@@ -1153,17 +1163,54 @@ local keynames = {
 	[C.XK_Super_L]     = 'lwin',
 	[C.XK_Super_R]     = 'rwin',
 	[C.XK_Menu]        = 'menu',
+
+	[C.XK_0] = '0',
+	[C.XK_1] = '1',
+	[C.XK_2] = '2',
+	[C.XK_3] = '3',
+	[C.XK_4] = '4',
+	[C.XK_5] = '5',
+	[C.XK_6] = '6',
+	[C.XK_7] = '7',
+	[C.XK_8] = '8',
+	[C.XK_9] = '9',
+
+	[C.XK_a] = 'A',
+	[C.XK_b] = 'B',
+	[C.XK_c] = 'C',
+	[C.XK_d] = 'D',
+	[C.XK_e] = 'E',
+	[C.XK_f] = 'F',
+	[C.XK_g] = 'G',
+	[C.XK_h] = 'H',
+	[C.XK_i] = 'I',
+	[C.XK_j] = 'J',
+	[C.XK_k] = 'K',
+	[C.XK_l] = 'L',
+	[C.XK_m] = 'M',
+	[C.XK_n] = 'N',
+	[C.XK_o] = 'O',
+	[C.XK_p] = 'P',
+	[C.XK_q] = 'Q',
+	[C.XK_r] = 'R',
+	[C.XK_s] = 'S',
+	[C.XK_t] = 'T',
+	[C.XK_u] = 'U',
+	[C.XK_v] = 'V',
+	[C.XK_w] = 'W',
+	[C.XK_x] = 'X',
+	[C.XK_y] = 'Y',
+	[C.XK_z] = 'Z',
 }
 
+local keysyms = {}
+for vk, name in pairs(keynames) do
+	keysyms[name:lower()] = vk
+end
+
 local function keyname(keycode)
-	local c = xlib.display
-	local sym = xid(C.XKeycodeToKeysym(c, keycode, 0))
-	if sym >= C.XK_a and sym <= C.XK_z then
-		return string.char(('A'):byte() + sym - C.XK_a)
-	elseif sym >= C.XK_0 and sym <= C.XK_9 then
-		return string.char(('0'):byte() + sym - C.XK_0)
-	end
-	return keynames[sym] or sym
+	local sym = xid(xlib.keysym(keycode, 0, 0))
+	return keynames[sym]
 end
 
 ev[C.KeyPress] = function(e)
@@ -1176,7 +1223,10 @@ ev[C.KeyPress] = function(e)
 		self._keypressed = false
 		return
 	end
+
 	local key = keyname(e.keycode)
+	if not key then return end
+
 	self.frontend:_backend_keydown(key)
 	self.frontend:_backend_keypress(key)
 end
@@ -1188,6 +1238,8 @@ ev[C.KeyRelease] = function(e)
 	if self._disabled then return end
 
 	local key = keyname(e.keycode)
+	if not key then return end
+
 	--peek next message to distinguish between key release and key repeat
  	local e1 = xlib.peek()
  	if e1 then
@@ -1199,6 +1251,7 @@ ev[C.KeyRelease] = function(e)
  			end
  		end
  	end
+
 	if not self._keypressed then
 		self.frontend:_backend_keyup(key)
 	end
@@ -1206,10 +1259,21 @@ end
 
 --self.frontend:_backend_keychar(char)
 
-function window:key(name) --name is in lowercase!
+--NOTE: scolllock state is not present in XKeyboardState.led_mask by default.
+local toggle_keys = {capslock = 1, numlock = 2, scrolllock = 4}
+
+function app:key(name) --name is in lowercase!
 	if name:find'^%^' then --'^key' means get the toggle state for that key
 		name = name:sub(2)
+		local mask = toggle_keys[name]
+		if not mask then return false end
+		return bit.band(xlib.get_keyboard_control().led_mask, mask) ~= 0
 	else
+		local sym = keysyms[name]
+		if not sym then return false end
+		local code = xlib.keycode(sym)
+		local keymap = xlib.query_keymap(code)
+		return xlib.getbit(code, keymap)
 	end
 end
 
@@ -1223,17 +1287,18 @@ ev[C.ButtonPress] = function(e)
 	if not self then return end
 	if self._disabled then return end
 
-	local x, y = 0, 0
 	if e.button == C.Button4 then --wheel up
-		self.frontend:_backend_mousewheel(3, x, y)
+		self.frontend:_backend_mousewheel(3, e.x, e.y)
 		return
 	elseif e.button == C.Button5 then --wheel down
-		self.frontend:_backend_mousewheel(-3, x, y)
+		self.frontend:_backend_mousewheel(-3, e.x, e.y)
 		return
 	end
+
 	local btn = btns[e.button]
 	if not btn then return end
-	self.frontend:_backend_mousedown(btn, x, y)
+
+	self.frontend:_backend_mousedown(btn, e.x, e.y)
 end
 
 ev[C.ButtonRelease] = function(e)
@@ -1244,8 +1309,8 @@ ev[C.ButtonRelease] = function(e)
 
 	local btn = btns[e.button]
 	if not btn then return end
-	local x, y = 0, 0
-	self.frontend:_backend_mouseup(btn, x, y)
+
+	self.frontend:_backend_mouseup(btn, e.x, e.y)
 end
 
 ev[C.MotionNotify] = function(e)
@@ -1275,8 +1340,8 @@ ev[C.LeaveNotify] = function(e)
 	self.frontend:_backend_mouseleave()
 end
 
-function app:double_click_time() --milliseconds
-	return .5 --TODO: get from xsettings?
+function app:double_click_time()
+	return (self:_xsettings'Net/DoubleClickTime' or 400) / 1000 --seconds
 end
 
 function app:double_click_target_area()
@@ -1417,7 +1482,7 @@ end
 ev[C.Expose] = function(e)
 	local e = e.xexpose
 	if e.count ~= 0 then return end --subregion rendering, skip
-	local self = winmap[xid(e.window)]
+	local self = win(e.window)
 	if not self then return end
 
 	--skip subregion rendering unless explicitly requested.

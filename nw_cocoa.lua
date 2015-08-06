@@ -1401,9 +1401,6 @@ local keynames = {
 
 	[110] = 'menu', --win keyboard
 
-	--TODO: sort these out
-	[objc.kVK_F13] = 'F11', --taken (show desktop)
-	[objc.kVK_F14] = 'F12', --taken (show the wachamacalit wall with the calendar and clock)
 	[objc.kVK_F13] = 'F13', --mac keyboard; win keyboard 'printscreen' key
 	[objc.kVK_F14] = 'F14', --mac keyboard; win keyboard 'scrolllock' key; taken (brightness down)
 	[objc.kVK_F15] = 'F15', --mac keyboard; win keyboard 'break' key; taken (brightness up)
@@ -1525,9 +1522,13 @@ local alt_names = { --ambiguous keys that have a single physical key mapping on 
 
 local keymap, pkeymap
 
-function window:key(name)
+function app:key(name)
 	if name == '^capslock' then
 		return capsstate
+	elseif name == '^numlock' then
+		return false --TODO
+	elseif name == '^scrolllock' then
+		return false --TODO
 	elseif name == 'capslock' then
 		return keystate.capslock
 	elseif name == 'shift' then
@@ -1557,7 +1558,7 @@ function app:double_click_time()
 end
 
 function app:double_click_target_area()
-	return 4, 4 --like in windows
+	return 4, 4 --like in Windows
 end
 
 function Window:setmouse(event)

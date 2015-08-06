@@ -1,19 +1,31 @@
 TODO
 ------------------------------------------------------------------------------
 easy:
-	- mouse events
+	- capslock/numlock bug
 	- keychar events
-	- shm
+	- check that key state is not pulled in key events, including keychar!
+	- mouse movement event coalescing?
+	- mouse movement history
+	- query mouse position and buttons
+	- set mouse position? XWarpPointer
+
+	- hide cursor (but otherwise act normal)
+	- standard cursor
+	- custom image cursor
+	- high dpi
+	- frame_widths()
+	- active=false init flag
+	- shm painting
 	- cairo view
 	- gl view
 	- subregion repaint()
-	- jank control?
 
 hard:
 	- activable
 	- enabled
 	- expose while minimized
 	- test invalidate(x, y, w, h)
+	- jank control?
 
 
 APP
@@ -115,9 +127,11 @@ events:
 init | action | change | get | query | event | flag || assert | check
 ------------------------------------------------------------------------------
 
+
 TO-REMOVE
 ------------------------------------------------------------------------------
 - init: transparent (not working on windows / remote desktop)
+
 
 INIT/PLATFORM VERSION
 ------------------------------------------------------------------------------
@@ -126,6 +140,7 @@ INIT/PLATFORM VERSION
 	- assert: osx
 	- assert: linux
 
+
 LOOP
 ------------------------------------------------------------------------------
 - assert: activation events start after loop starts
@@ -133,10 +148,12 @@ LOOP
 - get: running
 - TODO...
 
+
 TIMERS
 ------------------------------------------------------------------------------
 - assert: runevery() works and return false stops the timer
 - TODO...
+
 
 RESTRICTIONS
 ------------------------------------------------------------------------------
@@ -165,6 +182,7 @@ RESTRICTIONS
 - init: activable
 	- implement
 
+
 TOPMOST
 ------------------------------------------------------------------------------
 - init: topmost
@@ -176,6 +194,7 @@ TOPMOST
 	- assert: activated event if other topmost behind
 	- check: lowering and activating other window if other topmost behind
 
+
 PARENT
 ------------------------------------------------------------------------------
 - init: parent
@@ -184,17 +203,20 @@ PARENT
 	- assert: not minimizable
 	- assert: default not minimizable
 
+
 FRAME=NONE
 ------------------------------------------------------------------------------
 - init: frame=none
 	- check: no frame
 	- assert: frame rect == client rect
 
+
 FRAME=TOOLBOX
 ------------------------------------------------------------------------------
 - init: frame=toolbox
 	- assert: has parent
 	- check: has toolbox frame (windows)
+
 
 POSITIONING
 ------------------------------------------------------------------------------
@@ -221,6 +243,7 @@ POSITIONING
 - event: resized
 - event: moved
 
+
 SIZE RESTRICTIONS
 ------------------------------------------------------------------------------
 - init: minsize/maxsize
@@ -239,6 +262,7 @@ SIZE RESTRICTIONS
 	- assert: resized event
 	- check: resizing respects it
 	- assert: maxsize == minsize => resizeable = false (X limitation)
+
 
 STATE
 ------------------------------------------------------------------------------
@@ -340,6 +364,7 @@ STATE
 - event: entered_fullscreen
 - event: exited_fullscreen
 
+
 TITLE
 ------------------------------------------------------------------------------
 - init: title
@@ -349,6 +374,7 @@ TITLE
 	- assert: get
 - change: title
 	- assert: get
+
 
 ENABLED
 ------------------------------------------------------------------------------
@@ -360,12 +386,14 @@ ENABLED
 	- assert: get
 	- check: enabled/disabled
 
+
 CLOSING
 ------------------------------------------------------------------------------
 - query: closing
 - action: close
 	- assert: deactivate and changed events precede closed event
 - event: closed
+
 
 QUITTING
 ------------------------------------------------------------------------------
@@ -374,6 +402,7 @@ QUITTING
 - flag: app autoquit
 - flag: window autoquit
 - action: quit
+
 
 ACTIVATION
 ------------------------------------------------------------------------------
@@ -390,6 +419,7 @@ ACTIVATION
 - event: app shown (osx)
 - action: activate app
 
+
 STACKING
 ------------------------------------------------------------------------------
 - action: raise
@@ -397,10 +427,14 @@ STACKING
 - action: raise_above win
 - action: lower_below win
 
+
 DISPLAYS
 ------------------------------------------------------------------------------
 - get: displays
 - get: main display
+- get: active display
+- get: display of window
+
 
 KEYBOARD
 ------------------------------------------------------------------------------
@@ -409,6 +443,7 @@ KEYBOARD
 - event: keypress
 - get: key state
 - get: keyboard state
+
 
 MOUSE
 ------------------------------------------------------------------------------
@@ -419,13 +454,14 @@ MOUSE
 - event: mouse tripleclick
 - event: mouse n-click
 
+
 RENDERING
 ------------------------------------------------------------------------------
-- event: paint
+- event: repaint
 - get: writable bitmap
-- event: paint
-- action: invalidate
+- action: invalidate (only subregion)
 - action: opengl set current
+
 
 CURSOR
 ------------------------------------------------------------------------------
@@ -436,6 +472,7 @@ CURSOR
 - get: writable cursor image
 - action: send event with custom data from a different thread
 
+
 VIEWS
 ------------------------------------------------------------------------------
 - anchors
@@ -443,6 +480,7 @@ VIEWS
 - mouse enter / mouse leave / mouse move events
 - control event propagation
 - overlapping = undefined behavior
+
 
 X PING
 ------------------------------------------------------------------------------
@@ -491,6 +529,24 @@ ISSUES
 - ensure consistent behavior / document inconsistent behavior (async; events)
 
 
+GLFW feats (excluding OpenGL)
+------------------------------------------------------------------------------
+- disable cursor and lock it to a window (not sure how this works)
+- get monitor name
+- xinput 2 for subpixel cursor motion?
+- xkb-based detectable autorepeat (with fallback to X)
+
+
+OpenGL feats
+------------------------------------------------------------------------------
+- choosing context version
+- multi-sampling
+- vsync
+- gama ramp
+- double/single buffering
+- full screen video modes
+
+
 LOG
 ------------------------------------------------------------------------------
 23/07 - inventory
@@ -503,3 +559,7 @@ LOG
 30/07 - ?
 31/07 - all-in-one interactive test
 01/07 - day off
+02/08 - ?
+03/08 - xlib mouse
+04/08 - xlib keyboard; reading glfw docs & code
+05/08 - french layout in osx and windows; reading about winapi's hi-dpi

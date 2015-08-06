@@ -1209,8 +1209,7 @@ function window:_backend_keychar(s)
 	self:_event('keychar', s)
 end
 
-function window:key(keys)
-	self:_check()
+function app:key(keys)
 	keys = keys:lower()
 	if keys:find'[^%+]%+' then --'alt+f3' -> 'alt f3'; 'ctrl++' -> 'ctrl +'
 		keys = keys:gsub('([^%+%s])%+', '%1 ')
@@ -1265,10 +1264,8 @@ function window:_backend_mousedown(button, mx, my)
 	self:_event('mousedown', button, mx, my)
 
 	local reset = false
-	if self.click then
-		reset = self:click(button, t.count)
-	end
-	self:_fire('click', button, t.count, reset)
+	reset = self:_handle('click', button, t.count, mx, my)
+	self:_fire('click', button, t.count, mx, my, reset)
 	if reset then
 		t.count = 0
 	end
@@ -1316,6 +1313,21 @@ end
 
 function window:_backend_free_bitmap(bitmap)
 	self:_event('free_bitmap', bitmap)
+end
+
+--hi-dpi support -------------------------------------------------------------
+
+--set it before creating any windows to disable OS scaling
+function app:autoscaling(enabled)
+	assert(not enabled or not self._scaling_disabled,
+		'autoscaling cannot be re-enabled once disabled')
+	if self._scaling_disabled then return end --already disabled
+	self.backend:disable_autoscaling()
+	self._scaling_disabled = true --enable barrier
+end
+
+function display:scalingfactor()
+	return self._scalingfactor or 1
 end
 
 --views ----------------------------------------------------------------------

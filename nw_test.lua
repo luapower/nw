@@ -2060,7 +2060,6 @@ end)
 
 --display is available on a hidden (but with on-screen coordinates) window.
 add('display-hidden', function()
-
 	local win = app:window(winpos{visible = false})
 	assert(win:display())
 	win:close()
@@ -2084,6 +2083,11 @@ add('display-out', function()
 	assert(not win:display())
 	win:close()
 	print'ok'
+end)
+
+add('display-scalingfactor', function()
+	app:autoscaling(false)
+	print('scaling factor:', app:main_display():scalingfactor())
 end)
 
 --cursors --------------------------------------------------------------------
@@ -2198,34 +2202,40 @@ add('input', function()
 	function win2:mouseenter() print'mouseenter win2' end
 	function win1:mouseleave() print'mouseleave win1' end
 	function win2:mouseleave() print'mouseleave win2' end
-	function win1:mousemove() print('mousemove win1', self:mouse'x', self:mouse'y') end
-	function win2:mousemove() print('mousemove win2', self:mouse'x', self:mouse'y') end
-	function win1:mousedown(button) print('mousedown win1', button) end
-	function win2:mousedown(button) print('mousedown win2', button) end
-	function win1:mouseup(button) print('mouseup win1', button) end
-	function win2:mouseup(button) print('mouseup win2', button) end
-	function win1:click(button, click_count)
-		print('click win1', button, click_count)
+	function win1:mousemove(x, y) print('mousemove win1', x, y) end
+	function win2:mousemove(x, y) print('mousemove win2', x, y) end
+	function win1:mousedown(button, x, y) print('mousedown win1', button, x, y) end
+	function win2:mousedown(button, x, y) print('mousedown win2', button, x, y) end
+	function win1:mouseup(button, x, y) print('mouseup win1', button, x, y) end
+	function win2:mouseup(button, x, y) print('mouseup win2', button, x, y) end
+	function win1:click(button, click_count, x, y)
+		print('click win1', button, click_count, x, y)
 		if click_count == 2 then return true end
 	end
-	function win2:click(button, click_count)
-		print('click win2', button, click_count)
+	function win2:click(button, click_count, x, y)
+		print('click win2', button, click_count, x, y)
 		if click_count == 3 then return true end
 	end
-	function win1:mousewheel(delta) print('wheel win1', delta) end
-	function win2:mousewheel(delta) print('wheel win2', delta) end
+	function win1:mousewheel(delta, x, y) print('wheel win1', delta, x, y) end
+	function win2:mousewheel(delta, x, y) print('wheel win2', delta, x, y) end
 
 	--keyboard
 	function win1:printkey(title, key, vkey)
-		print(string.format('%-20s %-20s %-20s %-20s %-20s', title, key, vkey, self:key(key), self:key(vkey)))
+		print(string.format('%-16s %-16s %-16s %-16s %-16s',
+			title, key, vkey, app:key(key), app:key(vkey)))
 	end
 	win2.printkey = win1.printkey
 	function win1:keydown(key, ...)
 		if key == 'N' then
 			app:ignore_numlock(not app:ignore_numlock())
+		elseif key == 'enter' then
+			print(string.format('keyboard state: capslock: %s, numlock: %s, scrolllock: %s',
+				tostring(app:key'^capslock'),
+				tostring(app:key'^numlock'),
+				tostring(app:key'^scrolllock')))
 		end
 		self:printkey('keydown', key, ...)
-		--print(self:key('ctrl+shift+F10'))
+		--print(app:key('ctrl+shift+F10'))
 	end
 	function win1:keypress(...)
 		self:printkey('   keypress', ...)
@@ -2234,7 +2244,7 @@ add('input', function()
 		self:printkey('keyup', ...)
 	end
 	function win1:keychar(s)
-		print('      keychar ', s)
+		print(string.format('%-16s %s', '      keychar', s))
 	end
 	win2.keydown = win1.keydown
 	win2.keypress = win1.keypress
@@ -2374,7 +2384,7 @@ add('bitmap', function()
 			win:restore()
 		elseif key == 'F' then
 			win:fullscreen(not win:fullscreen())
-		elseif win:key'command f4' or win:key'command w' then
+		elseif app:key'command f4' or app:key'command w' then
 			win:close()
 		end
 	end
@@ -2384,19 +2394,19 @@ add('bitmap', function()
 		local self = win
 		local d = 10
 
-		if self:key'left' then
+		if app:key'left' then
 			local x, y = win:normal_rect()
 			win:normal_rect(x - d, y)
 		end
-		if self:key'right' then
+		if app:key'right' then
 			local x, y = win:normal_rect()
 			win:normal_rect(x + d, y)
 		end
-		if self:key'up' then
+		if app:key'up' then
 			local x, y = win:normal_rect()
 			win:normal_rect(x, y - d)
 		end
-		if self:key'down' then
+		if app:key'down' then
 			local x, y = win:normal_rect()
 			win:normal_rect(x, y + d)
 		end

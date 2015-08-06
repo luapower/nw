@@ -15,6 +15,8 @@ require'winapi.windowclass'
 require'winapi.gdi'
 require'winapi.bitmap'
 require'winapi.icon'
+require'winapi.dpiaware'
+require'winapi.devcaps'
 
 local nw = {name = 'winapi'}
 
@@ -755,6 +757,7 @@ require'winapi.monitor'
 function app:_display(monitor)
 	local ok, info = pcall(winapi.GetMonitorInfo, monitor)
 	if not ok then return end
+	local scalingfactor = self:_get_scalingfactor()
 	return self.frontend:_display{
 		x = info.monitor_rect.x,
 		y = info.monitor_rect.y,
@@ -764,6 +767,7 @@ function app:_display(monitor)
 		cy = info.work_rect.y,
 		cw = info.work_rect.w,
 		ch = info.work_rect.h,
+		_scalingfactor = scalingfactor,
 	}
 end
 
@@ -1017,9 +1021,11 @@ function window:_reset_keystate()
 	realkey = nil
 end
 
-function Window:setkey(vk, flags, down)
+function Window:nw_setkey(vk, flags, down)
 	if vk == winapi.VK_SHIFT then
-		return --shift is handled using raw input because we don't get key up on shift if the other shift is pressed!
+		--shift is handled using raw input because we don't get key-up on shift
+		--if the other shift is pressed!
+		return
 	end
 	if winapi.IsAltGr(vk, flags) then
 		altgr = true --next key is 'ralt' which we'll make into 'altgr'
@@ -1035,21 +1041,23 @@ function Window:setkey(vk, flags, down)
 	end
 	if not name then return end --unmapped key
 	local searchname = name:lower()
-	if not keycodes[searchname] then --save the state of this key because we can't get it with GetKeyState()
+	if not keycodes[searchname] then
+		--save the state of this key because we can't get it with GetKeyState()
 		keystate[searchname] = down
 	end
-	if self.app.frontend:ignore_numlock() then --ignore the state of the numlock key (for games)
+	if self.app.frontend:ignore_numlock() then
+		--ignore the state of the numlock key
 		name = ignore_numlock_keys[name] or name
 	end
 	return name
 end
 
---prevent repeating these keys to emulate OSX behavior, and also because flags.prev_key_state
---doesn't work on them.
+--prevent repeating these keys to emulate OSX behavior, and also because
+--flags.prev_key_state doesn't work on them.
 local norepeat = glue.index{'lshift', 'rshift', 'lalt', 'ralt', 'altgr', 'lctrl', 'rctrl', 'capslock'}
 
 function Window:on_key_down(vk, flags)
-	local key = self:setkey(vk, flags, true)
+	local key = self:nw_setkey(vk, flags, true)
 	if not key then return end
 	if norepeat[key] then
 		if not repeatstate[key] then
@@ -1066,7 +1074,7 @@ function Window:on_key_down(vk, flags)
 end
 
 function Window:on_key_up(vk, flags)
-	local key = self:setkey(vk, flags, false)
+	local key = self:nw_setkey(vk, flags, false)
 	if not key then return end
 	if norepeat[key] then
 		repeatstate[key] = false
@@ -1093,17 +1101,20 @@ end
 
 local toggle_keys = glue.index{'capslock', 'numlock', 'scrolllock'}
 
-function window:key(name) --name is in lowercase!
+function app:key(name) --name is in lowercase!
 	if name:find'^%^' then --'^key' means get the toggle state for that key
 		name = name:sub(2)
-		if not toggle_keys[name] then return false end --windows has toggle state for all keys, we don't want that.
+		if not toggle_keys[name] then
+			--Windows has toggle state for all keys, we don't want that.
+			return false
+		end
 		local keycode = keycodes[name]
 		if not keycode then return false end
 		local _, on = winapi.GetKeyState(keycode)
 		return on
 	else
 		if numlock_off_keys[name]
-			and self.app.frontend:ignore_numlock()
+			and self.frontend:ignore_numlock()
 			and not self:key'^numlock'
 		then
 			return self:key(numlock_off_keys[name])
@@ -1118,7 +1129,6 @@ function window:key(name) --name is in lowercase!
 end
 
 function Window:on_raw_input(raw)
-
 	local vk = raw.data.keyboard.VKey
 	if vk == winapi.VK_SHIFT then
 		vk = winapi.MapVirtualKey(raw.data.keyboard.MakeCode, winapi.MAPVK_VSC_TO_VK_EX)
@@ -1562,6 +1572,27 @@ function window:getcairoview()
 	else
 		return self.cairoview2
 	end
+end
+
+--hi-dpi support -------------------------------------------------------------
+
+--this must be set as soon as possible, before the stretcher kicks in.
+function app:disable_autoscaling()
+	if not nw.frontend:os'Windows 6.0' then return end --Vista+ feature
+	winapi.SetProcessDPIAware()
+	--NOTE: on Win7, this returns true even if SetProcessDPIAware() is not called.
+	assert(winapi.IsProcessDPIAware())
+end
+
+function app:_get_scalingfactor()
+	if not self._scalingfactor then
+		local hwnd = winapi.GetDesktopWindow()
+		local hdc = winapi.GetDC(hwnd)
+		local dpi = winapi.GetDeviceCaps(hdc, winapi.LOGPIXELSX)
+		winapi.ReleaseDC(hwnd, hdc)
+		self._scalingfactor = dpi / 96
+	end
+	return self._scalingfactor
 end
 
 --menus ----------------------------------------------------------------------
