@@ -563,3 +563,5 @@ LOG
 03/08 - xlib mouse
 04/08 - xlib keyboard; reading glfw docs & code
 05/08 - french layout in osx and windows; reading about winapi's hi-dpi
+06/08 - documetned & published ringbuffer; installed win8.1; tested all hi-dpi API
+

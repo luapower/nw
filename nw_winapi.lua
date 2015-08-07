@@ -35,7 +35,7 @@ end
 --os version -----------------------------------------------------------------
 
 function nw:os(ver)
-	local vinfo = winapi.GetVersionEx()
+	local vinfo = winapi.RtlGetVersion()
 	return string.format('Windows %d.%d.SP%d.%d',
 		vinfo.dwMajorVersion, vinfo.dwMinorVersion,
 		vinfo.wServicePackMajor, vinfo.wServicePackMinor)
@@ -757,7 +757,7 @@ require'winapi.monitor'
 function app:_display(monitor)
 	local ok, info = pcall(winapi.GetMonitorInfo, monitor)
 	if not ok then return end
-	local scalingfactor = self:_get_scalingfactor()
+	local sf = self:_get_scaling_factor(monitor)
 	return self.frontend:_display{
 		x = info.monitor_rect.x,
 		y = info.monitor_rect.y,
@@ -767,7 +767,7 @@ function app:_display(monitor)
 		cy = info.work_rect.y,
 		cw = info.work_rect.w,
 		ch = info.work_rect.h,
-		_scalingfactor = scalingfactor,
+		_scalingfactor = sf,
 	}
 end
 
@@ -1576,23 +1576,41 @@ end
 
 --hi-dpi support -------------------------------------------------------------
 
---this must be set as soon as possible, before the stretcher kicks in.
+--NOTE: this must be called before the stretcher kicks in, i.e. before
+--creating windows or calling display-related APIs.
+--This will silently fail otherwise!
 function app:disable_autoscaling()
-	if not nw.frontend:os'Windows 6.0' then return end --Vista+ feature
-	winapi.SetProcessDPIAware()
-	--NOTE: on Win7, this returns true even if SetProcessDPIAware() is not called.
-	assert(winapi.IsProcessDPIAware())
+	if nw.frontend:os'Windows 6.3' then --Win8.1+ per-monitor DPI
+		local awareness = winapi.PROCESS_PER_MONITOR_DPI_AWARE
+		winapi.SetProcessDPIAwareness(awareness)
+		assert(winapi.GetProcessDPIAwareness() == awareness)
+	elseif nw.frontend:os'Windows 6.0' then --Vista+ global DPI
+		winapi.SetProcessDPIAware()
+		assert(winapi.IsProcessDPIAware())
+	end
 end
 
-function app:_get_scalingfactor()
-	if not self._scalingfactor then
-		local hwnd = winapi.GetDesktopWindow()
-		local hdc = winapi.GetDC(hwnd)
-		local dpi = winapi.GetDeviceCaps(hdc, winapi.LOGPIXELSX)
-		winapi.ReleaseDC(hwnd, hdc)
-		self._scalingfactor = dpi / 96
+function app:_get_scaling_factor(monitor)
+	if self.frontend.nw:os'Windows 6.3' then
+		--in Win8.1+ we have per-monitor DPI
+		local dpi = winapi.GetDPIForMonitor(monitor, winapi.MDT_EFFECTIVE_DPI)
+		return dpi / 96
+	else
+		--before Win8.1 we only have a global DPI (that of primary monitor).
+		--this value can't be changed without logoff so it's safe to memoize.
+		if not self._scalingfactor then
+			local hwnd = winapi.GetDesktopWindow()
+			local hdc = winapi.GetDC(hwnd)
+			local dpi = winapi.GetDeviceCaps(hdc, winapi.LOGPIXELSX)
+			winapi.ReleaseDC(hwnd, hdc)
+			self._scalingfactor = dpi / 96
+		end
+		return self._scalingfactor
 	end
-	return self._scalingfactor
+end
+
+function Window:on_dpi_changed(dpix)
+	self.frontend:_backend_scalingfactor_changed(dpix / 96)
 end
 
 --menus ----------------------------------------------------------------------

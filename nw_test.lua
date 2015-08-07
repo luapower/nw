@@ -2085,9 +2085,35 @@ add('display-out', function()
 	print'ok'
 end)
 
-add('display-scalingfactor', function()
+local function test_autoscaling(scaling)
+	app:autoscaling(scaling)
+	assert(app:autoscaling() == scaling)
+	for i,d in ipairs(app:displays()) do
+		print(string.format('display %d scaling factor:', i), d:scalingfactor())
+		print(string.format('display %d rectangle:     ', i), d:rect())
+		local x = d.x + 100
+		local y = d.y + 100
+		local cw0, ch0 = 300, 200
+		local win = app:window{x = x, y = y, cw = cw0, ch = ch0}
+		local cw, ch = win:size()
+		assert(cw == cw0) --autoscaling should not affect window client size
+		assert(ch == ch0)
+		print(string.format('window at (%d,%d) client size:', x, y), win:size())
+		win:close()
+	end
+end
+
+add('display-autoscaling-off', function() test_autoscaling(false) end)
+add('display-autoscaling-on', function() test_autoscaling(true) end)
+
+--move the window between screens with different scaling factors to see the event.
+add('display-scalingfactor-changed-check', function()
 	app:autoscaling(false)
-	print('scaling factor:', app:main_display():scalingfactor())
+	local win = app:window(winpos())
+	function win:scalingfactor_changed(factor)
+		print('scalingfactor_changed', factor)
+	end
+	app:run()
 end)
 
 --cursors --------------------------------------------------------------------

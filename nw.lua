@@ -1317,10 +1317,13 @@ end
 
 --hi-dpi support -------------------------------------------------------------
 
---set it before creating any windows to disable OS scaling
 function app:autoscaling(enabled)
+	if enabled == nil then
+		return not self._scaling_disabled
+	end
 	assert(not enabled or not self._scaling_disabled,
 		'autoscaling cannot be re-enabled once disabled')
+	if enabled then return end --nothing to do
 	if self._scaling_disabled then return end --already disabled
 	self.backend:disable_autoscaling()
 	self._scaling_disabled = true --enable barrier
@@ -1328,6 +1331,10 @@ end
 
 function display:scalingfactor()
 	return self._scalingfactor or 1
+end
+
+function window:_backend_scalingfactor_changed(scalingfactor)
+	self:_event('scalingfactor_changed', scalingfactor)
 end
 
 --views ----------------------------------------------------------------------
