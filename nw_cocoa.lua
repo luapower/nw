@@ -1102,7 +1102,7 @@ function Window:windowWillMove()
 end
 
 function Window:windowDidMove()
-	self.frontend:_backend_resized()
+	self.frontend:_backend_resized'move'
 end
 
 --positioning/magnets --------------------------------------------------------
