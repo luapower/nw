@@ -496,7 +496,7 @@ end
 
 --positioning/rectangles -----------------------------------------------------
 
-function window:get_normal_rect()
+function window:get_normal_frame_rect()
 	if self._fullscreen then
 		return unpack_rect(self._fs.normal_rect)
 	else
@@ -504,7 +504,7 @@ function window:get_normal_rect()
 	end
 end
 
-function window:set_normal_rect(x, y, w, h)
+function window:set_normal_frame_rect(x, y, w, h)
 	if self._fullscreen then
 		self._fs.normal_rect = pack_rect(nil, x, y, w, h)
 	else
@@ -518,7 +518,7 @@ function window:get_frame_rect()
 end
 
 function window:set_frame_rect(x, y, w, h)
-	self:set_normal_rect(x, y, w, h)
+	self:set_normal_frame_rect(x, y, w, h)
 	if self:visible() then
 		self:shownormal()
 	end
