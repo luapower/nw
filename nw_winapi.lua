@@ -668,10 +668,9 @@ function Window:on_resized(flag)
 			self.nw_maximizing = false
 		end
 
-		--when restoring a maximized window, 'maximized' is triggered instead of 'restored'. fix that.
-		local was_unminimized =
-			self.frontend._was_minimized and
-			self.frontend._was_maximized
+		--when restoring a minimized window via 'maximize', 'maximized' event
+		--is triggered instead of 'restored'. fix that.
+		local was_unminimized = self.frontend._was_minimized
 		self.frontend._was_maximized = true
 		self.frontend._was_minimized = false
 
