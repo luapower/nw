@@ -170,17 +170,16 @@ function window:new(app, frontend, t)
 	--we have to own the window because we use luavars.
 	self.nswin:setReleasedWhenClosed(false)
 
-	--fix bug with minaturize()/close()/makeKeyAndOrderFront() sequence
-	--which makes hovering on titlebar buttons not working.
+	--fix bug where the sequence miniaturize()/close()/makeKeyAndOrderFront()
+	--results in hovering on titlebar buttons not working.
 	self.nswin:setOneShot(true)
 
-	--if position is not given, cascade window, to emulate Windows behavior.
+	--if position is not given, cascade window to emulate Windows behavior.
 	if not t.x and not t.y then
 		cascadePoint = cascadePoint or objc.NSMakePoint(10, 20)
 		cascadePoint = self.nswin:cascadeTopLeftFromPoint(cascadePoint)
 	end
 
-	--set transparent.
 	if t.transparent then
 		self.nswin:setOpaque(false)
 		self.nswin:setBackgroundColor(objc.NSColor:clearColor())
@@ -189,16 +188,19 @@ function window:new(app, frontend, t)
 		--self.nswin:setIgnoresMouseEvents(true) --make it click-through
 	end
 
-	--set parent.
 	if t.parent then
 		t.parent.backend.nswin:addChildWindow_ordered(self.nswin, objc.NSWindowAbove)
 	end
 
 	self._disabled = not t.enabled
-	--enable events while moving and resizing.
+
+	--enable receiving events while moving and resizing.
+	--NOTE: this prevents moving while the window is not processing messages
+	--and makes moving the window a bit jerky. OTOH we get magnets and proper
+	--event sequence (when was Cocoa fast anyway?).
 	self.nswin:setMovable(false)
 
-	--enable full screen button.
+	--enable the fullscreen button.
 	if not toolbox and t.fullscreenable and nw.frontend:os'OSX 10.7' then
 		self.nswin:setCollectionBehavior(bit.bor(tonumber(self.nswin:collectionBehavior()),
 			objc.NSWindowCollectionBehaviorFullScreenPrimary)) --OSX 10.7+
@@ -219,10 +221,9 @@ function window:new(app, frontend, t)
 		end
 	end
 
-	--set the title.
 	self.nswin:setTitle(t.title)
 
-	--init keyboard API.
+	--enable keyboard API.
 	self.nswin:reset_keystate()
 
 	--init drawable content view.
@@ -316,7 +317,7 @@ function Window:windowWillClose()
 
 	if self.backend:active() then
 		--fake deactivation now because having close() not be async is more important.
-		--TODO: win:active() and app:active_window() are not consistent with this event.
+		--TODO: win:active() and app:active_window() are not consistent inside deactivated() event.
 		self.frontend:_backend_deactivated()
 	end
 
@@ -446,7 +447,7 @@ function window:show()
 	if self._minimized then
 		--if it was minimized before hiding, minimize it back.
 		--orderBack() shows the window before minimizing it, but not doing so
-		--hits another bug where the sequence minimize()/hide()/show()/restore()
+		--hits a bug where the sequence minimize()/hide()/show()/restore()
 		--makes hovering on titlebar buttons not working.
 		self.nswin:orderBack(nil)
 		self.nswin:miniaturize(nil)
