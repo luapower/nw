@@ -633,8 +633,7 @@ function Window:on_resizing(how, rect)
 end
 
 function Window:on_moved()
-	self.frontend:_backend_resized(self.nw_how)
-	self.nw_how = nil
+	self.frontend:_backend_resized'move'
 end
 
 function Window:on_show(shown, how)
@@ -693,7 +692,8 @@ function Window:on_resized(flag)
 		self.frontend._was_maximized = self.maximized
 
 		self.backend:invalidate()
-		self.frontend:_backend_resized()
+		self.frontend:_backend_resized(self.nw_how)
+		self.nw_how = nil
 
 		if was_unminimized then
 			self.frontend:_backend_was_unminimized()
