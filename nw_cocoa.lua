@@ -7,7 +7,6 @@ local bit = require'bit'
 local glue = require'glue'
 local box2d = require'box2d'
 local objc = require'objc'
---objc.debug.logtopics.refcount = true
 local cbframe = require'cbframe'
 
 local _cbframe = objc.debug.cbframe
@@ -340,6 +339,7 @@ function Window:windowWillClose()
 	--is a weak reference and we can't release weak references.
 	--NOTE: this will free all luavars.
 	self.backend.nswin:release()
+	self.backend.nswin = nil
 end
 
 --activation -----------------------------------------------------------------
@@ -532,14 +532,18 @@ end
 --state/maximizing -----------------------------------------------------------
 
 --NOTE: isZoomed() returns true for frameless windows.
---NOTE: isZoomed() returns true in fullscreen windows.
+--NOTE: isZoomed() returns true while in fullscreen mode.
+--NOTE: isZoomed() calls windowWillResize_toSize(), believe it!
 function window:maximized()
 	if self._maximized ~= nil then
 		return self._maximized
 	elseif self._frameless then
 		return self:_maximized_frame()
 	else
-		return self.nswin:isZoomed()
+		self.nswin.nw_zoomquery = true --nw_resizing() barrier
+		local zoomed = self.nswin:isZoomed()
+		self.nswin.nw_zoomquery = false
+		return zoomed
 	end
 end
 
@@ -945,6 +949,7 @@ end
 local function resize_area_hit(mx, my, w, h)
 	local co = 15 --corner offset
 	local mo = 4 --margin offset
+	print(mx, my, w, h)
 	if box2d.hit(mx, my, box2d.offset(co, 0, 0, 0, 0)) then
 		return 'bottomleft'
 	elseif box2d.hit(mx, my, box2d.offset(co, w, 0, 0, 0)) then
@@ -1034,7 +1039,7 @@ function Window:sendEvent(event)
 end
 
 --also triggered on maximize.
-function Window:windowWillStartLiveResize()
+function Window:windowWillStartLiveResize(notification)
 	if not self.mousepos then
 		self.mousepos = self:mouseLocationOutsideOfEventStream()
 	end
@@ -1046,12 +1051,13 @@ end
 
 --also triggered on maximize.
 function Window:windowDidEndLiveResize()
-	self.frontend:_backend_end_resize()
+	self.frontend:_backend_end_resize(self.how)
 	--self.backend:_end_frame_change()
+	self.how = nil
 end
 
 function Window:nw_resizing(w_, h_)
-	if not self.how then return w_, h_ end
+	if self.nw_zoomquery or not self.how then return w_, h_ end
 	local x, y, w, h = flip_screen_rect(nil, unpack_nsrect(self:frame()))
 	if self.how:find'top' then y, h = y + h - h_, h_ end
 	if self.how:find'bottom' then h = h_ end
@@ -1089,14 +1095,14 @@ end
 function Window:windowDidResize()
 	if self.frontend:dead() then return end
 	self.frontend:_backend_resized(self.how)
-	self.how = nil
 end
 
 function Window:windowWillMove()
+	print'willMove'
 end
 
 function Window:windowDidMove()
-	self.frontend:_backend_changed()
+	self.frontend:_backend_resized()
 end
 
 --positioning/magnets --------------------------------------------------------
@@ -1170,6 +1176,7 @@ function app:_display(main_h, screen)
 	t.x, t.y, t.w, t.h = flip_screen_rect(main_h, unpack_nsrect(screen:frame()))
 	t.cx, t.cy, t.cw, t.ch =
 		flip_screen_rect(main_h, unpack_nsrect(screen:visibleFrame()))
+	t.scalingfactor = screen:backingScaleFactor()
 	return self.frontend:_display(t)
 end
 
@@ -1193,7 +1200,7 @@ function app:display_count()
 end
 
 function app:main_display()
-	return self:_display(nil, screens:objectAtIndex(0)) --main screen always comes first
+	return self:_display(nil, objc.NSScreen:screens():objectAtIndex(0)) --main screen always comes first
 end
 
 --NOTE: mainScreen() actually means the screen which has keyboard focus.
@@ -1447,12 +1454,15 @@ function Window:keyDown(event)
 	end
 	self.frontend:_backend_keypress(key)
 
-	local s = objc.tolua(event:characters()) --NOTE: #s can be > 1
-	if s ~= '' then --not a dead key
-		if s:byte(1) > 31 and s:byte(1) < 127 then --not a control key
-			self.frontend:_backend_keychar(s)
-		end
-	end
+	--interpret key to generate insertText()
+	self:interpretKeyEvents(objc.NSArray:arrayWithObject(event))
+end
+
+function Window:insertText(s)
+	local s = objc.tolua(s)
+	if s == '' then return end --dead key
+	--if s:byte(1) > 31 and s:byte(1) < 127 then --not a control key
+	self.frontend:_backend_keychar(s)
 end
 
 function Window:keyUp(event)
@@ -1721,8 +1731,8 @@ local function make_bitmap(w, h)
 	local info = bit.bor(objc.kCGBitmapByteOrder32Little, objc.kCGImageAlphaPremultipliedFirst)
 
 	local bounds = ffi.new'CGRect'
-	bounds.size.width = w
-	bounds.size.height = h
+	bounds.size.width = w / 2
+	bounds.size.height = h / 2
 
 	local function paint()
 
@@ -1779,6 +1789,8 @@ local function dynbitmap(api)
 
 	function api:get()
 		local w1, h1 = api:size()
+		w1 = w1 * 2
+		h1 = h1 * 2
 		if w1 ~= w or h1 ~= h then
 			self:free()
 			bitmap, free, paint = make_bitmap(w1, h1)
@@ -1836,7 +1848,6 @@ function window:_init_content_view()
 
 	--create our custom view and set it as the content view.
 	local bounds = self.nswin:contentView():bounds()
-
 	self.nsview = RepaintView:alloc():initWithFrame(bounds)
 
 	function self.nsview.nw_repaint()
@@ -1858,7 +1869,7 @@ function window:_free_bitmap()
 end
 
 function window:invalidate(x, y, w, h)
-	if x and y and w and h then
+	if x then
 		self.nswin:contentView():setNeedsDisplayInRect(objc.NSMakeRect(x, y, w, h))
 	else
 		self.nswin:contentView():setNeedsDisplay(true)
@@ -1892,6 +1903,25 @@ glue.autoload(window, {
 
 function window:getcairoview()
 	return self.cairoview
+end
+
+--hi-dpi support -------------------------------------------------------------
+
+function app:get_autoscaling()
+	return false --always off
+end
+
+function app:enable_autoscaling()
+	--NOTE: not supported.
+end
+
+function app:disable_autoscaling()
+	--NOTE: nothing to disable, it's always off
+end
+
+function Window:windowDidChangeBackingProperties()
+	local scalingfactor = self:screen():backingScaleFactor()
+	self.frontend:_backend_scalingfactor_changed(scalingfactor)
 end
 
 --menus ----------------------------------------------------------------------

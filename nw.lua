@@ -6,7 +6,6 @@ local ffi = require'ffi'
 local glue = require'glue'
 local box2d = require'box2d'
 local time = require'time'
-require'strict'
 
 local nw = {}
 
@@ -1319,18 +1318,13 @@ end
 
 function app:autoscaling(enabled)
 	if enabled == nil then
-		return not self._scaling_disabled
+		return self.backend:get_autoscaling()
 	end
-	assert(not enabled or not self._scaling_disabled,
-		'autoscaling cannot be re-enabled once disabled')
-	if enabled then return end --nothing to do
-	if self._scaling_disabled then return end --already disabled
-	self.backend:disable_autoscaling()
-	self._scaling_disabled = true --enable barrier
-end
-
-function display:scalingfactor()
-	return self._scalingfactor or 1
+	if enabled then
+		self.backend:enable_autoscaling()
+	else
+		self.backend:disable_autoscaling()
+	end
 end
 
 function window:_backend_scalingfactor_changed(scalingfactor)

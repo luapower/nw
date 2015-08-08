@@ -628,11 +628,13 @@ function Window:on_moving(rect)
 end
 
 function Window:on_resizing(how, rect)
+	self.nw_how = how
 	self:nw_frame_changing(how, rect)
 end
 
 function Window:on_moved()
-	self.frontend:_backend_resized()
+	self.frontend:_backend_resized(self.nw_how)
+	self.nw_how = nil
 end
 
 function Window:on_show(shown, how)
@@ -767,7 +769,7 @@ function app:_display(monitor)
 		cy = info.work_rect.y,
 		cw = info.work_rect.w,
 		ch = info.work_rect.h,
-		_scalingfactor = sf,
+		scalingfactor = sf,
 	}
 end
 
@@ -1576,18 +1578,25 @@ end
 
 --hi-dpi support -------------------------------------------------------------
 
+function app:get_autoscaling()
+	return not self._scaling_disabled
+end
+
 --NOTE: this must be called before the stretcher kicks in, i.e. before
 --creating windows or calling display-related APIs.
 --This will silently fail otherwise!
 function app:disable_autoscaling()
+	if self._scaling_disabled then return end
 	if nw.frontend:os'Windows 6.3' then --Win8.1+ per-monitor DPI
-		local awareness = winapi.PROCESS_PER_MONITOR_DPI_AWARE
-		winapi.SetProcessDPIAwareness(awareness)
-		assert(winapi.GetProcessDPIAwareness() == awareness)
+		winapi.SetProcessDPIAwareness(winapi.PROCESS_PER_MONITOR_DPI_AWARE)
 	elseif nw.frontend:os'Windows 6.0' then --Vista+ global DPI
 		winapi.SetProcessDPIAware()
-		assert(winapi.IsProcessDPIAware())
 	end
+	self._scaling_disabled = true
+end
+
+function app:enable_autoscaling()
+	--NOTE: autoscaling can't be re-enabled once disabled.
 end
 
 function app:_get_scaling_factor(monitor)

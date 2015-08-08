@@ -1,6 +1,7 @@
 io.stdout:setvbuf'no'
 io.stderr:setvbuf'no'
 
+require'strict'
 local nw = require'nw'
 local glue = require'glue'
 local ffi = require'ffi'
@@ -848,8 +849,8 @@ What you should know about window states:
 ]]
 
 local function state_string(win)
+	if win:dead() then return 'x' end
 	return
-		(win:dead() and 'x' or '')..
 		(win:visible() and 'v' or '')..
 		(win:minimized() and 'm' or '')..
 		(win:maximized() and 'M' or '')..
@@ -873,6 +874,8 @@ local function init_check(t, child)
 
 			t.w = 700
 			t.h = 300
+			--t.edgesnapping = false
+			t.autoquit = true
 			win = app:window(winpos(t))
 
 			function win1:keypress(key)
@@ -1065,9 +1068,11 @@ local function init_check(t, child)
 			end
 
 			local i = 0
-			app:runevery(0.01, function()
+			app:runevery(1/30, function()
 				i = i + 10
-				win:invalidate()
+				if not win:dead() then
+					win:invalidate()
+				end
 			end)
 
 			function win:repaint()
@@ -1077,7 +1082,7 @@ local function init_check(t, child)
 					for x = 0, bmp.w-1 do
 						local i = (i % bmp.w)
 						local c = x >= i and x <= i + 50 and 255 or 0
-						setpixel(x, y, c, c, c, 200)
+						setpixel(x, y, c, c, c, 255)
 					end
 				end
 			end
@@ -2087,10 +2092,11 @@ end)
 
 local function test_autoscaling(scaling)
 	app:autoscaling(scaling)
-	assert(app:autoscaling() == scaling)
+	print('autoscaling: ', scaling, app:autoscaling() == scaling and 'ok' or 'failed')
+
 	for i,d in ipairs(app:displays()) do
 
-		print(string.format('display %d scaling factor:', i), d:scalingfactor())
+		print(string.format('display %d scaling factor:', i), d.scalingfactor)
 		print(string.format('display %d rectangle:     ', i), d:rect())
 
 		--create a window on this display and check its dimensions
@@ -2122,10 +2128,13 @@ add('display-autoscaling-on', function() test_autoscaling(true) end)
 --move the window between screens with different scaling factors to see the event.
 add('display-scalingfactor-changed-check', function()
 	app:autoscaling(false)
-	local win = app:window(winpos())
+	local win = app:window{cw = 300, ch = 200}
 	function win:scalingfactor_changed(factor)
 		print('scalingfactor_changed', factor)
 	end
+	app:runevery(1, function()
+		print(string.format('scaling factor: %d, client size: %d x %d', win:display().scalingfactor, win:size()))
+	end)
 	app:run()
 end)
 
@@ -2954,10 +2963,11 @@ add('xlib', function()
 
 	function win1:repaint()
 		local bmp = self:bitmap()
+		pp(bmp)
 		local _, setpixel = require'bitmap'.pixel_interface(bmp)
 		for y=0,bmp.h-1 do
 			for x=0,bmp.w-1 do
-				setpixel(x, y, x, y, x, x)
+				setpixel(x, y, x + y, y, x, 150)
 			end
 		end
 		--ffi.fill(bmp.data, bmp.stride * 10, 0x80)
