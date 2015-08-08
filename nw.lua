@@ -1030,7 +1030,6 @@ function window:_getmagnets()
 	elseif opt.other then
 		error'NYI' --TODO: magnets excluding app's windows
 	end
-
 	if opt.screen then
 		t = t or {}
 		for i,disp in ipairs(self.app:displays()) do

@@ -567,4 +567,4 @@ LOG
 05/08 - french layout in osx and windows; reading about winapi's hi-dpi
 06/08 - documetned & published ringbuffer; installed win8.1; tested all hi-dpi API
 07/08 - hi-dpi secondary monitor; tested cocoa hi-dpi change event and unscaled rendering
-07/08 - fixed cbframe regression; cbframe cpu stack;
+07/08 - fixed cbframe regression; cbframe cpu stack; osx fixed resizing events
