@@ -58,9 +58,6 @@ function app:new(frontend)
 
 	self = glue.inherit({frontend = frontend}, self)
 
-	--create the default autorelease pool for small objects.
-	self.pool = objc.NSAutoreleasePool:new()
-
 	--NOTE: we have to reference mainScreen() before using any of the
 	--display functions, or we will get NSRecursiveLock errors.
 	objc.NSScreen:mainScreen()
@@ -103,7 +100,7 @@ end
 
 --quitting -------------------------------------------------------------------
 
---NOTE: quitting the app from the app's Dock menu calls appShouldTerminate, then calls close()
+--NOTE: quitting the app from the app's Dock menu calls applicationShouldTerminate, then calls close()
 --on all windows, thus without calling windowShouldClose(), but only windowWillClose().
 --NOTE: there's no windowDidClose() event and so windowDidResignKey() comes after windowWillClose().
 --NOTE: applicationWillTerminate() is never called.
@@ -173,17 +170,16 @@ function window:new(app, frontend, t)
 	--we have to own the window because we use luavars.
 	self.nswin:setReleasedWhenClosed(false)
 
-	--fix bug with minaturize()/close()/makeKeyAndOrderFront() sequence
-	--which makes hovering on titlebar buttons not working.
+	--fix bug where the sequence miniaturize()/close()/makeKeyAndOrderFront()
+	--results in hovering on titlebar buttons not working.
 	self.nswin:setOneShot(true)
 
-	--if position is not given, cascade window, to emulate Windows behavior.
+	--if position is not given, cascade window to emulate Windows behavior.
 	if not t.x and not t.y then
 		cascadePoint = cascadePoint or objc.NSMakePoint(10, 20)
 		cascadePoint = self.nswin:cascadeTopLeftFromPoint(cascadePoint)
 	end
 
-	--set transparent.
 	if t.transparent then
 		self.nswin:setOpaque(false)
 		self.nswin:setBackgroundColor(objc.NSColor:clearColor())
@@ -192,17 +188,19 @@ function window:new(app, frontend, t)
 		--self.nswin:setIgnoresMouseEvents(true) --make it click-through
 	end
 
-	--set parent.
 	if t.parent then
 		t.parent.backend.nswin:addChildWindow_ordered(self.nswin, objc.NSWindowAbove)
 	end
 
-	--enable moving events.
 	self._disabled = not t.enabled
-	self._edgesnapping = t.edgesnapping
-	self:_set_movable()
 
-	--enable full screen button.
+	--enable receiving events while moving and resizing.
+	--NOTE: this prevents moving while the window is not processing messages
+	--and makes moving the window a bit jerky. OTOH we get magnets and proper
+	--event sequence (when was Cocoa fast anyway?).
+	self.nswin:setMovable(false)
+
+	--enable the fullscreen button.
 	if not toolbox and t.fullscreenable and nw.frontend:os'OSX 10.7' then
 		self.nswin:setCollectionBehavior(bit.bor(tonumber(self.nswin:collectionBehavior()),
 			objc.NSWindowCollectionBehaviorFullScreenPrimary)) --OSX 10.7+
@@ -223,10 +221,9 @@ function window:new(app, frontend, t)
 		end
 	end
 
-	--set the title.
 	self.nswin:setTitle(t.title)
 
-	--init keyboard API.
+	--enable keyboard API.
 	self.nswin:reset_keystate()
 
 	--init drawable content view.
@@ -320,7 +317,7 @@ function Window:windowWillClose()
 
 	if self.backend:active() then
 		--fake deactivation now because having close() not be async is more important.
-		--TODO: win:active() and app:active_window() are not consistent with this event.
+		--TODO: win:active() and app:active_window() are not consistent inside deactivated() event.
 		self.frontend:_backend_deactivated()
 	end
 
@@ -393,9 +390,8 @@ end
 --Only windows activated while the app is inactive will move to front when the app is activated,
 --but other windows will not, unlike clicking the dock icon, which moves all the app's window in front.
 --So only the windows made key after the call to activateIgnoringOtherApps(true) are moved to front!
---NOTE: makeKeyAndOrderFront() is deferred to after the message loop is started,
---after which a single windowDidBecomeKey is triggered on the last window made key,
---unlike Windows which activates/deactivates windows as it happens, without a message loop.
+--NOTE: windowDidBecomeKey event is triggered after the message loop is started on last window made key,
+--unlike Windows which activates/deactivates windows directly without going through the message loop.
 function window:activate()
 	self.nswin:makeKeyAndOrderFront(nil) --NOTE: async operation and can fail
 end
@@ -449,11 +445,12 @@ end
 function window:show()
 	if self._visible then return end
 	if self._minimized then
-		--was minimized before hiding, minimize it back.
-		--TODO: does this activate the window? in Linux and Windows it does not.
+		--if it was minimized before hiding, minimize it back.
+		--orderBack() shows the window before minimizing it, but not doing so
+		--hits a bug where the sequence minimize()/hide()/show()/restore()
+		--makes hovering on titlebar buttons not working.
+		self.nswin:orderBack(nil)
 		self.nswin:miniaturize(nil)
-		--windowDidMiniaturize() is not called from hidden.
-		self:_did_minimize()
 	else
 		self._visible = true
 		--TODO: we need/assume that orderFront() is blocking. confirm that it is.
@@ -492,7 +489,13 @@ end
 --NOTE: miniaturize() in fullscreen mode is ignored.
 --NOTE: miniaturize() shows the window if hidden.
 function window:minimize()
-	--TODO: does this activate the window? in Linux and Windows it does not.
+	if not self._visible then
+		--if it was hidden, minimize it again to show it.
+		--orderBack() shows the window before minimizing it, but not doing so
+		--hits another bug where the sequence hide()/minimize()/restore() makes
+		--hovering on titlebar buttons not working.
+		self.nswin:orderBack(nil)
+	end
 	self.nswin:miniaturize(nil)
 	--windowDidMiniaturize() is not called from hidden.
 	if not self._visible then
@@ -507,26 +510,34 @@ function window:_unminimize()
 	--windowDidDeminiaturize() is not called from hidden.
 	if not self._visible then
 		self.frontend:_backend_was_shown()
-		self:_did_minimize()
+		self:_did_unminimize()
 	end
 end
 
 function window:_did_minimize()
 	self._visible = true
 	self._minimized = nil
-	self.frontend:_backend_changed()
+end
+
+function window:_did_unminimize()
+	self._visible = true
+	self._minimized = nil
 end
 
 --NOTE: windowDidMiniaturize() is not called if minimizing from hidden state.
 function Window:windowDidMiniaturize()
-	self.frontend:_backend_was_unminimized()
+	if not self.backend._visible then
+		self.frontend:_backend_was_shown()
+	else
+		self.frontend:_backend_was_minimized()
+	end
 	self.backend:_did_minimize()
 end
 
 --NOTE: windowDidDeminiaturize() is not called if restoring from hidden state.
 function Window:windowDidDeminiaturize()
-	self.frontend:_backend_was_minimized()
-	self.backend:_did_minimize()
+	self.frontend:_backend_was_unminimized()
+	self.backend:_did_unminimize()
 end
 
 --state/maximizing -----------------------------------------------------------
@@ -781,7 +792,6 @@ end
 
 function window:set_enabled(enabled)
 	self._disabled = not enabled
-	self:_set_movable()
 end
 
 --positioning/conversions ----------------------------------------------------
@@ -975,15 +985,6 @@ function Window:nw_resize_area_hit(event)
 	return resize_area_hit(mp.x, mp.y, w, h)
 end
 
-function window:_set_movable()
-	self.nswin:setMovable(not self._edgesnapping and not self._disabled)
-end
-
-function window:set_edgesnapping(snapping)
-	self._edgesnapping = snapping
-	self:_set_movable()
-end
-
 --NOTE: No event is triggered while moving a window and frame_rect() is not
 --updated either. For these reasons we take control over moving the window.
 --This makes the window unmovable if/while the app blocks on the main thread.
@@ -991,49 +992,47 @@ end
 function Window:sendEvent(event)
 	if self.frontend:dead() then return end
 	if self.backend._disabled then return end --disable events completely
-	if self.frontend:edgesnapping() then
-		--take over window dragging by the titlebar so that we can post moving events
-		local etype = event:type()
-		if self.dragging then
-			if etype == objc.NSLeftMouseDragged then
-				self:setmouse(event)
-				local mx = self.frontend._mouse.x - self.dragpoint_x
-				local my = self.frontend._mouse.y - self.dragpoint_y
-				local x, y, w, h = flip_screen_rect(nil, unpack_nsrect(self:frame()))
-				x = x + mx
-				y = y + my
-				local x1, y1, w1, h1 = self.frontend:_backend_resizing('move', x, y, w, h)
-				if x1 or y1 or w1 or h1 then
-					self:setFrame_display(objc.NSMakeRect(flip_screen_rect(nil,
-						override_rect(x, y, w, h, x1, y1, w1, h1))), false)
-				else
-					self:setFrameOrigin(mp)
-				end
-				return
-			elseif etype == objc.NSLeftMouseUp then
-				self.dragging = false
-				self.mousepos = nil
-				self.frontend:_backend_end_resize'move'
-				--self.backend:_end_frame_change()
-				return
-			end
-		elseif etype == objc.NSLeftMouseDown
-			and not self:nw_clientarea_hit(event)
-			and not self:nw_titlebar_buttons_hit(event)
-			and not self:nw_resize_area_hit(event)
-		then
+	--take over window dragging by the titlebar so that we can post moving events
+	local etype = event:type()
+	if self.dragging then
+		if etype == objc.NSLeftMouseDragged then
 			self:setmouse(event)
-			self:makeKeyAndOrderFront(nil) --NOTE: async operation
-			self.app:activate()
-			self.dragging = true
-			self.dragpoint_x = self.frontend._mouse.x
-			self.dragpoint_y = self.frontend._mouse.y
-			self.frontend:_backend_start_resize'move'
+			local mx = self.frontend._mouse.x - self.dragpoint_x
+			local my = self.frontend._mouse.y - self.dragpoint_y
+			local x, y, w, h = flip_screen_rect(nil, unpack_nsrect(self:frame()))
+			x = x + mx
+			y = y + my
+			local x1, y1, w1, h1 = self.frontend:_backend_resizing('move', x, y, w, h)
+			if x1 or y1 or w1 or h1 then
+				self:setFrame_display(objc.NSMakeRect(flip_screen_rect(nil,
+					override_rect(x, y, w, h, x1, y1, w1, h1))), false)
+			else
+				self:setFrameOrigin(mp)
+			end
 			return
-		elseif etype == objc.NSLeftMouseDown then
-			self:makeKeyAndOrderFront(nil) --NOTE: async operation
-			self.mousepos = event:locationInWindow() --for resizing
+		elseif etype == objc.NSLeftMouseUp then
+			self.dragging = false
+			self.mousepos = nil
+			self.frontend:_backend_end_resize'move'
+			--self.backend:_end_frame_change()
+			return
 		end
+	elseif etype == objc.NSLeftMouseDown
+		and not self:nw_clientarea_hit(event)
+		and not self:nw_titlebar_buttons_hit(event)
+		and not self:nw_resize_area_hit(event)
+	then
+		self:setmouse(event)
+		self:makeKeyAndOrderFront(nil) --NOTE: async operation
+		self.app:activate()
+		self.dragging = true
+		self.dragpoint_x = self.frontend._mouse.x
+		self.dragpoint_y = self.frontend._mouse.y
+		self.frontend:_backend_start_resize'move'
+		return
+	elseif etype == objc.NSLeftMouseDown then
+		self:makeKeyAndOrderFront(nil) --NOTE: async operation
+		self.mousepos = event:locationInWindow() --for resizing
 	end
 	objc.callsuper(self, 'sendEvent', event)
 end

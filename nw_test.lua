@@ -899,10 +899,10 @@ local function init_check(t, child)
 
 			function win:closed()      print'   closed' end
 
+			function app:activated()       print_state'app activated' end
 			function win:activated()       print_state'   activated' end
 			function win:deactivated()     print_state'   deactivated' end
-			function app:activated()       print_state'      app activated' end
-			function app:deactivated()     print_state'      app deactivated' end
+			function app:deactivated()     print_state'app deactivated' end
 
 			function win:start_resize(...) print_state('   start_resize', ...) end
 			function win:resizing(...)     print_state('      resizing', ...) end
@@ -926,6 +926,8 @@ local function init_check(t, child)
 	F1       help
 	H        hide
 	S        show
+	K        app hide
+	L        app hide and unhide after 1s
 	esc      restore
 	D        shownormal
 	F        toggle fullscreen
@@ -1040,6 +1042,13 @@ local function init_check(t, child)
 					win:cursor(next_cursor())
 				elseif key == 'Q' then
 					self.app:quit()
+				elseif key == 'K' then
+					self.app:hide()
+				elseif key == 'L' then
+					self.app:hide()
+					self.app:runafter(1, function()
+						self.app:unhide()
+					end)
 				elseif key == 'F1' then
 					print(help)
 				elseif key == 'enter' then
@@ -1049,6 +1058,7 @@ local function init_check(t, child)
 					print('active         ', win:active())
 					print('active window  ', app:active_window() and app:active_window().name)
 					print('app active     ', app:active())
+					print('app hidden     ', app:hidden())
 					print('enabled        ', win:enabled())
 					print('sticky         ', win:sticky())
 					print('frame_rect     ', win:frame_rect())
@@ -1075,8 +1085,9 @@ local function init_check(t, child)
 				end
 			end)
 
-			function win:repaint()
+			app:runevery(1, function()
 				local bmp = win:bitmap()
+				if not bmp then return end
 				local _, setpixel = bitmap.pixel_interface(bmp)
 				for y = 0, bmp.h-1 do
 					for x = 0, bmp.w-1 do
@@ -1085,7 +1096,7 @@ local function init_check(t, child)
 						setpixel(x, y, c, c, c, 255)
 					end
 				end
-			end
+			end)
 			win:invalidate()
 
 			function win:closing()
