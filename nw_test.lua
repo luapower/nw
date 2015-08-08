@@ -2089,16 +2089,29 @@ local function test_autoscaling(scaling)
 	app:autoscaling(scaling)
 	assert(app:autoscaling() == scaling)
 	for i,d in ipairs(app:displays()) do
+
 		print(string.format('display %d scaling factor:', i), d:scalingfactor())
 		print(string.format('display %d rectangle:     ', i), d:rect())
+
+		--create a window on this display and check its dimensions
 		local x = d.x + 100
 		local y = d.y + 100
 		local cw0, ch0 = 300, 200
-		local win = app:window{x = x, y = y, cw = cw0, ch = ch0}
+		local win = app:window{x = x, y = y, cw = cw0, ch = ch0, visible = false}
+
+		--check that the window was indeed created on that monitor even if hidden.
+		local d1 = win:display()
+		assert(d1.x == d.x)
+		assert(d1.y == d.y)
+
+		--check that autoscaling does not affect window's client size.
 		local cw, ch = win:size()
-		assert(cw == cw0) --autoscaling should not affect window client size
+		assert(cw == cw0)
 		assert(ch == ch0)
-		print(string.format('window at (%d,%d) client size:', x, y), win:size())
+		print(string.format('window at (%d,%d):', x, y))
+		print('', 'display:    ', d:rect())
+		print('', 'client size:', win:size())
+
 		win:close()
 	end
 end

@@ -3,17 +3,17 @@ TODO
 easy:
 	- capslock/numlock bug
 	- keychar events
-	- check that key state is not pulled in key events, including keychar!
+	- check that key state query is not async in key events, including keychar!
 	- mouse movement event coalescing?
 	- mouse movement history
-	- query mouse position and buttons
+	- query mouse position and button state
 	- set mouse position? XWarpPointer
 
 	- hide cursor (but otherwise act normal)
 	- standard cursor
 	- custom image cursor
 	- high dpi
-	- frame_widths()
+	- frame_extents()
 	- active=false init flag
 	- shm painting
 	- cairo view
@@ -23,9 +23,10 @@ easy:
 hard:
 	- activable
 	- enabled
-	- expose while minimized
+	- why expose is sent while minimized
 	- test invalidate(x, y, w, h)
 	- jank control?
+	- check that mouse and keyboard state are always in sync and never polled
 
 
 APP
@@ -545,6 +546,7 @@ OpenGL feats
 - gama ramp
 - double/single buffering
 - full screen video modes
+- enable hi-dpi backbuffer (OSX)
 
 
 LOG
@@ -564,4 +566,5 @@ LOG
 04/08 - xlib keyboard; reading glfw docs & code
 05/08 - french layout in osx and windows; reading about winapi's hi-dpi
 06/08 - documetned & published ringbuffer; installed win8.1; tested all hi-dpi API
+07/08 - hi-dpi secondary monitor; tested cocoa hi-dpi change event and unscaled rendering
 
