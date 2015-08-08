@@ -194,7 +194,7 @@ end
 function Window:on_destroy()
 	if not self.nw_destroying then
 		self.nw_destroying = true
-		self.frontend:_backend_closed() --this may trigger on_destroy() again!
+		self.frontend:_backend_was_closed() --this may trigger on_destroy() again!
 	end
 	if not self.nw_destroyed then
 		self.nw_destroyed = true
@@ -232,7 +232,7 @@ function app:_activated()
 		self._activate = true
 	elseif not self._active then --ignore duplicate events.
 		self._active = true
-		self.frontend:_backend_activated()
+		self.frontend:_backend_changed()
 	end
 end
 
@@ -242,7 +242,7 @@ function app:_deactivated()
 		self._activate = nil
 	elseif self._active then --ignore duplicate events.
 		self._active = false
-		self.frontend:_backend_deactivated()
+		self.frontend:_backend_changed()
 	end
 end
 
@@ -255,7 +255,7 @@ function window:_activated()
 		self.app._activate_window = self
 	elseif not self._active then --ignore duplicate events.
 		self._active = true
-		self.frontend:_backend_activated()
+		self.frontend:_backend_changed()
 	end
 end
 
@@ -266,7 +266,7 @@ function window:_deactivated()
 		self.app._activate_window = nil
 	elseif self._active then --ignore duplicate events.
 		self._active = false
-		self.frontend:_backend_deactivated()
+		self.frontend:_backend_changed()
 	end
 end
 
@@ -415,7 +415,7 @@ function window:enter_fullscreen()
 	--restore events, and trigger a single resize event and a repaint.
 	self._norepaint = false
 	self.frontend:events(events)
-	self.frontend:_backend_resized()
+	self.frontend:_backend_changed()
 	self:invalidate()
 end
 
@@ -440,7 +440,7 @@ function window:exit_fullscreen()
 	--restore events, and trigger a single resize event and a repaint.
 	self._norepaint = false
 	self.frontend:events(events)
-	self.frontend:_backend_resized()
+	self.frontend:_backend_changed()
 	self:invalidate()
 end
 
@@ -509,7 +509,7 @@ function window:set_normal_rect(x, y, w, h)
 		self._fs.normal_rect = pack_rect(nil, x, y, w, h)
 	else
 		self.win.normal_rect = pack_rect(nil, x, y, w, h)
-		self.frontend:_backend_resized()
+		self.frontend:_backend_changed()
 	end
 end
 
@@ -569,7 +569,7 @@ function Window:on_end_sizemove()
 	self.nw_start_resize = false
 	local how = self.nw_sizemove_how
 	self.nw_sizemove_how = nil
-	self.frontend:_backend_end_resize(how)
+	self.frontend:_backend_sizing('end', how)
 
 	--fix bug where moving non-activable child toolboxes deactivates the parent.
 	if not self.frontend:activable() then
@@ -584,7 +584,7 @@ function Window:nw_frame_changing(how, rect)
 	--trigger the deferred start_resize event, once.
 	if self.nw_start_resize then
 		self.nw_start_resize = false
-		self.frontend:_backend_start_resize(how)
+		self.frontend:_backend_sizing('start', how)
 	end
 
 	if how == 'move' then
@@ -596,7 +596,7 @@ function Window:nw_frame_changing(how, rect)
 		rect.y = m.y - self.nw_dy
 	end
 
-	pack_rect(rect, self.frontend:_backend_resizing(how, unpack_rect(rect)))
+	pack_rect(rect, self.frontend:_backend_sizing('progress', how, unpack_rect(rect)))
 
 	if how == 'move' then
 
@@ -633,16 +633,12 @@ function Window:on_resizing(how, rect)
 end
 
 function Window:on_moved()
-	self.frontend:_backend_resized'move'
+	self.frontend:_backend_changed()
 end
 
 function Window:on_show(shown, how)
 	if how then return end --we're only interested in ShowWindow calls
-	if shown then
-		self.frontend:_backend_was_shown()
-	else
-		self.frontend:_backend_was_hidden()
-	end
+	self.frontend:_backend_changed()
 end
 
 function Window:on_resized(flag)
@@ -653,9 +649,6 @@ function Window:on_resized(flag)
 	if flag == 'minimized' then
 
 		self.frontend._was_minimized = true
-
-		self.frontend:_backend_resized()
-		self.frontend:_backend_was_minimized()
 
 	elseif flag == 'maximized' then
 
@@ -668,42 +661,20 @@ function Window:on_resized(flag)
 			self.nw_maximizing = false
 		end
 
-		--when restoring a minimized window via 'maximize', 'maximized' event
-		--is triggered instead of 'restored'. fix that.
-		local was_unminimized = self.frontend._was_minimized
 		self.frontend._was_maximized = true
 		self.frontend._was_minimized = false
 
 		self.backend:invalidate()
-		self.frontend:_backend_resized()
-
-		if was_unminimized then
-			self.frontend:_backend_was_unminimized()
-		else
-			self.frontend:_backend_was_maximized()
-		end
 
 	elseif flag == 'restored' then --also triggered on show
 
-		local was_unminimized = self.frontend._was_minimized and not self.minimized
-		local was_unmaximized = self.frontend._was_maximized and not self.maximized
 		self.frontend._was_minimized = self.minimized
 		self.frontend._was_maximized = self.maximized
 
 		self.backend:invalidate()
-		self.frontend:_backend_resized(self.nw_how)
-		self.nw_how = nil
-
-		if was_unminimized then
-			self.frontend:_backend_was_unminimized()
-		end
-		if was_unmaximized then
-			self.frontend:_backend_was_unmaximized()
-		end
-
 	end
 
-
+	self.frontend:_backend_changed()
 end
 
 --positioning/magnets --------------------------------------------------------

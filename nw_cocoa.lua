@@ -315,13 +315,7 @@ function Window:windowWillClose()
 		end
 	end
 
-	if self.backend:active() then
-		--fake deactivation now because having close() not be async is more important.
-		--TODO: win:active() and app:active_window() are not consistent inside deactivated() event.
-		self.frontend:_backend_deactivated()
-	end
-
-	self.frontend:_backend_closed()
+	self.frontend:_backend_was_closed()
 	self.backend:_free_bitmap()
 
 	nswin_map[objc.nptr(self)] = nil --unregister
@@ -360,13 +354,13 @@ function app:active()
 	return self.nsapp:isActive()
 end
 
-function App:applicationWillBecomeActive()
-	self.frontend:_backend_activated()
+function App:applicationDidBecomeActive()
+	self.frontend:_backend_changed()
 end
 
 --NOTE: applicationDidResignActive() is not sent on exit because the loop will be stopped at that time.
 function App:applicationDidResignActive()
-	self.frontend:_backend_deactivated()
+	self.frontend:_backend_changed()
 end
 
 function Window:windowDidBecomeKey()
@@ -375,13 +369,13 @@ function Window:windowDidBecomeKey()
 		self.backend:_enter_fullscreen()
 	end
 	self:reset_keystate()
-	self.frontend:_backend_activated()
+	self.frontend:_backend_changed()
 end
 
 function Window:windowDidResignKey()
 	self.dragging = false
 	self:reset_keystate()
-	self.frontend:_backend_deactivated()
+	self.frontend:_backend_changed()
 end
 
 --NOTE: makeKeyAndOrderFront() on an initially hidden window is ignored, but not on an orderOut() window.
@@ -427,11 +421,11 @@ function app:hide() --NOTE: async operation
 end
 
 function App:applicationDidUnhide()
-	self.frontend:_backend_did_unhide()
+	self.frontend:_backend_changed()
 end
 
 function App:applicationDidHide()
-	self.frontend:_backend_did_hide()
+	self.frontend:_backend_changed()
 end
 
 --state/visibility -----------------------------------------------------------
@@ -446,15 +440,14 @@ function window:show()
 	if self._visible then return end
 	if self._minimized then
 		--if it was minimized before hiding, minimize it back.
-		--orderBack() shows the window before minimizing it, but not doing so
-		--hits a bug where the sequence minimize()/hide()/show()/restore()
-		--makes hovering on titlebar buttons not working.
+		--orderBack() shows the window before minimizing it which sucks, but
+		--avoids a bug where the sequence minimize()/hide()/show()/restore()
+		--makes titlebar buttons not responding.
 		self.nswin:orderBack(nil)
 		self.nswin:miniaturize(nil)
 	else
 		self._visible = true
-		--TODO: we need/assume that orderFront() is blocking. confirm that it is.
-		self.nswin:orderFront(nil)
+		self.nswin:orderFront(nil) --NOTE: assuming synchronous operation
 		self.frontend:_backend_changed()
 		self.nswin:makeKeyWindow() --NOTE: async operation
 	end
@@ -466,14 +459,14 @@ end
 function window:hide()
 	if not self._visible then return end
 	self._minimized = self.nswin:isMiniaturized()
-	self._hiding = true
+	self._hiding = true --disambiguating close() from hide() in windowWillClose() event.
 	self.nswin:close()
 end
 
-function window:_hidden()
+function window:_hidden() --windowWillClose() event for when self._hidden is set.
 	self._hiding = nil
 	self._visible = false
-	self.frontend:_backend_was_hidden()
+	self.frontend:_backend_changed()
 end
 
 --state/minimizing -----------------------------------------------------------
@@ -499,8 +492,7 @@ function window:minimize()
 	self.nswin:miniaturize(nil)
 	--windowDidMiniaturize() is not called from hidden.
 	if not self._visible then
-		self.frontend:_backend_was_shown()
-		self:_did_minimize()
+		self:_did_change_minimized()
 	end
 end
 
@@ -509,35 +501,24 @@ function window:_unminimize()
 	self.nswin:deminiaturize(nil)
 	--windowDidDeminiaturize() is not called from hidden.
 	if not self._visible then
-		self.frontend:_backend_was_shown()
-		self:_did_unminimize()
+		self:_did_change_minimized()
 	end
 end
 
-function window:_did_minimize()
+function window:_did_change_minimized()
 	self._visible = true
 	self._minimized = nil
-end
-
-function window:_did_unminimize()
-	self._visible = true
-	self._minimized = nil
+	self.frontend:_backend_changed()
 end
 
 --NOTE: windowDidMiniaturize() is not called if minimizing from hidden state.
 function Window:windowDidMiniaturize()
-	if not self.backend._visible then
-		self.frontend:_backend_was_shown()
-	else
-		self.frontend:_backend_was_minimized()
-	end
-	self.backend:_did_minimize()
+	self.backend:_did_change_minimized()
 end
 
 --NOTE: windowDidDeminiaturize() is not called if restoring from hidden state.
 function Window:windowDidDeminiaturize()
-	self.frontend:_backend_was_unminimized()
-	self.backend:_did_unminimize()
+	self.backend:_did_change_minimized()
 end
 
 --state/maximizing -----------------------------------------------------------
@@ -620,7 +601,9 @@ function window:_maximize_frame()
 	if self._frameless then
 		self:_maximize_frame_manually()
 	else
+		self.nswin.nw_zooming = true --NOTE: assuming synchronous operation
 		self.nswin:zoom(nil)
+		self.nswin.nw_zooming = false
 		self:_apply_constraints()
 	end
 end
@@ -630,7 +613,9 @@ function window:_unmaximize_frame()
 	if self._frameless then
 		self:_unmaximize_frame_manually()
 	else
+		self.nswin.nw_zooming = true --NOTE: assuming synchronous operation
 		self.nswin:zoom(nil)
+		self.nswin.nw_zooming = false
 		self:_apply_constraints()
 	end
 end
@@ -655,16 +640,14 @@ function window:maximize()
 			self:_maximize_minimized()
 		end
 	else
-		local changed
+		local maximized
 		if not self:maximized() then
 			self:_maximize_frame()
-			changed = true
+			maximized = true
 		end
 		if not self:visible() then
 			self:show()
-			changed = false --show() posts changed event
-		end
-		if changed then
+		elseif maximized then
 			self.frontend:_backend_changed()
 		end
 	end
@@ -736,7 +719,7 @@ function window:enter_fullscreen()
 end
 
 --NOTE: toggleFullScreen() on a minimized window works.
---NOTE: close() after toggleFullScreen() results in a crash.
+--NOTE: calling close() after toggleFullScreen() results in a crash.
 --NOTE: toggleFullScreen() on a closed window works.
 function window:_enter_fullscreen()
 	self._visible = true
@@ -813,8 +796,7 @@ function window:to_client(x, y) --OSX 10.7+
 end
 
 local function stylemask(frame)
-	return (frame == 'normal' or frame == 'toolbox')
-		and objc.NSTitledWindowMask or objc.NSBorderlessWindowMask
+	return frame == 'none' and objc.NSBorderlessWindowMask or objc.NSTitledWindowMask
 end
 
 function app:client_to_frame(frame, has_menu, x, y, w, h)
@@ -836,21 +818,21 @@ end
 --positioning/rectangles -----------------------------------------------------
 
 --NOTE: framed windows are constrained to screen bounds but frameless windows are not.
-function window:get_normal_rect()
+function window:get_normal_frame_rect()
 	return flip_screen_rect(nil, unpack_nsrect(self.nswin:frame()))
 end
 
-function window:set_normal_rect(x, y, w, h)
+function window:set_normal_frame_rect(x, y, w, h)
 	self.nswin:setFrame_display(objc.NSMakeRect(flip_screen_rect(nil, x, y, w, h)), true)
 	self:_apply_constraints()
 end
 
 function window:get_frame_rect()
-	return self:get_normal_rect()
+	return self:get_normal_frame_rect()
 end
 
 function window:set_frame_rect(x, y, w, h)
-	self:set_normal_rect(x, y, w, h)
+	self:set_normal_frame_rect(x, y, w, h)
 	if self:visible() and self:minimized() then
 		self:restore()
 	end
@@ -891,17 +873,17 @@ local applying
 function window:_apply_constraints()
 	if applying then return end
 	--get window position in case we need to set it back
-	local x1, y1 = self:get_normal_rect()
+	local x1, y1 = self:get_normal_frame_rect()
 	--get and constrain size
 	local sz = self.nswin:contentView():bounds().size
 	sz.width, sz.height = self:_constrain_size(sz.width, sz.height)
 	--put back constrained size
 	self.nswin:setContentSize(sz)
 	--reposition the window so that the top-left corner doesn't change.
-	local x, y, w, h = self:get_normal_rect()
+	local x, y, w, h = self:get_normal_frame_rect()
 	if x ~= x1 or y ~= y1 then
 		applying = true --_apply_constraints() barrier
-		self:set_normal_rect(x1, y1, w, h)
+		self:set_normal_frame_rect(x1, y1, w, h)
 		applying = nil
 	end
 end
@@ -959,7 +941,6 @@ end
 local function resize_area_hit(mx, my, w, h)
 	local co = 15 --corner offset
 	local mo = 4 --margin offset
-	print(mx, my, w, h)
 	if box2d.hit(mx, my, box2d.offset(co, 0, 0, 0, 0)) then
 		return 'bottomleft'
 	elseif box2d.hit(mx, my, box2d.offset(co, w, 0, 0, 0)) then
@@ -1002,7 +983,7 @@ function Window:sendEvent(event)
 			local x, y, w, h = flip_screen_rect(nil, unpack_nsrect(self:frame()))
 			x = x + mx
 			y = y + my
-			local x1, y1, w1, h1 = self.frontend:_backend_resizing('move', x, y, w, h)
+			local x1, y1, w1, h1 = self.frontend:_backend_sizing('progress', 'move', x, y, w, h)
 			if x1 or y1 or w1 or h1 then
 				self:setFrame_display(objc.NSMakeRect(flip_screen_rect(nil,
 					override_rect(x, y, w, h, x1, y1, w1, h1))), false)
@@ -1013,8 +994,7 @@ function Window:sendEvent(event)
 		elseif etype == objc.NSLeftMouseUp then
 			self.dragging = false
 			self.mousepos = nil
-			self.frontend:_backend_end_resize'move'
-			--self.backend:_end_frame_change()
+			self.frontend:_backend_sizing('end', 'move')
 			return
 		end
 	elseif etype == objc.NSLeftMouseDown
@@ -1028,7 +1008,7 @@ function Window:sendEvent(event)
 		self.dragging = true
 		self.dragpoint_x = self.frontend._mouse.x
 		self.dragpoint_y = self.frontend._mouse.y
-		self.frontend:_backend_start_resize'move'
+		self.frontend:_backend_sizing('start', 'move')
 		return
 	elseif etype == objc.NSLeftMouseDown then
 		self:makeKeyAndOrderFront(nil) --NOTE: async operation
@@ -1037,20 +1017,22 @@ function Window:sendEvent(event)
 	objc.callsuper(self, 'sendEvent', event)
 end
 
---also triggered on maximize.
+--NOTE: also triggered on zoom()!
 function Window:windowWillStartLiveResize(notification)
+	if self.nw_zooming then return end
 	if not self.mousepos then
 		self.mousepos = self:mouseLocationOutsideOfEventStream()
 	end
 	local mx, my = self.mousepos.x, self.mousepos.y
 	local _, _, w, h = unpack_nsrect(self:frame())
 	self.how = resize_area_hit(mx, my, w, h)
-	self.frontend:_backend_start_resize(self.how)
+	self.frontend:_backend_sizing('start', self.how)
 end
 
 --also triggered on maximize.
 function Window:windowDidEndLiveResize()
-	self.frontend:_backend_end_resize(self.how)
+	if self.nw_zooming then return end
+	self.frontend:_backend_sizing('end', self.how)
 	--self.backend:_end_frame_change()
 	self.how = nil
 end
@@ -1062,7 +1044,7 @@ function Window:nw_resizing(w_, h_)
 	if self.how:find'bottom' then h = h_ end
 	if self.how:find'left' then x, w = x + w - w_, w_ end
 	if self.how:find'right' then w = w_ end
-	local x1, y1, w1, h1 = self.frontend:_backend_resizing(self.how, x, y, w, h)
+	local x1, y1, w1, h1 = self.frontend:_backend_sizing('progress', self.how, x, y, w, h)
 	if x1 or y1 or w1 or h1 then
 		x, y, w, h = flip_screen_rect(nil, override_rect(x, y, w, h, x1, y1, w1, h1))
 	end
@@ -1093,15 +1075,11 @@ end
 
 function Window:windowDidResize()
 	if self.frontend:dead() then return end
-	self.frontend:_backend_resized(self.how)
-end
-
-function Window:windowWillMove()
-	print'willMove'
+	self.frontend:_backend_changed()
 end
 
 function Window:windowDidMove()
-	self.frontend:_backend_resized'move'
+	self.frontend:_backend_changed()
 end
 
 --positioning/magnets --------------------------------------------------------
@@ -1287,7 +1265,6 @@ end
 
 --keyboard -------------------------------------------------------------------
 
-
 --NOTE: there's no keyDown() for modifier keys, must use flagsChanged().
 --NOTE: flagsChanged() returns undocumented, and possibly not portable bits to distinguish
 --between left/right modifier keys. these bits are not given with NSEvent:modifierFlags(),
@@ -1297,6 +1274,7 @@ end
 --  holding down these keys won't trigger repeated key events.
 --  can't know when capslock is depressed, only when it is pressed.
 
+--NOTE: kVK_* codes are layout-independent and hardware-independent.
 local keynames = {
 
 	[objc.kVK_ANSI_0] = '0',
@@ -1691,17 +1669,6 @@ end
 
 --dynamic bitmaps ------------------------------------------------------------
 
-ffi.cdef[[
-void* malloc (size_t size);
-void  free   (void*);
-]]
-
-local function malloc(size)
-	local data = ffi.C.malloc(size)
-	assert(data ~= nil, 'out of memory')
-	return data
-end
-
 --make a bitmap that can be painted on the current NSGraphicsContext.
 --to that effect, a paint() function and a free() function are provided along with the bitmap.
 local function make_bitmap(w, h)
@@ -1712,7 +1679,7 @@ local function make_bitmap(w, h)
 	local stride = w * 4
 	local size = stride * h
 
-	local data = malloc(size)
+	local data = glue.malloc(size)
 
 	local bitmap = {
 		w = w,
@@ -1730,8 +1697,8 @@ local function make_bitmap(w, h)
 	local info = bit.bor(objc.kCGBitmapByteOrder32Little, objc.kCGImageAlphaPremultipliedFirst)
 
 	local bounds = ffi.new'CGRect'
-	bounds.size.width = w / 2
-	bounds.size.height = h / 2
+	bounds.size.width = w
+	bounds.size.height = h
 
 	local function paint()
 
@@ -1769,7 +1736,7 @@ local function make_bitmap(w, h)
 		objc.CGDataProviderRelease(provider)
 
 		--free the bitmap
-		ffi.C.free(data)
+		glue.free(data)
 		bitmap.data = nil
 		bitmap = nil
 	end
@@ -1788,8 +1755,6 @@ local function dynbitmap(api)
 
 	function api:get()
 		local w1, h1 = api:size()
-		w1 = w1 * 2
-		h1 = h1 * 2
 		if w1 ~= w or h1 ~= h then
 			self:free()
 			bitmap, free, paint = make_bitmap(w1, h1)
@@ -2346,7 +2311,7 @@ local function nsimage_to_bitmap(nsimage)
 	local stride = w * 4
 	local size = stride * h
 
-	local data = malloc(size)
+	local data = glue.malloc(size)
 
 	local bitmap = {
 		w = w,

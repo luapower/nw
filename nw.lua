@@ -148,8 +148,8 @@ end
 
 --events ---------------------------------------------------------------------
 
---register an observer to be called for a specific event
-function object:observe(event, func)
+--register a function to be called for a specific event
+function object:on(event, func)
 	self.observers = self.observers or {} --{event = {func = true, ...}}
 	self.observers[event] = self.observers[event] or {}
 	self.observers[event][func] = true
@@ -221,6 +221,7 @@ function app:_new(nw, backend_class)
 	self._autoquit = true --quit after the last window closes
 	self._ignore_numlock = false --ignore the state of the numlock key on keyboard events
 	self.backend = backend_class:new(self)
+	self._state = self:state()
 	return self
 end
 
@@ -526,6 +527,9 @@ function window:_new(app, backend_class, useropt)
 	self.app:_window_created(self)
 	self:_event'created'
 
+	self._state = self:state()
+	self._client_rect = {self:client_rect()}
+
 	--windows are created hidden to allow proper setup before events start.
 	if opt.visible then
 		self:show()
@@ -534,8 +538,84 @@ function window:_new(app, backend_class, useropt)
 	return self
 end
 
+--state ----------------------------------------------------------------------
+
+local function select_flag(which, state)
+	if which then
+		return state:find(which, 1, true) and true or false
+	end
+	return state
+end
+
+function window:state(which)
+	local t = {}
+	table.insert(t, self:visible() and 'visible' or nil)
+	table.insert(t, self:minimized() and 'minimized' or nil)
+	table.insert(t, self:maximized() and 'maximized' or nil)
+	table.insert(t, self:fullscreen() and 'fullscreen' or nil)
+	table.insert(t, self:active() and 'active' or nil)
+	local state = table.concat(t, ' ')
+	return select_flag(which, state)
+end
+
+function app:state(which)
+	local t = {}
+	table.insert(t, self:hidden() and 'hidden' or nil)
+	table.insert(t, self:active() and 'active' or nil)
+	local state = table.concat(t, ' ')
+	return select_flag(which, state)
+end
+
+local function diff(s, old, new)
+	local olds = old:find(s, 1, true) and 1 or 0
+	local news = new:find(s, 1, true) and 1 or 0
+	return news - olds
+end
+
+local function trigger(self, diff, event_up, event_down)
+	if diff > 0 then
+		self:_event(event_up)
+	elseif diff < 0 then
+		self:_event(event_down)
+	end
+end
+
 function window:_backend_changed()
-	--TODO: remove this after fixing cocoa
+	--check if the state has really changed and generate synthetic events
+	--for each state flag that has actually changed.
+	local old = self._state
+	local new = self:state()
+	self._state = new
+	if new ~= old then
+		self:_event('changed', old, new)
+		trigger(self, diff('visible', old, new), 'was_shown', 'was_hidden')
+		trigger(self, diff('minimized', old, new), 'was_minimized', 'was_unminimized')
+		trigger(self, diff('maximized', old, new), 'was_maximized', 'was_unmaximized')
+		trigger(self, diff('fullscreen', old, new), 'entered_fullscreen', 'exited_fullscreen')
+		trigger(self, diff('active', old, new), 'was_activated', 'was_deactivated')
+	end
+	--check if client rectangle changed and generate 'moved' and 'resized' events.
+	local cx0, cy0, cw0, ch0 = unpack(self._client_rect)
+	local cx, cy, cw, ch = self:client_rect()
+	local t = self._client_rect
+	t[1], t[2], t[3], t[4] = cx, cy, cw, ch
+	if cw ~= cw0 or ch ~= ch0 then
+		self:_event('was_resized', cw, ch)
+	end
+	if cx ~= cx0 or cy ~= cy0 then
+		self:_event('was_moved', cx, cy)
+	end
+end
+
+function app:_backend_changed()
+	local old = self._state
+	local new = self:state()
+	self._state = new
+	if new ~= old then
+		self:_event('changed', old, new)
+		trigger(self, diff('hidden', old, new), 'was_hidden', 'was_unhidden')
+		trigger(self, diff('active', old, new), 'activated', 'deactivated')
+	end
 end
 
 --closing --------------------------------------------------------------------
@@ -578,11 +658,11 @@ function window:_backend_closing()
 	end
 end
 
-function window:_backend_closed()
+function window:_backend_was_closed()
 	if self._closed then return end --ignore if closed
 	self._closed = true --_backend_closing() and _backend_closed() barrier
 
-	self:_event'closed'
+	self:_event'was_closed'
 	self:_free_views()
 
 	--trigger closed event before declaring the window dead.
@@ -609,14 +689,6 @@ function app:active()
 	return self.backend:active()
 end
 
-function app:_backend_activated()
-	self:_event'activated'
-end
-
-function app:_backend_deactivated()
-	self:_event'deactivated'
-end
-
 function window:activate()
 	self:_check()
 	if not self:visible() then return end
@@ -627,14 +699,6 @@ function window:active()
 	self:_check()
 	if not self:visible() then return false end --false if hidden
 	return self.backend:active()
-end
-
-function window:_backend_activated()
-	self:_event'activated'
-end
-
-function window:_backend_deactivated()
-	self:_event'deactivated'
 end
 
 --state/app visibility (OSX only) --------------------------------------------
@@ -658,14 +722,6 @@ end
 function app:hide()
 	if not self.nw:os'OSX' then return end
 	return self.backend:hide()
-end
-
-function app:_backend_did_unhide()
-	self:_event'was_unhidden'
-end
-
-function app:_backend_did_hide()
-	self:_event'was_hidden'
 end
 
 --state/visibility -----------------------------------------------------------
@@ -692,14 +748,6 @@ function window:hide()
 	self.backend:hide()
 end
 
-function window:_backend_was_shown()
-	self:_event'was_shown'
-end
-
-function window:_backend_was_hidden()
-	self:_event'was_hidden'
-end
-
 --state/minimizing -----------------------------------------------------------
 
 function window:minimized()
@@ -713,14 +761,6 @@ function window:minimize()
 	self.backend:minimize()
 end
 
-function window:_backend_was_minimized()
-	self:_event'was_minimized'
-end
-
-function window:_backend_was_unminimized()
-	self:_event'was_unminimized'
-end
-
 --state/maximizing -----------------------------------------------------------
 
 function window:maximized()
@@ -732,14 +772,6 @@ function window:maximize()
 	self:_check()
 	if self:fullscreen() then return end --ignore because OSX can't do it
 	self.backend:maximize()
-end
-
-function window:_backend_was_maximized()
-	self:_event'was_maximized'
-end
-
-function window:_backend_was_unmaximized()
-	self:_event'was_unmaximized'
 end
 
 --state/restoring ------------------------------------------------------------
@@ -766,31 +798,12 @@ function window:fullscreen(fullscreen)
 	if fullscreen == nil then
 		return self.backend:fullscreen()
 	elseif fullscreen then
-		if self:fullscreen() then return end --ignore null transition
+		if self.backend:fullscreen() then return end --ignore null transitions
 		self.backend:enter_fullscreen()
 	else
-		if not self:fullscreen() then return end --ignore null transition
+		if not self.backend:fullscreen() then return end --ignore null transitions
 		self.backend:exit_fullscreen()
 	end
-end
-
-function window:_backend_entered_fullscreen()
-	self:_event'entered_fullscreen'
-end
-
-function window:_backend_exited_fullscreen()
-	self:_event'exited_fullscreen'
-end
-
---current state --------------------------------------------------------------
-
-function window:state()
-	return
-		not self:visible() and 'hidden'
-		or self:minimized() and 'minimized'
-		or self:fullscreen() and 'fullscreen'
-		or self:maximized() and 'maximized'
-		or 'normal'
 end
 
 --state/enabled --------------------------------------------------------------
@@ -851,26 +864,26 @@ function window:frame_rect(x1, y1, w1, h1) --returns x, y, w, h
 	self:_check()
 	if x1 or y1 or w1 or h1 then
 		if self:minimized() then
-			self:normal_rect(x1, y1, w1, h1)
+			self:normal_frame_rect(x1, y1, w1, h1)
 		end
 		if self:fullscreen() then return end --ignore because OSX can't do it
 		local x, y, w, h = self.backend:get_frame_rect()
 		self.backend:set_frame_rect(override_rect(x, y, w, h, x1, y1, w1, h1))
 	elseif self:minimized() then
-		return self:normal_rect()
+		return self:normal_frame_rect()
 	else
 		return self.backend:get_frame_rect()
 	end
 end
 
-function window:normal_rect(x1, y1, w1, h1)
+function window:normal_frame_rect(x1, y1, w1, h1)
 	self:_check()
 	if x1 or y1 or w1 or h1 then
 		if self:fullscreen() then return end --ignore because OSX can't do it
-		local x, y, w, h = self.backend:get_normal_rect()
-		self.backend:set_normal_rect(override_rect(x, y, w, h, x1, y1, w1, h1))
+		local x, y, w, h = self.backend:get_normal_frame_rect()
+		self.backend:set_normal_frame_rect(override_rect(x, y, w, h, x1, y1, w1, h1))
 	else
-		return self.backend:get_normal_rect()
+		return self.backend:get_normal_frame_rect()
 	end
 end
 
@@ -933,19 +946,16 @@ function window:maxsize(w, h) --pass false to disable
 	end
 end
 
---positioning/resizing -------------------------------------------------------
+--positioning/moving/resizing ------------------------------------------------
 
-function window:_backend_start_resize(how)
-	self._magnets = nil
-	self:_event('start_resize', how)
-end
+function window:_backend_sizing(when, how, x, y, w, h)
 
-function window:_backend_end_resize(how)
-	self._magnets = nil
-	self:_event('end_resize', how)
-end
+	if when ~= 'progress' then
+		self._magnets = nil
+		self:_event('sizing', when, how)
+		return
+	end
 
-function window:_backend_resizing(how, x, y, w, h)
 	local x1, y1, w1, h1
 
 	if self:edgesnapping() then
@@ -960,13 +970,9 @@ function window:_backend_resizing(how, x, y, w, h)
 		x1, y1, w1, h1 = x, y, w, h
 	end
 
-	x1, y1, w1, h1 = override_rect(x1, y1, w1, h1, self:_handle('resizing', how, x1, y1, w1, h1))
-	self:_fire('resizing', how, x, y, w, h, x1, y1, w1, h1)
+	x1, y1, w1, h1 = override_rect(x1, y1, w1, h1, self:_handle('sizing', when, how, x1, y1, w1, h1))
+	self:_fire('sizing', when, how, x, y, w, h, x1, y1, w1, h1)
 	return x1, y1, w1, h1
-end
-
-function window:_backend_resized(how)
-	self:_event('resized', how)
 end
 
 function window:edgesnapping(mode)

@@ -850,11 +850,20 @@ What you should know about window states:
 
 local function state_string(win)
 	if win:dead() then return 'x' end
+	local w,h = win:size()
+	local fx,fy,fw,fh = win:frame_rect()
+	local nx,ny,nw,nh = win:normal_frame_rect()
 	return
-		(win:visible() and 'v' or '')..
-		(win:minimized() and 'm' or '')..
-		(win:maximized() and 'M' or '')..
-		(win:fullscreen() and 'F' or '')
+		(app:hidden() and 'H' or ' ')..
+		(app:active() and 'A' or ' ')..' | '..
+		(win:visible() and 'v' or ' ')..
+		(win:minimized() and 'm' or ' ')..
+		(win:maximized() and 'M' or ' ')..
+		(win:fullscreen() and 'F' or ' ')..
+		(win:active() and 'A' or ' ')..' | '..
+		(string.format('  %4g x%4g',w,h))..
+		(string.format('  %4g x%4g : %4g x%4g',fx,fy,fw,fh))..
+		(string.format('  %4g x%4g : %4g x%4g',nx,ny,nw,nh))
 end
 
 local function init_check(t, child)
@@ -884,40 +893,39 @@ local function init_check(t, child)
 
 			local function print_state(s, ...)
 				if win:dead() then return end
-				print(s, state_string(win), ...)
+				print(string.format('%-16s', s), state_string(win), ...)
 			end
 
-			function win:was_minimized()   print_state'was_minimized' end
-			function win:was_maximized()   print_state'was_maximized' end
-			function win:was_unminimized() print_state'was_unminimized' end
-			function win:was_unmaximized() print_state'was_unmaximized' end
-			function win:entered_fullscreen() print_state'entered_fullscreen' end
-			function win:exited_fullscreen()  print_state'exited_fullscreen' end
+			function win:changed(old, new) print_state('changed', old..' -> '..new) end
+			function app:changed(old, new) print_state('app changed', old..' -> '..new) end
 
-			function win:was_shown()       print_state'was_shown' end
-			function win:was_hidden()      print_state'was_hidden' end
+			--synthetic changed events
+			function win:was_minimized()      print_state'  was_minimized' end
+			function win:was_maximized()      print_state'  was_maximized' end
+			function win:was_unminimized()    print_state'  was_unminimized' end
+			function win:was_unmaximized()    print_state'  was_unmaximized' end
+			function win:entered_fullscreen() print_state'  entered_fullscreen' end
+			function win:exited_fullscreen()  print_state'  exited_fullscreen' end
+			function win:was_shown()          print_state'  was_shown' end
+			function win:was_hidden()         print_state'  was_hidden' end
+			function app:was_activated()      print_state'    app was_activated' end
+			function win:was_activated()      print_state'    was_activated' end
+			function win:was_deactivated()    print_state'    was_deactivated' end
+			function app:was_deactivated()    print_state'    app was_deactivated' end
+			function win:was_resized(...)     print_state('      was_resized', ...) end
+			function win:was_moved(...)       print_state('      was_moved', ...) end
 
-			function win:closed()      print'   closed' end
+			function win:was_closed()         print_state'was_closed' end
 
-			function app:activated()       print_state'app activated' end
-			function win:activated()       print_state'   activated' end
-			function win:deactivated()     print_state'   deactivated' end
-			function app:deactivated()     print_state'app deactivated' end
+			function win:sizing(...)          print_state('  sizing', ...) end
 
-			function win:start_resize(...) print_state('   start_resize', ...) end
-			function win:resizing(...)     print_state('      resizing', ...) end
-			function win:resized(...)      print_state('         resized', ...) end
-			function win:end_resize(...)   print_state('   end_resize', ...) end
+			function app:quitting()           print_state'quitting'; return true end
 
-			function win:closing()         print_state'closing' end
+			function app:window_created()     print'window_created' end
+			function app:window_closed()      print'window_closed' end
 
-			function app:quitting()        print_state'quitting' end
-
-			function app:window_created()  print'window_created' end
-			function app:window_closed()   print'window_closed' end
-
-			function app:was_unhidden()    print'app was_unhidden' end
-			function app:was_hidden()      print'app was_hidden' end
+			--function app:was_unhidden()    print'app was_unhidden' end
+			--function app:was_hidden()      print'app was_hidden' end
 
 			function app:displays_changed() print'displays_changed' end
 
@@ -926,8 +934,6 @@ local function init_check(t, child)
 	F1       help
 	H        hide
 	S        show
-	K        app hide
-	L        app hide and unhide after 1s
 	esc      restore
 	D        shownormal
 	F        toggle fullscreen
@@ -937,23 +943,24 @@ local function init_check(t, child)
 	B        activate win2
 	Z        zoom in
 	X        zoom out
-	num+     zoom in (normal rect)
-	num-     zoom out (normal rect)
+	shift+Z  zoom in (normal rect)
+	shift+X  zoom out (normal rect)
 	arrows   move
+	4        toggle minsize
+	5        toggle maxsize
 	1        toggle enabled
 	2        toggle allow close
 	3        toggle autoquit
-	4        toggle minsize
-	5        toggle maxsize
 	6        toggle sticky
-	<        lower rel. to win1
-	>        raise rel. to win1
 	[        lower
 	]        raise
+	<        lower relative to win1
+	>        raise relative to win1
 	T        set title
-	0        hide / unhide app
 	C        close / create
 	Q        quit
+	0        app hide (OSX)
+	9        app hide and unhide after 1s (OSX)
 	enter    print state
 ]]
 			local allow_close = true
@@ -984,22 +991,26 @@ local function init_check(t, child)
 				elseif key == 'B' then
 					win1:activate()
 				elseif key == 'Z' then
-					local x, y, w, h = win:frame_rect()
-					win:frame_rect(x-10, y-10, w+20, h+20)
+					if self.app:key'shift' then
+						local x, y, w, h = win:normal_frame_rect()
+						win:normal_frame_rect(x-10, y-10, w+20, h+20)
+					else
+						local x, y, w, h = win:frame_rect()
+						win:frame_rect(x-10, y-10, w+20, h+20)
+					end
 				elseif key == 'X' then
-					local x, y, w, h = win:frame_rect()
-					win:frame_rect(x+10, y+10, w-20, h-20)
+					if self.app:key'shift' then
+						local x, y, w, h = win:normal_frame_rect()
+						win:normal_frame_rect(x+10, y+10, w-20, h-20)
+					else
+						local x, y, w, h = win:frame_rect()
+						win:frame_rect(x+10, y+10, w-20, h-20)
+					end
 				elseif key == 'left' or key == 'right' or key == 'up' or key == 'down' then
 					local x, y = win:frame_rect()
 					win:frame_rect(
 						x + (key == 'left' and -10 or key == 'right' and 10 or 0),
 						y + (key == 'up'   and -10 or key == 'down'  and 10 or 0))
-				elseif key == 'num+' then
-					local x, y, w, h = win:normal_rect()
-					win:normal_rect(x-10, y-10, w+20, h+20)
-				elseif key == 'num-' then
-					local x, y, w, h = win:normal_rect()
-					win:normal_rect(x+10, y+10, w-20, h-20)
 				elseif key == '1' then
 					win:enabled(not win:enabled())
 				elseif key == 'C' then
@@ -1012,8 +1023,6 @@ local function init_check(t, child)
 					allow_close = not allow_close
 				elseif key == '3' then
 					win:autoquit(not win:autoquit())
-				elseif key == '0' then
-					app:hidden(not app:hidden())
 				elseif key == '4' then
 					if win:minsize() then
 						win:minsize(false)
@@ -1042,64 +1051,65 @@ local function init_check(t, child)
 					win:cursor(next_cursor())
 				elseif key == 'Q' then
 					self.app:quit()
-				elseif key == 'K' then
+				elseif key == '0' then
 					self.app:hide()
-				elseif key == 'L' then
-					self.app:hide()
+				elseif key == '9' then
+					self.app:hidden(true)
 					self.app:runafter(1, function()
-						self.app:unhide()
+						self.app:hidden(false)
 					end)
 				elseif key == 'F1' then
 					print(help)
 				elseif key == 'enter' then
 					win1.name = 'win1'
 					win.name = 'win'
-					print('state          ', state_string(win))
-					print('active         ', win:active())
-					print('active window  ', app:active_window() and app:active_window().name)
-					print('app active     ', app:active())
-					print('app hidden     ', app:hidden())
-					print('enabled        ', win:enabled())
-					print('sticky         ', win:sticky())
-					print('frame_rect     ', win:frame_rect())
-					print('normal_rect    ', win:normal_rect())
-					print('client_rect    ', win:client_rect())
-					print('size           ', win:size())
-					print('minsize        ', win:minsize())
-					print('maxsize        ', win:maxsize())
-					print('cursor         ', win:cursor())
-					print('edgesnapping   ', win:edgesnapping())
-					print('autoquit       ', win:autoquit())
-					print('app autoquit   ', app:autoquit())
-					print('display        ', pp.format(win:display()))
-					print('display_count  ', app:display_count())
-					print('active_display ', pp.format(app:active_display()))
+					print('state             ', state_string(win))
+					print('active            ', win:active())
+					print('active window     ', app:active_window() and app:active_window().name)
+					print('app active        ', app:active())
+					print('app hidden        ', app:hidden())
+					print('enabled           ', win:enabled())
+					print('sticky            ', win:sticky())
+					print('frame_rect        ', win:frame_rect())
+					print('client_rect       ', win:client_rect())
+					print('normal_frame_rect ', win:normal_frame_rect())
+					print('size              ', win:size())
+					print('minsize           ', win:minsize())
+					print('maxsize           ', win:maxsize())
+					print('cursor            ', win:cursor())
+					print('edgesnapping      ', win:edgesnapping())
+					print('autoquit          ', win:autoquit())
+					print('app autoquit      ', app:autoquit())
+					print('display           ', pp.format(win:display()))
+					print('display_count     ', app:display_count())
+					print('active_display    ', pp.format(app:active_display()))
 				end
 			end
 
 			local i = 0
 			app:runevery(1/30, function()
-				i = i + 10
+				i = i + 5
 				if not win:dead() then
 					win:invalidate()
 				end
 			end)
 
-			app:runevery(1, function()
+			app:runevery(1/30, function()
 				local bmp = win:bitmap()
 				if not bmp then return end
 				local _, setpixel = bitmap.pixel_interface(bmp)
 				for y = 0, bmp.h-1 do
 					for x = 0, bmp.w-1 do
 						local i = (i % bmp.w)
-						local c = x >= i and x <= i + 50 and 255 or 0
+						local c = x >= i and x <= i + 50 and 255 or 100
 						setpixel(x, y, c, c, c, 255)
 					end
 				end
 			end)
 			win:invalidate()
 
-			function win:closing()
+			function win:closing(...)
+				print_state('closing', ...)
 				return allow_close
 			end
 
@@ -1772,23 +1782,23 @@ add('pos-minmax-fullscreen', function()
 	app:run()
 end)
 
---normal_rect() -> x, y, w, h works.
---normal_rect(x, y, w, h) works.
-add('pos-normal-rect', function()
+--normal_frame_rect() -> x, y, w, h works.
+--normal_frame_rect(x, y, w, h) works.
+add('pos-normal-frame-rect', function()
 	local x0, y0, w0, h0 = 51, 52, 201, 202
 	local win = app:window{x = 0, y = 0, w = 0, h = 0}
 	local function check()
-		local x, y, w, h = win:normal_rect()
+		local x, y, w, h = win:normal_frame_rect()
 		assert(x == x0)
 		assert(y == y0)
 		assert(w == w0)
 		assert(h == h0)
 	end
-	win:normal_rect(x0, y0, w0, h0); check()
-	x0 = x0 + 10; win:normal_rect(x0); check()
-	y0 = y0 + 10; win:normal_rect(nil, y0); check()
-	w0 = w0 + 10; win:normal_rect(nil, nil, w0); check()
-	h0 = h0 + 10; win:normal_rect(nil, nil, nil, h0); check()
+	win:normal_frame_rect(x0, y0, w0, h0); check()
+	x0 = x0 + 10; win:normal_frame_rect(x0); check()
+	y0 = y0 + 10; win:normal_frame_rect(nil, y0); check()
+	w0 = w0 + 10; win:normal_frame_rect(nil, nil, w0); check()
+	h0 = h0 + 10; win:normal_frame_rect(nil, nil, nil, h0); check()
 	print'ok'
 end)
 
@@ -1840,7 +1850,7 @@ add('pos-client-rect', function()
 	print'ok'
 end)
 
---normal_rect(x, y, w, h) generates only one ('resized', 'set') event.
+--normal_frame_rect(x, y, w, h) generates only one ('resized', 'set') event.
 add('pos-set-event', function()
 	local rec = recorder()
 	local win = app:window{x = 0, y = 0, w = 0, h = 0}
@@ -1848,7 +1858,7 @@ add('pos-set-event', function()
 	function win:end_resize() rec('end_resize') end
 	function win:resizing(how, x, y, w, h) rec('resizing', how, x, y, w, h) end
 	function win:resized(how) rec('resized', how) end
-	win:normal_rect(1, 0, 0, 0)
+	win:normal_frame_rect(1, 0, 0, 0)
 	rec{'resized', 'set'}
 end)
 
@@ -2454,27 +2464,27 @@ add('bitmap', function()
 		local d = 10
 
 		if app:key'left' then
-			local x, y = win:normal_rect()
-			win:normal_rect(x - d, y)
+			local x, y = win:normal_frame_rect()
+			win:normal_frame_rect(x - d, y)
 		end
 		if app:key'right' then
-			local x, y = win:normal_rect()
-			win:normal_rect(x + d, y)
+			local x, y = win:normal_frame_rect()
+			win:normal_frame_rect(x + d, y)
 		end
 		if app:key'up' then
-			local x, y = win:normal_rect()
-			win:normal_rect(x, y - d)
+			local x, y = win:normal_frame_rect()
+			win:normal_frame_rect(x, y - d)
 		end
 		if app:key'down' then
-			local x, y = win:normal_rect()
-			win:normal_rect(x, y + d)
+			local x, y = win:normal_frame_rect()
+			win:normal_frame_rect(x, y + d)
 		end
 	end)
 
 	function win:mousedown(button, x, y)
 		if self:fullscreen() then return end
 		if button == 'left' then
-			local _, _, w, h = win:normal_rect()
+			local _, _, w, h = win:normal_frame_rect()
 			if x >= w - 20 and x <= w and y >= h - 20 and y <= h then
 				action = 'resize'
 				dx = w - x
@@ -2494,10 +2504,10 @@ add('bitmap', function()
 
 	function win:mousemove(x, y)
 		if action == 'move' then
-			local fx, fy = win:normal_rect()
-			win:normal_rect(fx + x - dx, fy + y - dy)
+			local fx, fy = win:normal_frame_rect()
+			win:normal_frame_rect(fx + x - dx, fy + y - dy)
 		elseif action == 'resize' then
-			win:normal_rect(nil, nil, x + dx, y + dy)
+			win:normal_frame_rect(nil, nil, x + dx, y + dy)
 		end
 	end
 
