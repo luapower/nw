@@ -1175,6 +1175,7 @@ add('check-frame=none-transparent', init_check({frame = 'none', transparent = tr
 
 --state automated tests ------------------------------------------------------
 
+nw:app() --TODO: remove this
 local osx = nw:os'OSX'
 local checkactive = not osx
 
@@ -1314,12 +1315,12 @@ end
 
 for i,t in ipairs{
 	--transitions fron normal
-	{{'show'}, 'vA was_activated'},
+	{{'show'}, 'vA'},
 	{{'hide'}, 'h was_hidden'},
-	{{'maximize'}, 'vMA was_maximized was_activated'},
+	{{'maximize'}, 'vMA was_maximized'},
 	{{'minimize'}, 'vm was_minimized'},
-	{{'restore'}, 'vA was_activated'},
-	{{'shownormal'}, 'vA was_activated'},
+	{{'restore'}, 'vA'},
+	{{'shownormal'}, 'vA'},
 	--transitions fron hidden
 	{{'hide'}, 'h was_hidden', {'show'}, 'vA was_shown was_activated'},
 	{{'hide'}, 'h was_hidden', {'hide'}, 'h'},
@@ -1335,12 +1336,12 @@ for i,t in ipairs{
 	{{'minimize'}, 'vm was_minimized', {'restore'}, 'vA was_unminimized'},
 	{{'minimize'}, 'vm was_minimized', {'shownormal'}, 'vA was_unminimized'},
 	--transitions from maximized
-	{{'maximize'}, 'vMA was_maximized was_activated', {'show'}, 'vMA'},
-	{{'maximize'}, 'vMA was_maximized was_activated', {'hide'}, 'hM was_hidden'},
-	{{'maximize'}, 'vMA was_maximized was_activated', {'maximize'}, 'vMA'},
-	{{'maximize'}, 'vMA was_maximized was_activated', {'minimize'}, 'vmM was_minimized'},
-	{{'maximize'}, 'vMA was_maximized was_activated', {'restore'}, 'vA was_unmaximized'},
-	{{'maximize'}, 'vMA was_maximized was_activated', {'shownormal'}, 'vA was_unmaximized'},
+	{{'maximize'}, 'vMA was_maximized', {'show'}, 'vMA'},
+	{{'maximize'}, 'vMA was_maximized', {'hide'}, 'hM was_hidden'},
+	{{'maximize'}, 'vMA was_maximized', {'maximize'}, 'vMA'},
+	{{'maximize'}, 'vMA was_maximized', {'minimize'}, 'vmM was_minimized'},
+	{{'maximize'}, 'vMA was_maximized', {'restore'}, 'vA was_unmaximized'},
+	{{'maximize'}, 'vMA was_maximized', {'shownormal'}, 'vA was_unmaximized'},
 	--transitions from hidden minimized
 	{{'minimize', 'hide'}, 'hm was_minimized was_hidden', {'show'}, 'vm was_shown'},
 	{{'minimize', 'hide'}, 'hm was_minimized was_hidden', {'hide'}, 'hm'},

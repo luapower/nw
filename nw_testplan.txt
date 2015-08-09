@@ -1,6 +1,15 @@
 TODO
 ------------------------------------------------------------------------------
+refactoring:
+	- make nw:os() available without nw:app()
+	- nw:os() -> app:ver() extensible checker
+	- event system:
+		- multiple queries instead of observers?
+		- bubbling up to :parent() and passing self as arg?
+	- closed() property and checks
+
 easy:
+
 	- capslock/numlock bug
 	- keychar events
 	- check that key state query is not async in key events, including keychar!
@@ -31,14 +40,6 @@ hard:
 	- jank control (linux & windows)
 	- check that mouse and keyboard state are always in sync and never polled
 
-
-APP
-------------------------------------------------------------------------------
-events:
-	window_created
-	window_closed
-	activated deactivated
-	was_unhidden was_hidden
 
 WINDOW
 ------------------------------------------------------------------------------
@@ -75,33 +76,17 @@ read-write inert properties:
 
 read-write state properties:
 	enabled
-	minsize maxsize
-	size frame_rect client_rect normal_rect
 	cursor
 
-utilities:
-	to_client to_screen
-
 commands:
-	close
-	show hide
-	minimize maximize restore shownormal
-	activate
 	raise lower
 	invalidate
 
 events:
 	quitting
 	closing
-	resizing
 	magnets
 	created closed
-	activated deactivated
-	was_shown was_hidden
-	was_minimized was_unminimized
-	was_maximized was_unmaximized
-	entered_fullscreen exited_fullscreen
-	start_resize end_resize resizing resized
 	displays_changed
 	keydown keypress keyup keychar
 	mousedown mouseup
@@ -110,19 +95,14 @@ events:
 	mousemove
 	repaint free_bitmap
 
-meta:
-	observe
-	override
-	events
-	event
-
 extra:
 	views view_count
 	menubar popup
 	icon
 	glview cairoview
 events:
-	dropfiles dragging
+	dropfiles
+	dragging
 
 ------------------------------------------------------------------------------
 
@@ -206,20 +186,16 @@ PARENT
 	- assert: stays above parent
 	- assert: not minimizable
 	- assert: default not minimizable
-
+	- assert: hide() hides children; show() shows children
+	- assert: close() closes children first
+	- sticky
+	-
 
 FRAME=NONE
 ------------------------------------------------------------------------------
 - init: frame=none
 	- check: no frame
 	- assert: frame rect == client rect
-
-
-FRAME=TOOLBOX
-------------------------------------------------------------------------------
-- init: frame=toolbox
-	- assert: has parent
-	- check: has toolbox frame (windows)
 
 
 POSITIONING
@@ -268,118 +244,6 @@ SIZE RESTRICTIONS
 	- assert: maxsize == minsize => resizeable = false (X limitation)
 
 
-STATE
-------------------------------------------------------------------------------
-- init: visible=default
-	* assert: visible
-	* check: visible
-	* assert: synchronous changed event
-	- event: was_shown
-- init: visible=false
-	* assert: not visible
-	* check: not visible
-- init: maximized
-	- assert/check: maximized -> normal
-	- event: was_shown
-
-- init: minimized
-	- check: not activated
-	* assert: minimized -> normal
-	- check: minimized -> normal
-- init: minimized + maximized
-	- check: not activated
-	- assert: minimized, maximized
-	- assert/check: restore -> maximized -> normal
-
-- init: fullscreen
-	- assert/check: fullscreen -> normal
-- init: minimized + fullscreen
-	- check: not activated
-	- assert: minimized, fullscreen
-	- assert/check: restore -> fullscreen -> normal
-- init: maximized + fullscreen
-	- assert: maximized, fullscreen
-	- assert/check: restore -> maximized -> normal
-- init: minimized + maximized + fullscreen (?)
-	- check: not activated
-	- assert: minimized, maximized, fullscreen
-	- assert/check: restore -> fullscreen -> maximized -> normal
-
-- action: hide
-	- assert: hidden -> ignore
-	- assert: save minimized state
-	- assert: hide children
-	- assert: changed event
-- action: show
-	- assert: visible -> ignore
-	- assert: minimized -> not minimized
-	- assert: show children
-	- assert: changed event
-	- assert: raise
-	- assert: activate
-- action: minimize
-	- assert: minimized -> ignore
-	- assert: hidden -> visible
-	- assert: not activated
-- action: restore
-	- assert: ignore if normal visible
-	- assert: show if hidden
-	- assert: hidden + minimized -> minimized + not activating
-	- assert: minimized -> normal
-	- assert: maximized -> normal
-	- assert: maximized + minimized -> maximized
-	- assert: fullscreen -> normal
-	- assert: maximized + fullscreen -> maximized
-- action: maximize
-	- assert: maximized -> ignore
-	- assert: hidden -> visible
-	- assert: minimized -> maximized
-- action: shownormal
-	- assert: hidden -> visible
-	- assert: maximized -> normal
-	- assert: minimized -> normal
-	- assert: minimized + maximized -> normal
-	- assert: fullscreen -> normal
-	- assert: maximized + fullscreen -> maximized
-- action: enter fullscreen
-	- assert: normal -> fullscreen
-	- assert: maximized -> fullscreen
-	- assert: minimized -> fullscreen
-	- assert: minimized + maximized -> fullscreen
-	- event: entered_fullscreen
-- action: exit fullscreen
-	- assert:
-	- event: exited_fullscreen
-
-- event: was_minimized
-	- normal -> minimize
-	- maximized -> minimize
-	-
-- event: was_unminimized
-	- maximized, minimized -> restore
-- event: was_maximized
-	- normal -> maximize
-- event: was_unmaximized
-	- maximized -> restore
-- event: was_shown
-	- hidden -> show
-- event: was_hidden
-	- normal -> hidden
-- event: entered_fullscreen
-- event: exited_fullscreen
-
-
-TITLE
-------------------------------------------------------------------------------
-- init: title
-	- assert: get
-	- check: on taskbar and titlebar
-- get: title
-	- assert: get
-- change: title
-	- assert: get
-
-
 ENABLED
 ------------------------------------------------------------------------------
 - init: enabled=false
@@ -389,14 +253,6 @@ ENABLED
 - set: enabled=true/false
 	- assert: get
 	- check: enabled/disabled
-
-
-CLOSING
-------------------------------------------------------------------------------
-- query: closing
-- action: close
-	- assert: deactivate and changed events precede closed event
-- event: closed
 
 
 QUITTING
