@@ -581,12 +581,15 @@ local function trigger(self, diff, event_up, event_down)
 end
 
 function window:_backend_changed()
+
 	--check if the state has really changed and generate synthetic events
 	--for each state flag that has actually changed.
 	local old = self._state
 	local new = self:state()
 	self._state = new
+	local changed
 	if new ~= old then
+		changed = true
 		self:_event('changed', old, new)
 		trigger(self, diff('visible', old, new), 'was_shown', 'was_hidden')
 		trigger(self, diff('minimized', old, new), 'was_minimized', 'was_unminimized')
@@ -594,15 +597,24 @@ function window:_backend_changed()
 		trigger(self, diff('fullscreen', old, new), 'entered_fullscreen', 'exited_fullscreen')
 		trigger(self, diff('active', old, new), 'was_activated', 'was_deactivated')
 	end
+
 	--check if client rectangle changed and generate 'moved' and 'resized' events.
 	local cx0, cy0, cw0, ch0 = unpack(self._client_rect)
 	local cx, cy, cw, ch = self:client_rect()
 	local t = self._client_rect
 	t[1], t[2], t[3], t[4] = cx, cy, cw, ch
 	if cw ~= cw0 or ch ~= ch0 then
+		if not changed then
+			changed = true
+			self:_event('changed', old, new)
+		end
 		self:_event('was_resized', cw, ch)
 	end
 	if cx ~= cx0 or cy ~= cy0 then
+		if not changed then
+			changed = true
+			self:_event('changed', old, new)
+		end
 		self:_event('was_moved', cx, cy)
 	end
 end
@@ -614,7 +626,7 @@ function app:_backend_changed()
 	if new ~= old then
 		self:_event('changed', old, new)
 		trigger(self, diff('hidden', old, new), 'was_hidden', 'was_unhidden')
-		trigger(self, diff('active', old, new), 'activated', 'deactivated')
+		trigger(self, diff('active', old, new), 'was_activated', 'was_deactivated')
 	end
 end
 
@@ -1760,20 +1772,5 @@ function window:_backend_dragging(how, data, x, y)
 	return effect
 end
 
---buttons --------------------------------------------------------------------
-
-local button = glue.update({}, object)
-
-function window:button(...)
-	return button:_new(self, self.backend.button, ...)
-end
-
-function button:_new(window, backend_class, ...)
-	self = glue.inherit({window = window}, self)
-	self.backend = backend_class:new(...)
-	return self
-end
-
-if not ... then require'nw_test' end
 
 return nw

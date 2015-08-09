@@ -67,7 +67,6 @@ end
 --message loop ---------------------------------------------------------------
 
 function app:run()
-	self:_init_activate()
 	winapi.MessageLoop()
 end
 
@@ -91,14 +90,13 @@ app.window = window
 
 local Window = winapi.subclass({}, winapi.Window)
 
-local win_map = {} --win->window, for app:active_window()
+local winmap = {} --win->window, for app:active_window()
 
 function window:new(app, frontend, t)
 	self = glue.inherit({app = app, frontend = frontend}, self)
 
 	local framed = t.frame == 'normal' or t.frame == 'toolbox'
 	self._layered = t.transparent
-	self._sticky = t.sticky
 
 	self.win = Window{
 		--state
@@ -156,11 +154,6 @@ function window:new(app, frontend, t)
 	self.win.backend = self
 	self.win.app = app
 
-	--disambiguation flags for 'restore' event
-	self._was_minimized = t.minimized
-	self._was_maximized = t.maximized
-	self._was_visible = false
-
 	--init icon API
 	self:_init_icon_api()
 
@@ -171,7 +164,7 @@ function window:new(app, frontend, t)
 	winapi.DragAcceptFiles(self.win.hwnd, true)
 
 	--register window
-	win_map[self.win] = self.frontend
+	winmap[self.win] = self.frontend
 
 	return self
 end
@@ -201,74 +194,11 @@ function Window:on_destroy()
 		self.backend:_free_bitmap()
 		self.backend:_free_icon_api()
 		self.backend:_free_drop_target()
-		win_map[self] = nil
+		winmap[self] = nil
 	end
 end
 
 --activation -----------------------------------------------------------------
-
-function app:_init_activate()
-	self._started = true
-	--check for deferred app activation event
-	if self._activate then
-		self._activate = nil
-		if self.frontend:window_count() > 0 then
-			self:_activated()
-		end
-	end
-	--check for deferred window activation event
-	if self._activate_window then
-		local win = self._activate_window
-		self._activate_window = nil
-		if not win.frontend:dead() then
-			win:_activated()
-		end
-	end
-end
-
-function app:_activated()
-	if not self._started then
-		--defer app activation if the app is not started, to emulate OSX behavior.
-		self._activate = true
-	elseif not self._active then --ignore duplicate events.
-		self._active = true
-		self.frontend:_backend_changed()
-	end
-end
-
-function app:_deactivated()
-	if not self._started then
-		--remove deferred activation if the app was deactivated before running.
-		self._activate = nil
-	elseif self._active then --ignore duplicate events.
-		self._active = false
-		self.frontend:_backend_changed()
-	end
-end
-
-function window:_activated()
-	self.app:_activated() --window activation implies app activation.
-	self.app._last_active_window = self --for the next app:activate()
-	self:_reset_keystate()
-	if not self.app._started then
-		--defer activation if the app is not started, to emulate OSX behavior.
-		self.app._activate_window = self
-	elseif not self._active then --ignore duplicate events.
-		self._active = true
-		self.frontend:_backend_changed()
-	end
-end
-
-function window:_deactivated()
-	self:_reset_keystate()
-	if not self.app._started then
-		--clear deferred activation if the app is not started, to emulate OSX behavior.
-		self.app._activate_window = nil
-	elseif self._active then --ignore duplicate events.
-		self._active = false
-		self.frontend:_backend_changed()
-	end
-end
 
 function app:activate()
 	--unlike OSX, in Windows you don't activate an app, you have to activate a specific window.
@@ -280,8 +210,9 @@ function app:activate()
 end
 
 function app:active_window()
-	--return the active window only if the app is active, to emulate OSX behavior.
-	return self._active and win_map[winapi.Windows.active_window] or nil
+	--foreground_window returns the active window only if the app is active,
+	--which is consistent with OSX.
+	return winmap[winapi.Windows.foreground_window] or nil
 end
 
 function app:active()
@@ -289,34 +220,44 @@ function app:active()
 end
 
 function window:activate()
-	--if the app is inactive, this function doesn't activate the window,
-	--so we want to set _last_active_window for a later call to app:activate(),
-	--which will flash this window's button on the taskbar.
+	--for consistency with OSX, if the app is inactive, this function
+	--doesn't activate the window, instead it marks the window that must
+	--be activated on the next call to app:activate().
 	self.app._last_active_window = self
 	self.win:activate()
 end
 
 function window:active()
-	--return the active flag only if the app is active, to emulate OSX behavior.
-	return self.app._active and self.win.active or false
+	--return the active flag only if the app is active, consistent with OSX.
+	return self.app._active and not self._inactive and self.win.active or false
 end
 
 --this event is received when the window's titlebar is activated.
---we want this event instead of on_activate() because on_activate() is also triggered
---when the app is inactive and the window flashes its taskbar button instead of activating.
+--this is more accurate than on_activate() which also triggers when the app
+--is inactive and the window flashes its taskbar button instead of activating.
 function Window:on_nc_activate()
-	self.backend:_activated()
+	self.backend._inactive = nil --no need for this anymore
+	self.backend.app._active = true --window activation implies app activation.
+	self.backend.app.frontend:_backend_changed()
+	self.backend.app._last_active_window = self.backend --for the next app:activate()
+	self.backend:_reset_keystate()
+	self.frontend:_backend_changed()
 end
 
+--NOTE: GetActiveWindow() and GetForegroundWindow() still point to the window
+--that received the event at the time of the event, hence the _inactive flag.
 function Window:on_deactivate()
-	self.backend:_deactivated()
+	self.backend._inactive = true
+	self.backend:_reset_keystate()
+	self.frontend:_backend_changed()
 end
 
 function Window:on_deactivate_app() --triggered after on_deactivate().
-	self.app:_deactivated()
+	self.backend.app._active = false
+	self.frontend.app:_backend_changed()
 end
 
---state/visibility -----------------------------------------------------------
+--state ----------------------------------------------------------------------
 
 function window:visible()
 	return self.win.visible
@@ -324,30 +265,28 @@ end
 
 function window:show()
 	if self.win.minimized then
-		--show minimized without activating to emulate Linux behavior.
+		--show minimized without activating, consistent with Linux.
 		--self.win:show() also shows the window in minimized state, but it
 		--selects the window on the taskbar (it activates it).
 		self:minimize()
 	else
-		self.win:show(nil, true) --async call to emulate Linux behavior
+		self.win:show(nil, true) --async call consistent with Linux
 	end
 end
 
 function window:hide()
-	self.win:hide(true) --async call to emulate Linux behavior
+	self.win:hide(true) --async call consistent with Linux
 end
-
---state/minimizing -----------------------------------------------------------
 
 function window:minimized()
 	return self.win.minimized
 end
 
 function window:minimize()
-	self.win:minimize(true, true) --async call to emulate Linux behavior
+	--async call consistent with Linux.
+	--not activating the window consistent with OSX and Linux.
+	self.win:minimize(true, true)
 end
-
---state/maximizing -----------------------------------------------------------
 
 function window:maximized()
 	if self._fullscreen then
@@ -359,17 +298,27 @@ function window:maximized()
 end
 
 function window:maximize()
-	self.win:maximize(nil, true) --async call to emulate Linux behavior
+	self.win:maximize(nil, true) --async call consistent with Linux
 end
 
---state/restoring ------------------------------------------------------------
-
 function window:restore()
-	self.win:restore(nil, true) --async call to emulate Linux behavior
+	if self._maximized then
+		self.win.restore_to_maximized = true
+	end
+	if self.win.restore_to_maximized then
+		--NOTE: doing this synchronously otherwise we get an unmaximized window.
+		self.win:restore()
+	else
+		self.win:restore(nil, true) --async call consistent with Linux
+	end
 end
 
 function window:shownormal()
-	self.win:shownormal(nil, true) --async call to emulate Linux behavior
+	self.win:shownormal(nil, true) --async call consistent with Linux
+end
+
+function Window:on_pos_changed(pos)
+	self.frontend:_backend_changed()
 end
 
 --state/fullscreen -----------------------------------------------------------
@@ -379,6 +328,7 @@ function window:fullscreen()
 end
 
 function window:enter_fullscreen()
+	--save state for restoring
 	self._fs = {
 		maximized = self:maximized(),
 		normal_rect = self.win.normal_rect,
@@ -387,36 +337,39 @@ function window:enter_fullscreen()
 	}
 
 	--if it's a layered window, clear it, otherwise the taskbar won't
-	--dissapear quite immediately when the window will be repainted.
+	--dissapear quite immediately when the window will be repainted (WinXP).
 	self:_clear_layered()
 
-	--disable events while we're changing the frame and size.
+	--disable events while we're changing the frame, size and state.
 	local events = self.frontend:events(false)
 	self._norepaint = true --invalidate() barrier
 
-	--this flickers, but without it, the taskbar does not dissapear immediately.
-	self.win.visible = false
+	--this flickers but without it the taskbar won't dissapear immediately.
+	self.win:hide()
 
+	--remove the frame
 	self.win.frame = false
 	self.win.border = false
 	self.win.sizeable = false
+
+	--set normal rect
 	local display = self:display() or self.app:active_display()
 	local dx, dy, dw, dh = display:rect()
 	self.win.normal_rect = pack_rect(nil, dx, dy, dw, dh)
 
-	--center if constrained, to emulate OSX behavior.
+	--center it if constrained and set it again, consistent with OSX.
 	local r = self.win.normal_rect
 	pack_rect(r, box2d.align(r.w, r.h, 'center', 'center', dx, dy, dw, dh))
 	self.win.normal_rect = r
 
+	--restore events, invalidate and show.
 	self._fullscreen = true
-	self.win:shownormal()
-
-	--restore events, and trigger a single resize event and a repaint.
 	self._norepaint = false
 	self.frontend:events(events)
-	self.frontend:_backend_changed()
 	self:invalidate()
+
+	--show synchronously to avoid re-entring.
+	self.win:shownormal()
 end
 
 function window:exit_fullscreen()
@@ -424,24 +377,24 @@ function window:exit_fullscreen()
 	local events = self.frontend:events(false)
 	self._norepaint = true
 
+	--put back the frame and normal rect
+	self.win.frame = self._fs.frame
+	self.win.border = self._fs.frame
+	self.win.sizeable = self._fs.sizeable
+	self.win.normal_rect = self._fs.normal_rect --we set this after maximize() above.
+
+	--restore events, invalidate and show.
+	self._fullscreen = false
+	self._norepaint = false
+	self.frontend:events(events)
+	self:invalidate()
+
+	--restore synchronously to avoid re-entring.
 	if self._fs.maximized then
 		self.win:maximize()
 	else
 		self.win:shownormal()
 	end
-	self.win.frame = self._fs.frame
-	self.win.border = self._fs.frame
-	self.win.sizeable = self._fs.sizeable
-
-	self.win.normal_rect = self._fs.normal_rect --we set this after maximize() above.
-
-	self._fullscreen = false
-
-	--restore events, and trigger a single resize event and a repaint.
-	self._norepaint = false
-	self.frontend:events(events)
-	self.frontend:_backend_changed()
-	self:invalidate()
 end
 
 function Window:on_minimizing()
@@ -590,7 +543,7 @@ function Window:nw_frame_changing(how, rect)
 	if how == 'move' then
 		--set window's position based on current mouse position and initial offset,
 		--regardless of how the coordinates are adjusted by the user on each event.
-		--this also emulates the default OSX behavior.
+		--this is consistent with OSX and it feels better.
 		local m = winapi.Windows.cursor_pos
 		rect.x = m.x - self.nw_dx
 		rect.y = m.y - self.nw_dy
@@ -636,44 +589,19 @@ function Window:on_moved()
 	self.frontend:_backend_changed()
 end
 
-function Window:on_show(shown, how)
-	if how then return end --we're only interested in ShowWindow calls
-	self.frontend:_backend_changed()
-end
-
 function Window:on_resized(flag)
-
-	--early event, ignore.
-	if not self.frontend then return end
-
-	if flag == 'minimized' then
-
-		self.frontend._was_minimized = true
-
-	elseif flag == 'maximized' then
-
+	if flag == 'maximized' then
 		if self.nw_maximizing then return end
-
 		--frameless windows maximize to the entire screen, covering the taskbar. fix that.
 		if not self.frame then
 			self.nw_maximizing = true --on_resized() barrier
 			self.rect = pack_rect(nil, self.backend:display():client_rect())
 			self.nw_maximizing = false
 		end
-
-		self.frontend._was_maximized = true
-		self.frontend._was_minimized = false
-
 		self.backend:invalidate()
-
 	elseif flag == 'restored' then --also triggered on show
-
-		self.frontend._was_minimized = self.minimized
-		self.frontend._was_maximized = self.maximized
-
 		self.backend:invalidate()
 	end
-
 	self.frontend:_backend_changed()
 end
 
@@ -2261,10 +2189,5 @@ function window:_free_drop_target()
 	winapi.RevokeDragDrop(self.win.hwnd)
 end
 
---buttons --------------------------------------------------------------------
-
-
-
-if not ... then require'nw_test' end
 
 return nw

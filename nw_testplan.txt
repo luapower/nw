@@ -4,6 +4,7 @@ easy:
 	- capslock/numlock bug
 	- keychar events
 	- check that key state query is not async in key events, including keychar!
+
 	- mouse movement event coalescing?
 	- mouse movement history
 	- query mouse position and button state
@@ -12,9 +13,11 @@ easy:
 	- hide cursor (but otherwise act normal)
 	- standard cursor
 	- custom image cursor
+
 	- high dpi
 	- frame_extents()
 	- active=false init flag
+
 	- shm painting
 	- cairo view
 	- gl view
@@ -25,7 +28,7 @@ hard:
 	- enabled
 	- why expose is sent while minimized
 	- test invalidate(x, y, w, h)
-	- jank control?
+	- jank control (linux & windows)
 	- check that mouse and keyboard state are always in sync and never polled
 
 

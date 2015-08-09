@@ -809,36 +809,39 @@ end)
 --default initial properties -------------------------------------------------
 
 add('init-defaults', function()
-	local win = app:window(winpos{visible = false})
-	print_events(win)
-	assert(not win:visible())
-	assert(not win:minimized())
-	assert(not win:fullscreen())
-	assert(not win:maximized())
-	assert(win:title() == '')
-	assert(win:frame() == 'normal')
-	assert(not win:topmost())
-	assert(win:minimizable())
-	assert(win:maximizable())
-	assert(win:closeable())
-	assert(win:resizeable())
-	assert(win:fullscreenable())
-	assert(not win:autoquit())
-	assert(win:edgesnapping() == 'screen')
-	app:run(function() print'ok' end)
+	local win = app:window(winpos())
+	app:runafter(0.2, function()
+		assert(win:visible())
+		assert(not win:minimized())
+		assert(not win:fullscreen())
+		assert(not win:maximized())
+		assert(win:title() == '')
+		assert(win:frame() == 'normal')
+		assert(not win:topmost())
+		assert(win:minimizable())
+		assert(win:maximizable())
+		assert(win:closeable())
+		assert(win:resizeable())
+		assert(win:fullscreenable())
+		assert(not win:autoquit())
+		assert(win:edgesnapping() == 'screen')
+		app:quit()
+	end)
+	app:run()
 end)
 
 --interactive tests ----------------------------------------------------------
 
 --[[
 What you should know about window states:
-- there are four state flags making up the window state:
+- there are five state flags making up the window state:
 	- v (visible)
 	- m (minimized)
 	- M (maximized)
-	- f (fullscreen)
-- a window can be created with any combination of (v, m, M) but not f.
-- you can't change v, m or M from f (you can only restore from fullscreen).
+	- F (fullscreen)
+	- A (active)
+- a window can be created with any combination of (v, m, M) but not F.
+- you can't change v, m or M from F (you can only restore from fullscreen).
 - state-changing methods can change one or more of the state flags at once
   depending on the initial state and the method.
 - state-changing methods change the state asynchronously.
@@ -854,97 +857,38 @@ local function state_string(win)
 	local fx,fy,fw,fh = win:frame_rect()
 	local nx,ny,nw,nh = win:normal_frame_rect()
 	return
-		(app:hidden() and 'H' or ' ')..
-		(app:active() and 'A' or ' ')..' | '..
+		(app:hidden() and 'h' or ' ')..
 		(win:visible() and 'v' or ' ')..
 		(win:minimized() and 'm' or ' ')..
 		(win:maximized() and 'M' or ' ')..
 		(win:fullscreen() and 'F' or ' ')..
+		(app:active() and 'A' or ' ')..' | '..
 		(win:active() and 'A' or ' ')..' | '..
 		(string.format('  %4g x%4g',w,h))..
-		(string.format('  %4g x%4g : %4g x%4g',fx,fy,fw,fh))..
-		(string.format('  %4g x%4g : %4g x%4g',nx,ny,nw,nh))
+		(string.format('  %4g x%4g :%4g x%4g',fx,fy,fw,fh))..
+		(string.format('  %4g x%4g :%4g x%4g',nx,ny,nw,nh))
 end
 
 local function init_check(t, child)
 	return function()
 
-		app:autoquit(true)
-
-		--make a control window that receive key presses when win gets hidden
-		local win1 = app:window(winpos{w = 200, h = 50})
-
-		if child then t.parent = win1 end
-		t.min_cw = 100
-		t.min_ch = 100
-
-		local win, help
-		local function create()
-
-			t.w = 700
-			t.h = 300
-			--t.edgesnapping = false
-			t.autoquit = true
-			win = app:window(winpos(t))
-
-			function win1:keypress(key)
-				win:keypress(key)
-			end
-
-			local function print_state(s, ...)
-				if win:dead() then return end
-				print(string.format('%-16s', s), state_string(win), ...)
-			end
-
-			function win:changed(old, new) print_state('changed', old..' -> '..new) end
-			function app:changed(old, new) print_state('app changed', old..' -> '..new) end
-
-			--synthetic changed events
-			function win:was_minimized()      print_state'  was_minimized' end
-			function win:was_maximized()      print_state'  was_maximized' end
-			function win:was_unminimized()    print_state'  was_unminimized' end
-			function win:was_unmaximized()    print_state'  was_unmaximized' end
-			function win:entered_fullscreen() print_state'  entered_fullscreen' end
-			function win:exited_fullscreen()  print_state'  exited_fullscreen' end
-			function win:was_shown()          print_state'  was_shown' end
-			function win:was_hidden()         print_state'  was_hidden' end
-			function app:was_activated()      print_state'    app was_activated' end
-			function win:was_activated()      print_state'    was_activated' end
-			function win:was_deactivated()    print_state'    was_deactivated' end
-			function app:was_deactivated()    print_state'    app was_deactivated' end
-			function win:was_resized(...)     print_state('      was_resized', ...) end
-			function win:was_moved(...)       print_state('      was_moved', ...) end
-
-			function win:was_closed()         print_state'was_closed' end
-
-			function win:sizing(...)          print_state('  sizing', ...) end
-
-			function app:quitting()           print_state'quitting'; return true end
-
-			function app:window_created()     print'window_created' end
-			function app:window_closed()      print'window_closed' end
-
-			--function app:was_unhidden()    print'app was_unhidden' end
-			--function app:was_hidden()      print'app was_hidden' end
-
-			function app:displays_changed() print'displays_changed' end
-
-			help = [[
+		print[[
 
 	F1       help
 	H        hide
 	S        show
+	N        minimize
+	M        maximize
+	F        fullscreen on/off
 	esc      restore
 	D        shownormal
-	F        toggle fullscreen
-	M        maximize
-	N        minimize
 	A        activate win1
-	B        activate win2
-	Z        zoom in
-	X        zoom out
-	shift+Z  zoom in (normal rect)
-	shift+X  zoom out (normal rect)
+	B        activate win
+	Z        resize+
+	F5       activate app after 2s
+	X        resize-
+	shift+Z  resize+ (normal rect)
+	shift+X  resize- (normal rect)
 	arrows   move
 	4        toggle minsize
 	5        toggle maxsize
@@ -961,12 +905,101 @@ local function init_check(t, child)
 	Q        quit
 	0        app hide (OSX)
 	9        app hide and unhide after 1s (OSX)
+	F2       toggle rendering
 	enter    print state
 ]]
+
+		app:autoquit(true)
+
+		local win1, win
+
+		local function print_state(s, ...)
+			if win:dead() then return end
+			print(string.format('%-16s', s), state_string(win), ...)
+		end
+
+		function app:quitting()              print_state'quitting'; return true end
+		function app:window_created(win)     print(string.format('%-16s', 'window_created'), state_string(win)) end
+		function app:window_closed(win)      print(string.format('%-16s', 'window_closed'), state_string(win)) end
+		function app:was_unhidden()          print_state'app was_unhidden' end
+		function app:was_hidden()            print_state'app was_hidden' end
+		function app:displays_changed()      print_state'displays_changed' end
+		function app:was_deactivated()       print_state'    app was_deactivated' end
+		function app:was_activated()         print_state'    app was_activated' end
+		function app:changed(old, new)       print_state('app changed', old..' -> '..new) end
+
+		--make a control window that receive key presses when win gets hidden
+		win1 = app:window(winpos{w = 200, h = 50})
+
+		t.parent = child and win1 or nil
+		t.min_cw = 100
+		t.min_ch = 100
+		t.w = 700
+		t.h = 300
+		--t.edgesnapping = false
+		t.autoquit = true
+
+		local function create()
+
+			win = app:window(winpos(t))
+
+			function win1:keypress(key)
+				win:keypress(key)
+			end
+
+			function win:changed(old, new)    print_state('changed', old..' -> '..new) end
+			--synthetic changed events
+			function win:was_minimized()      print_state'  was_minimized' end
+			function win:was_maximized()      print_state'  was_maximized' end
+			function win:was_unminimized()    print_state'  was_unminimized' end
+			function win:was_unmaximized()    print_state'  was_unmaximized' end
+			function win:entered_fullscreen() print_state'  entered_fullscreen' end
+			function win:exited_fullscreen()  print_state'  exited_fullscreen' end
+			function win:was_shown()          print_state'  was_shown' end
+			function win:was_hidden()         print_state'  was_hidden' end
+			function win:was_activated()      print_state'    was_activated' end
+			function win:was_deactivated()    print_state'    was_deactivated' end
+			function win:was_resized(...)     print_state('      was_resized', ...) end
+			function win:was_moved(...)       print_state('      was_moved', ...) end
+			function win:was_closed()         print_state'was_closed' end
+			function win:sizing(...)          print_state('  sizing', ...) end
+
 			local allow_close = true
 
 			local function next_cursor()
 				return cursors[i]
+			end
+
+			function win:repaint()
+				self:bitmap()
+			end
+
+			local allow_rendering = true
+			local function set_rendering()
+				if not allow_rendering then return end
+				local i = 0
+				app:runevery(1/30, function()
+					i = i + 5
+					if not win:dead() then
+						win:invalidate()
+					end
+					return allow_rendering
+				end)
+
+				app:runevery(1/30, function()
+					local bmp = win:bitmap()
+					if not bmp then return end
+					local _, setpixel = bitmap.pixel_interface(bmp)
+					for y = 0, bmp.h-1 do
+						for x = 0, bmp.w-1 do
+							local i = (i % bmp.w)
+							local c = x >= i and x <= i + 50 and 255 or 100
+							setpixel(x, y, c, c, c, 255)
+						end
+					end
+					return allow_rendering
+				end)
+				win:invalidate()
 			end
 
 			function win:keypress(key)
@@ -987,24 +1020,19 @@ local function init_check(t, child)
 				elseif key == 'N' then
 					self:minimize()
 				elseif key == 'A' then
-					self:activate()
-				elseif key == 'B' then
 					win1:activate()
-				elseif key == 'Z' then
+				elseif key == 'B' then
+					self:activate()
+				elseif key == 'F5' then
+					app:runafter(2, function()
+						app:activate()
+					end)
+				elseif key == 'X' or key == 'Z' then
+					local ofs = key == 'Z' and 10 or -10
 					if self.app:key'shift' then
-						local x, y, w, h = win:normal_frame_rect()
-						win:normal_frame_rect(x-10, y-10, w+20, h+20)
+						win:normal_frame_rect(box2d.offset(ofs, win:normal_frame_rect()))
 					else
-						local x, y, w, h = win:frame_rect()
-						win:frame_rect(x-10, y-10, w+20, h+20)
-					end
-				elseif key == 'X' then
-					if self.app:key'shift' then
-						local x, y, w, h = win:normal_frame_rect()
-						win:normal_frame_rect(x+10, y+10, w-20, h-20)
-					else
-						local x, y, w, h = win:frame_rect()
-						win:frame_rect(x+10, y+10, w-20, h-20)
+						win:frame_rect(box2d.offset(ofs, win:frame_rect()))
 					end
 				elseif key == 'left' or key == 'right' or key == 'up' or key == 'down' then
 					local x, y = win:frame_rect()
@@ -1060,14 +1088,17 @@ local function init_check(t, child)
 					end)
 				elseif key == 'F1' then
 					print(help)
+				elseif key == 'F2' then
+					allow_rendering = not allow_rendering
+					set_rendering()
 				elseif key == 'enter' then
 					win1.name = 'win1'
 					win.name = 'win'
+					print(('-'):rep(100))
 					print('state             ', state_string(win))
+					print''
 					print('active            ', win:active())
 					print('active window     ', app:active_window() and app:active_window().name)
-					print('app active        ', app:active())
-					print('app hidden        ', app:hidden())
 					print('enabled           ', win:enabled())
 					print('sticky            ', win:sticky())
 					print('frame_rect        ', win:frame_rect())
@@ -1079,49 +1110,35 @@ local function init_check(t, child)
 					print('cursor            ', win:cursor())
 					print('edgesnapping      ', win:edgesnapping())
 					print('autoquit          ', win:autoquit())
+					print''
+					print('app active        ', app:active())
+					print('app hidden        ', app:hidden())
 					print('app autoquit      ', app:autoquit())
+					print''
 					print('display           ', pp.format(win:display()))
 					print('display_count     ', app:display_count())
+					print('main_display      ', pp.format(app:main_display()))
 					print('active_display    ', pp.format(app:active_display()))
+					print(('-'):rep(100))
 				end
 			end
 
-			local i = 0
-			app:runevery(1/30, function()
-				i = i + 5
-				if not win:dead() then
-					win:invalidate()
-				end
-			end)
-
-			app:runevery(1/30, function()
-				local bmp = win:bitmap()
-				if not bmp then return end
-				local _, setpixel = bitmap.pixel_interface(bmp)
-				for y = 0, bmp.h-1 do
-					for x = 0, bmp.w-1 do
-						local i = (i % bmp.w)
-						local c = x >= i and x <= i + 50 and 255 or 100
-						setpixel(x, y, c, c, c, 255)
-					end
-				end
-			end)
-			win:invalidate()
+			set_rendering()
 
 			function win:closing(...)
 				print_state('closing', ...)
 				return allow_close
 			end
 
+			--list all window methods
 			for k,v in pairs(getmetatable(win).__index) do
 				if type(k) == 'string' and not k:find'^_' then
-					print(k)
+					--print(k)
 				end
 			end
 
 		end
 		create()
-		print(help)
 		app:run()
 	end
 end
@@ -1162,11 +1179,22 @@ local function parse_initial_state_string(s)
 	local visible
 	if s:match'h' then visible = false elseif s:match'v' then visible = true end
 	return {
-		visible = s:match'v' and true or nil,
+		visible = visible,
 		minimized = s:match'm' and true or nil,
 		maximized = s:match'M' and true or nil,
-		fullscreen = s:match'f' and true or nil,
+		fullscreen = s:match'F' and true or nil,
+		active = s:match'A' and true or nil,
 	}
+end
+
+local function state_string(win)
+	if win:dead() then return 'x' end
+	return
+		(win:visible() and 'v' or 'h')..
+		(win:minimized() and 'm' or '')..
+		(win:maximized() and 'M' or '')..
+		(win:fullscreen() and 'F' or '')..
+		(win:active() and 'A' or '')
 end
 
 --wait for a predicate on a timeout.
@@ -1198,23 +1226,23 @@ local function state_test(t)
 			--create a window
 			local win = app:window(winpos(initial_state))
 
-			--wait for the window to be shown
-			if initial_state.visible ~= false then
-				assert(waitfor(function() return win:visible() end), 'window not visible')
-			end
-
-			--check initial state
-			assert(initial_state.visible ~= nil or win:visible())
-			assert(initial_state.visible ~= true or win:visible())
-			assert(initial_state.visible ~= false or not win:visible())
-			assert(not not initial_state.minimized == win:minimized())
-			assert(not not initial_state.maximized == win:maximized())
-			assert(not not initial_state.fullscreen == win:fullscreen())
+			--wait for the window to get to initial state
+			waitfor(function()
+				win:activate()
+				app:activate()
+				return
+					    (initial_state.visible ~= nil or win:visible())
+					and (initial_state.visible ~= true or win:visible())
+					and (initial_state.visible ~= false or not win:visible())
+					and (not not initial_state.minimized == win:minimized())
+					and (not not initial_state.maximized == win:maximized())
+					and (not not initial_state.fullscreen == win:fullscreen())
+					and (not not initial_state.active == win:active())
+			end)
 
 			--catch events
 			local events = {}
 			function win:event(event_name)
-				if event_name == 'changed' then return end
 				print('   EVENT: '..event_name)
 				events[#events+1] = event_name
 				events[event_name] = (events[event_name] or 0) + 1
@@ -1224,15 +1252,21 @@ local function state_test(t)
 			for i=2,#t,2 do
 				local actions = t[i] --actions: 'action1 action2 ...'
 				local state = t[i+1] --state: '[vmMf] event1 event2...'
-				local expected_state = state:match'^[vmMf]*'
+				local expected_state = state:match'^[hvmMFA]*'
 				local expected_events = state:match'%s+(.*)' or ''
 				print(state_string(win)..' -> '..actions..' -> '..expected_state..' ('..expected_events..')')
 
-				--perform all the actions and record all synchronous events
+				--perform all the actions and record all events
 				events = {}
 				for action in glue.gsplit(actions, ' ') do
 					print('   ACTION: '..action)
-					win[action](win)
+					if action == 'enter_fullscreen' then
+						win:fullscreen(true)
+					elseif action == 'exit_fullscreen' then
+						win:fullscreen(false)
+					else
+						win[action](win)
+					end
 				end
 
 				--poll the window until it reaches the expected state or a timeout expires.
@@ -1249,12 +1283,14 @@ local function state_test(t)
 				--check that all expected events were fired.
 				local i = 0
 				for event in glue.gsplit(expected_events, ' ') do
-					i = i + 1
-					if not events[event] then
-						error(table.concat(events, ' ') .. ', expected ' .. expected_events)
-					end
-					if events[event] > 1 then
-						error('multiple '..event)
+					if event ~= '' then
+						i = i + 1
+						if not events[event] then
+							error(table.concat(events, ' ') .. ', expected ' .. expected_events)
+						end
+						if events[event] > 1 then
+							error('multiple '..event)
+						end
 					end
 				end
 			end
@@ -1268,231 +1304,131 @@ local function state_test(t)
 	end
 end
 
-add('state-test', state_test{'',
-	'maximize', 'vM was_maximized',
+add('state-test', state_test{'vA',
+	'maximize', 'vMA was_maximized',
 	'minimize', 'vmM was_minimized',
-	'restore', 'vM was_unminimized',
+	'restore', 'vMA was_unminimized',
 })
 
-add('state-show', state_test{'h', 'show', 'v was_shown'})
-add('state-show', state_test{'v', 'hide', ' was_hidden'})
-add('state-maximize', state_test{'v', 'maximize', 'vM was_maximized'})
-add('state-minimize', state_test{'v', 'minimize', 'vm was_minimized'})
-add('state-restore', state_test{'v', 'restore', 'v'})
-add('state-shownormal', state_test{'v', 'shownormal', 'v'})
-
---window states --------------------------------------------------------------
-
---check various state transitions.
---each entry in the table describes one test:
---		{command-list, flagcheck, command-list, flag-check}.
---these tests take some time, better disable window animations in the OS before running them.
---NOTE: fullscreen animations on OSX (the most annoying of all) cannot be disabled.
-for i,test in ipairs({
-
+for i,t in ipairs{
 	--transitions fron normal
-	{{}, 'v', {'show'}, 'v'},
-	{{}, 'v', {'hide'}, ''},
-	{{}, 'v', {'maximize'}, 'vM'},
-	{{}, 'v', {'minimize'}, 'vm'},
-	{{}, 'v', {'restore'}, 'v'},
-	{{}, 'v', {'shownormal'}, 'v'},
+	{{'show'}, 'vA'},
+	{{'hide'}, 'h'},
+	{{'maximize'}, 'vMA'},
+	{{'minimize'}, 'vm'},
+	{{'restore'}, 'vA'},
+	{{'shownormal'}, 'vA'},
 	--transitions fron hidden
-	{{'hide'}, '', {'show'}, 'v'},
-	{{'hide'}, '', {'hide'}, ''},
-	{{'hide'}, '', {'maximize'}, 'vM'},
-	{{'hide'}, '', {'minimize'}, 'vm'},
-	{{'hide'}, '', {'restore'}, 'v'},
-	{{'hide'}, '', {'shownormal'}, 'v'},
+	{{'hide'}, 'h', {'show'}, 'vA'},
+	{{'hide'}, 'h', {'hide'}, 'h'},
+	{{'hide'}, 'h', {'maximize'}, 'vMA'},
+	{{'hide'}, 'h', {'minimize'}, 'vm'},
+	{{'hide'}, 'h', {'restore'}, 'vA'},
+	{{'hide'}, 'h', {'shownormal'}, 'vA'},
 	--transitions fron minimized
 	{{'minimize'}, 'vm', {'show'}, 'vm'},
-	{{'minimize'}, 'vm', {'hide'}, 'm'},
-	{{'minimize'}, 'vm', {'maximize'}, 'vM'},
+	{{'minimize'}, 'vm', {'hide'}, 'hm'},
+	{{'minimize'}, 'vm', {'maximize'}, 'vMA'},
 	{{'minimize'}, 'vm', {'minimize'}, 'vm'},
-	{{'minimize'}, 'vm', {'restore'}, 'v'},
-	{{'minimize'}, 'vm', {'shownormal'}, 'v'},
+	{{'minimize'}, 'vm', {'restore'}, 'vA'},
+	{{'minimize'}, 'vm', {'shownormal'}, 'vA'},
 	--transitions from maximized
-	{{'maximize'}, 'vM', {'show'}, 'vM'},
-	{{'maximize'}, 'vM', {'hide'}, 'M'},
-	{{'maximize'}, 'vM', {'maximize'}, 'vM'},
-	{{'maximize'}, 'vM', {'minimize'}, 'vmM'},
-	{{'maximize'}, 'vM', {'restore'}, 'v'},
-	{{'maximize'}, 'vM', {'shownormal'}, 'v'},
+	{{'maximize'}, 'vMA', {'show'}, 'vMA'},
+	{{'maximize'}, 'vMA', {'hide'}, 'hM'},
+	{{'maximize'}, 'vMA', {'maximize'}, 'vMA'},
+	{{'maximize'}, 'vMA', {'minimize'}, 'vmM'},
+	{{'maximize'}, 'vMA', {'restore'}, 'vA'},
+	{{'maximize'}, 'vMA', {'shownormal'}, 'vA'},
 	--transitions from hidden minimized
-	{{'minimize', 'hide'}, 'm', {'show'}, 'vm'},
-	{{'minimize', 'hide'}, 'm', {'hide'}, 'm'},
-	{{'minimize', 'hide'}, 'm', {'maximize'}, 'vM'},
-	{{'minimize', 'hide'}, 'm', {'minimize'}, 'vm'},
-	{{'minimize', 'hide'}, 'm', {'restore'}, 'v'},
-	{{'minimize', 'hide'}, 'm', {'shownormal'}, 'v'},
+	{{'minimize', 'hide'}, 'hm', {'show'}, 'vm'},
+	{{'minimize', 'hide'}, 'hm', {'hide'}, 'hm'},
+	{{'minimize', 'hide'}, 'hm', {'maximize'}, 'vM'},
+	{{'minimize', 'hide'}, 'hm', {'minimize'}, 'vm'},
+	{{'minimize', 'hide'}, 'hm', {'restore'}, 'v'},
+	{{'minimize', 'hide'}, 'hm', {'shownormal'}, 'v'},
 	--transitions from hidden maximized
-	{{'maximize', 'hide'}, 'M', {'show'}, 'vM'},
-	{{'maximize', 'hide'}, 'M', {'hide'}, 'M'},
-	{{'maximize', 'hide'}, 'M', {'maximize'}, 'vM'},
-	{{'maximize', 'hide'}, 'M', {'minimize'}, 'vmM'},
-	{{'maximize', 'hide'}, 'M', {'restore'}, 'v'},
-	{{'maximize', 'hide'}, 'M', {'shownormal'}, 'v'},
+	{{'maximize', 'hide'}, 'hM', {'show'}, 'vMA'},
+	{{'maximize', 'hide'}, 'hM', {'hide'}, 'hM'},
+	{{'maximize', 'hide'}, 'hM', {'maximize'}, 'vMA'},
+	{{'maximize', 'hide'}, 'hM', {'minimize'}, 'vmM'},
+	{{'maximize', 'hide'}, 'hM', {'restore'}, 'vA'},
+	{{'maximize', 'hide'}, 'hM', {'shownormal'}, 'vA'},
 	--transitions from minimized maximized
 	{{'maximize', 'minimize'}, 'vmM', {'show'}, 'vmM'},
-	{{'maximize', 'minimize'}, 'vmM', {'hide'}, 'mM'},
-	{{'maximize', 'minimize'}, 'vmM', {'maximize'}, 'vM'},
+	{{'maximize', 'minimize'}, 'vmM', {'hide'}, 'hmM'},
+	{{'maximize', 'minimize'}, 'vmM', {'maximize'}, 'vMA'},
 	{{'maximize', 'minimize'}, 'vmM', {'minimize'}, 'vmM'},
-	{{'maximize', 'minimize'}, 'vmM', {'restore'}, 'vM'},
-	{{'maximize', 'minimize'}, 'vmM', {'shownormal'}, 'v'},
+	{{'maximize', 'minimize'}, 'vmM', {'restore'}, 'vMA'},
+	{{'maximize', 'minimize'}, 'vmM', {'shownormal'}, 'vA'},
 	--transitions from hidden minimized maximized
-	{{'maximize', 'minimize', 'hide'}, 'mM', {'show'}, 'vmM'},
-	{{'maximize', 'minimize', 'hide'}, 'mM', {'hide'}, 'mM'},
-	{{'maximize', 'minimize', 'hide'}, 'mM', {'maximize'}, 'vM'},
-	{{'maximize', 'minimize', 'hide'}, 'mM', {'minimize'}, 'vmM'},
-	{{'maximize', 'minimize', 'hide'}, 'mM', {'restore'}, 'vM'},
-	{{'maximize', 'minimize', 'hide'}, 'mM', {'shownormal'}, 'v'},
+	{{'maximize', 'minimize', 'hide'}, 'hmM', {'show'}, 'vmM'},
+	{{'maximize', 'minimize', 'hide'}, 'hmM', {'hide'}, 'hmM'},
+	{{'maximize', 'minimize', 'hide'}, 'hmM', {'maximize'}, 'vM'},
+	{{'maximize', 'minimize', 'hide'}, 'hmM', {'minimize'}, 'vmM'},
+	{{'maximize', 'minimize', 'hide'}, 'hmM', {'restore'}, 'vM'},
+	{{'maximize', 'minimize', 'hide'}, 'hmM', {'shownormal'}, 'v'},
 
 	--transitions from fullscreen
-	{{'enter_fullscreen'}, 'vF', {'show'}, 'vF'},
-	{{'enter_fullscreen'}, 'vF', {'hide'}, 'vF'},
-	{{'enter_fullscreen'}, 'vF', {'maximize'}, 'vF'},
-	{{'enter_fullscreen'}, 'vF', {'minimize'}, 'vF'},
-	{{'enter_fullscreen'}, 'vF', {'restore'}, 'v'},
-	{{'enter_fullscreen'}, 'vF', {'shownormal'}, 'vF'},
+	{{'enter_fullscreen'}, 'vFA', {'show'}, 'vFA'},
+	{{'enter_fullscreen'}, 'vFA', {'hide'}, 'vFA'},
+	{{'enter_fullscreen'}, 'vFA', {'maximize'}, 'vFA'},
+	{{'enter_fullscreen'}, 'vFA', {'minimize'}, 'vFA'},
+	{{'enter_fullscreen'}, 'vFA', {'restore'}, 'vA'},
+	{{'enter_fullscreen'}, 'vFA', {'shownormal'}, 'vFA'},
 	--transitions from hidden fullscreen
-	{{'enter_fullscreen', 'hide'}, 'vF', {'show'}, 'vF'},
-	{{'enter_fullscreen', 'hide'}, 'vF', {'hide'}, 'vF'},
-	{{'enter_fullscreen', 'hide'}, 'vF', {'maximize'}, 'vF'},
-	{{'enter_fullscreen', 'hide'}, 'vF', {'minimize'}, 'vF'},
-	{{'enter_fullscreen', 'hide'}, 'vF', {'restore'}, 'v'},
-	{{'enter_fullscreen', 'hide'}, 'vF', {'shownormal'}, 'vF'},
+	{{'enter_fullscreen', 'hide'}, 'vFA', {'show'}, 'vFA'},
+	{{'enter_fullscreen', 'hide'}, 'vFA', {'hide'}, 'vFA'},
+	{{'enter_fullscreen', 'hide'}, 'vFA', {'maximize'}, 'vFA'},
+	{{'enter_fullscreen', 'hide'}, 'vFA', {'minimize'}, 'vFA'},
+	{{'enter_fullscreen', 'hide'}, 'vFA', {'restore'}, 'vA'},
+	{{'enter_fullscreen', 'hide'}, 'vFA', {'shownormal'}, 'vFA'},
 	--transitions from maximized fullscreen
-	{{'maximize', 'enter_fullscreen'}, 'vMF', {'show'}, 'vMF'},
-	{{'maximize', 'enter_fullscreen'}, 'vMF', {'hide'}, 'vMF'},
-	{{'maximize', 'enter_fullscreen'}, 'vMF', {'maximize'}, 'vMF'},
-	{{'maximize', 'enter_fullscreen'}, 'vMF', {'minimize'}, 'vMF'},
-	{{'maximize', 'enter_fullscreen'}, 'vMF', {'restore'}, 'vM'},
-	{{'maximize', 'enter_fullscreen'}, 'vMF', {'shownormal'}, 'vMF'},
+	{{'maximize', 'enter_fullscreen'}, 'vMFA', {'show'}, 'vMFA'},
+	{{'maximize', 'enter_fullscreen'}, 'vMFA', {'hide'}, 'vMFA'},
+	{{'maximize', 'enter_fullscreen'}, 'vMFA', {'maximize'}, 'vMFA'},
+	{{'maximize', 'enter_fullscreen'}, 'vMFA', {'minimize'}, 'vMFA'},
+	{{'maximize', 'enter_fullscreen'}, 'vMFA', {'restore'}, 'vMA'},
+	{{'maximize', 'enter_fullscreen'}, 'vMFA', {'shownormal'}, 'vMFA'},
 	--transitions from hidden maximized fullscreen
-	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMF', {'show'}, 'vMF'},
-	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMF', {'hide'}, 'vMF'},
-	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMF', {'maximize'}, 'vMF'},
-	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMF', {'minimize'}, 'vMF'},
-	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMF', {'restore'}, 'vM'},
-	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMF', {'shownormal'}, 'vMF'},
+	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMFA', {'show'}, 'vMFA'},
+	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMFA', {'hide'}, 'vMFA'},
+	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMFA', {'maximize'}, 'vMFA'},
+	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMFA', {'minimize'}, 'vMFA'},
+	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMFA', {'restore'}, 'vMA'},
+	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMFA', {'shownormal'}, 'vMFA'},
 	--transitions to enter fullscreen
-	{{}, 'v', {'enter_fullscreen'}, 'vF'},
-	{{'hide'}, '', {'enter_fullscreen'}, 'vF'},
-	{{'minimize'}, 'vm', {'enter_fullscreen'}, 'vF'},
-	{{'maximize'}, 'vM', {'enter_fullscreen'}, 'vMF'},
-	{{'minimize', 'hide'}, 'm', {'enter_fullscreen'}, 'vF'},
-	{{'maximize', 'minimize'}, 'vmM', {'enter_fullscreen'}, 'vMF'},
-	{{'maximize', 'minimize', 'hide'}, 'mM', {'enter_fullscreen'}, 'vMF'},
-	{{'enter_fullscreen'}, 'vF', {'enter_fullscreen'}, 'vF'},
-	{{'enter_fullscreen', 'hide'}, 'vF', {'enter_fullscreen'}, 'vF'},
-	{{'maximize', 'enter_fullscreen'}, 'vMF', {'enter_fullscreen'}, 'vMF'},
-	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMF', {'enter_fullscreen'}, 'vMF'},
+	{{'enter_fullscreen'}, 'vFA'},
+	{{'hide'}, '', {'enter_fullscreen'}, 'vFA'},
+	{{'minimize'}, 'vm', {'enter_fullscreen'}, 'vFA'},
+	{{'maximize'}, 'vMA', {'enter_fullscreen'}, 'vMFA'},
+	{{'minimize', 'hide'}, 'm', {'enter_fullscreen'}, 'vFA'},
+	{{'maximize', 'minimize'}, 'vmM', {'enter_fullscreen'}, 'vMFA'},
+	{{'maximize', 'minimize', 'hide'}, 'mM', {'enter_fullscreen'}, 'vMFA'},
+	{{'enter_fullscreen'}, 'vFA', {'enter_fullscreen'}, 'vFA'},
+	{{'enter_fullscreen', 'hide'}, 'vFA', {'enter_fullscreen'}, 'vFA'},
+	{{'maximize', 'enter_fullscreen'}, 'vMFA', {'enter_fullscreen'}, 'vMFA'},
+	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMFA', {'enter_fullscreen'}, 'vMFA'},
 	--transitions to exit fullscreen
-	{{}, 'v', {'exit_fullscreen'}, 'v'},
-	{{'hide'}, '', {'exit_fullscreen'}, ''},
+	{{'exit_fullscreen'}, 'v'},
+	{{'hide'}, 'h', {'exit_fullscreen'}, 'h'},
 	{{'minimize'}, 'vm', {'exit_fullscreen'}, 'vm'},
-	{{'maximize'}, 'vM', {'exit_fullscreen'}, 'vM'},
-	{{'minimize', 'hide'}, 'm', {'exit_fullscreen'}, 'm'},
+	{{'maximize'}, 'vMA', {'exit_fullscreen'}, 'vMA'},
+	{{'minimize', 'hide'}, 'vm', {'exit_fullscreen'}, 'vm'},
 	{{'maximize', 'minimize'}, 'vmM', {'exit_fullscreen'}, 'vmM'},
-	{{'maximize', 'minimize', 'hide'}, 'mM', {'exit_fullscreen'}, 'mM'},
-	{{'enter_fullscreen'}, 'vF', {'exit_fullscreen'}, 'v'},
-	{{'enter_fullscreen', 'hide'}, 'vF', {'exit_fullscreen'}, 'v'},
-	{{'maximize', 'enter_fullscreen'}, 'vMF', {'exit_fullscreen'}, 'vM'},
-	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMF', {'exit_fullscreen'}, 'vM'},
-
-}) do
-	local commands1, check1, commands2, check2 = unpack(test)
-
-	local function make_test(init_flags)
-
-		--compose test name.
-		local t = {}
-		t[#t+1] = init_flags.visible == false and 'hidden' or nil
-		t[#t+1] = init_flags.minimized and 'minimized' or nil
-		t[#t+1] = init_flags.maximized and 'maximized' or nil
-		glue.extend(t, commands1, commands2)
-		glue.append(t, init_flags.frame == 'none' and 'noframe' or nil)
-		local test_name = table.concat(t, '-')
-
-		add('state-'..test_name, function()
-
-			app:autoquit(false)
-			local win = app:window(winpos(init_flags))
-			local rec = recorder()
-
-			local function flags_string()
-				return
-					(win:visible() and 'v' or '')..
-					(win:minimized() and 'm' or '')..
-					(win:maximized() and 'M' or '')..
-					(win:fullscreen() and 'F' or '')
-			end
-
-			local changed = 0
-			function win:event(e, ...)
-				if e == 'changed' or e == 'closed' then
-					print('> '..e, flags_string())
-				end
-				if e == 'changed' then
-					changed = changed + 1
-				end
-			end
-
-			local function run_commands(commands, expected_flags)
-
-				--run a list of commands without args on a window object.
-				for i, command in ipairs(commands) do
-
-					local flags1 = flags_string()
-
-					local fs = nw:os'OSX' and (win:fullscreen() or command == 'enter_fullscreen')
-					if command == 'enter_fullscreen' then
-						win:fullscreen(true)
-					elseif command == 'exit_fullscreen' then
-						win:fullscreen(false)
-					else
-						win[command](win)
-					end
-					if fs then
-						sleep(1.5)
-					end
-
-					--check that at least one changed() event was fired if the flags changed.
-					local flags2 = flags_string()
-					if flags2 ~= flags1 then
-						assert(changed > 0, 'no changed() event for '..flags1..'->'..flags2)
-						if changed > 1 then
-							print('! duplicate changed() event ('..changed..' times) for '..flags1..'->'..flags2)
-						end
-					end
-					changed = 0
-
-				end
-
-				--check current state flags against a flag combination string.
-				local actual_flags = flags_string()
-				if actual_flags ~= expected_flags then
-					error(actual_flags .. ', expected ' .. expected_flags)
-				end
-			end
-
-			run_commands(commands1, check1)
-			run_commands(commands2, check2)
-
-			local was_fs = win:fullscreen() and nw:os'OSX'
-
-			win:close()
-
-			if was_fs then sleep(1.5) end
-
-			assert(win:dead())
-			collectgarbage()
-
-		end)
+	{{'maximize', 'minimize', 'hide'}, 'vmM', {'exit_fullscreen'}, 'vmM'},
+	{{'enter_fullscreen'}, 'vFA', {'exit_fullscreen'}, 'vA'},
+	{{'enter_fullscreen', 'hide'}, 'vFA', {'exit_fullscreen'}, 'vA'},
+	{{'maximize', 'enter_fullscreen'}, 'vMFA', {'exit_fullscreen'}, 'vMA'},
+	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMFA', {'exit_fullscreen'}, 'vMA'},
+} do
+	local nt = {}
+	local tt = {'vA'}
+	for i = 1, #t, 2 do
+		glue.extend(nt, t[i])
+		glue.append(tt, table.concat(t[i], ' '), t[i+1])
 	end
-
-	make_test{}
-	make_test{frame = 'none'}
+	local test_name = table.concat(nt,'-')
+	add('state-'..test_name, state_test(tt))
 end
 
 --state/enabled --------------------------------------------------------------

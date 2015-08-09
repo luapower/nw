@@ -2437,12 +2437,6 @@ function Window:performDragOperation(sender)
 	return true
 end
 
---buttons --------------------------------------------------------------------
-
-
-
 objc.debug.cbframe = _cbframe --restore cbframe setting.
-
-if not ... then require'nw_test' end
 
 return nw
