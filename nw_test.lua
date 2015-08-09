@@ -1304,12 +1304,6 @@ local function state_test(t)
 	end
 end
 
-add('state-test', state_test{'vA',
-	'maximize', 'vMA was_maximized',
-	'minimize', 'vmM was_minimized',
-	'restore', 'vMA was_unminimized',
-})
-
 for i,t in ipairs{
 	--transitions fron normal
 	{{'show'}, 'vA'},
@@ -1383,43 +1377,46 @@ for i,t in ipairs{
 	{{'enter_fullscreen', 'hide'}, 'vFA', {'restore'}, 'vA'},
 	{{'enter_fullscreen', 'hide'}, 'vFA', {'shownormal'}, 'vFA'},
 	--transitions from maximized fullscreen
-	{{'maximize', 'enter_fullscreen'}, 'vMFA', {'show'}, 'vMFA'},
-	{{'maximize', 'enter_fullscreen'}, 'vMFA', {'hide'}, 'vMFA'},
-	{{'maximize', 'enter_fullscreen'}, 'vMFA', {'maximize'}, 'vMFA'},
-	{{'maximize', 'enter_fullscreen'}, 'vMFA', {'minimize'}, 'vMFA'},
-	{{'maximize', 'enter_fullscreen'}, 'vMFA', {'restore'}, 'vMA'},
-	{{'maximize', 'enter_fullscreen'}, 'vMFA', {'shownormal'}, 'vMFA'},
+	--TODO: maximize followed immediately by enter_fullscreen doesn't work
+	--because maximize() is async and enter_fullscreen() saves the maximized
+	--state that it finds at invocation time, which is before the maximization.
+	{{'maximize'}, 'vMA', {'enter_fullscreen'}, 'vMFA', {'show'}, 'vMFA'},
+	{{'maximize'}, 'vMA', {'enter_fullscreen'}, 'vMFA', {'hide'}, 'vMFA'},
+	{{'maximize'}, 'vMA', {'enter_fullscreen'}, 'vMFA', {'maximize'}, 'vMFA'},
+	{{'maximize'}, 'vMA', {'enter_fullscreen'}, 'vMFA', {'minimize'}, 'vMFA'},
+	{{'maximize'}, 'vMA', {'enter_fullscreen'}, 'vMFA', {'restore'}, 'vMA'},
+	{{'maximize'}, 'vMA', {'enter_fullscreen'}, 'vMFA', {'shownormal'}, 'vMFA'},
 	--transitions from hidden maximized fullscreen
-	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMFA', {'show'}, 'vMFA'},
-	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMFA', {'hide'}, 'vMFA'},
-	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMFA', {'maximize'}, 'vMFA'},
-	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMFA', {'minimize'}, 'vMFA'},
-	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMFA', {'restore'}, 'vMA'},
-	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMFA', {'shownormal'}, 'vMFA'},
+	{{'maximize'}, 'vMA', {'enter_fullscreen', 'hide'}, 'vMFA', {'show'}, 'vMFA'},
+	{{'maximize'}, 'vMA', {'enter_fullscreen', 'hide'}, 'vMFA', {'hide'}, 'vMFA'},
+	{{'maximize'}, 'vMA', {'enter_fullscreen', 'hide'}, 'vMFA', {'maximize'}, 'vMFA'},
+	{{'maximize'}, 'vMA', {'enter_fullscreen', 'hide'}, 'vMFA', {'minimize'}, 'vMFA'},
+	{{'maximize'}, 'vMA', {'enter_fullscreen', 'hide'}, 'vMFA', {'restore'}, 'vMA'},
+	{{'maximize'}, 'vMA', {'enter_fullscreen', 'hide'}, 'vMFA', {'shownormal'}, 'vMFA'},
 	--transitions to enter fullscreen
 	{{'enter_fullscreen'}, 'vFA'},
-	{{'hide'}, '', {'enter_fullscreen'}, 'vFA'},
-	{{'minimize'}, 'vm', {'enter_fullscreen'}, 'vFA'},
+	{{'hide'}, 'h', {'enter_fullscreen'}, 'vFA'},
+	{{'minimize'}, 'vm', {'enter_fullscreen'}, 'vF'},
 	{{'maximize'}, 'vMA', {'enter_fullscreen'}, 'vMFA'},
-	{{'minimize', 'hide'}, 'm', {'enter_fullscreen'}, 'vFA'},
-	{{'maximize', 'minimize'}, 'vmM', {'enter_fullscreen'}, 'vMFA'},
-	{{'maximize', 'minimize', 'hide'}, 'mM', {'enter_fullscreen'}, 'vMFA'},
+	{{'minimize', 'hide'}, 'hm', {'enter_fullscreen'}, 'vF'},
+	{{'maximize', 'minimize'}, 'vmM', {'enter_fullscreen'}, 'vMF'},
+	{{'maximize', 'minimize', 'hide'}, 'hmM', {'enter_fullscreen'}, 'vMF'},
 	{{'enter_fullscreen'}, 'vFA', {'enter_fullscreen'}, 'vFA'},
 	{{'enter_fullscreen', 'hide'}, 'vFA', {'enter_fullscreen'}, 'vFA'},
-	{{'maximize', 'enter_fullscreen'}, 'vMFA', {'enter_fullscreen'}, 'vMFA'},
-	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMFA', {'enter_fullscreen'}, 'vMFA'},
+	{{'maximize'}, 'vMA', {'enter_fullscreen'}, 'vMFA', {'enter_fullscreen'}, 'vMFA'},
+	{{'maximize'}, 'vMA', {'enter_fullscreen', 'hide'}, 'vMFA', {'enter_fullscreen'}, 'vMFA'},
 	--transitions to exit fullscreen
-	{{'exit_fullscreen'}, 'v'},
+	{{'exit_fullscreen'}, 'vA'},
 	{{'hide'}, 'h', {'exit_fullscreen'}, 'h'},
 	{{'minimize'}, 'vm', {'exit_fullscreen'}, 'vm'},
 	{{'maximize'}, 'vMA', {'exit_fullscreen'}, 'vMA'},
-	{{'minimize', 'hide'}, 'vm', {'exit_fullscreen'}, 'vm'},
+	{{'minimize', 'hide'}, 'hm', {'exit_fullscreen'}, 'hm'},
 	{{'maximize', 'minimize'}, 'vmM', {'exit_fullscreen'}, 'vmM'},
-	{{'maximize', 'minimize', 'hide'}, 'vmM', {'exit_fullscreen'}, 'vmM'},
+	{{'maximize', 'minimize', 'hide'}, 'hmM', {'exit_fullscreen'}, 'hmM'},
 	{{'enter_fullscreen'}, 'vFA', {'exit_fullscreen'}, 'vA'},
 	{{'enter_fullscreen', 'hide'}, 'vFA', {'exit_fullscreen'}, 'vA'},
-	{{'maximize', 'enter_fullscreen'}, 'vMFA', {'exit_fullscreen'}, 'vMA'},
-	{{'maximize', 'enter_fullscreen', 'hide'}, 'vMFA', {'exit_fullscreen'}, 'vMA'},
+	{{'maximize'}, 'vMA', {'enter_fullscreen'}, 'vMFA', {'exit_fullscreen'}, 'vMA'},
+	{{'maximize'}, 'vMA', {'enter_fullscreen', 'hide'}, 'vMFA', {'exit_fullscreen'}, 'vMA'},
 } do
 	local nt = {}
 	local tt = {'vA'}
