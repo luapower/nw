@@ -328,9 +328,8 @@ function Window:windowWillClose()
 	--release the window manually.
 	--NOTE: we must release the nswin reference, not self, because self
 	--is a weak reference and we can't release weak references.
-	--NOTE: this will free all luavars.
+	--NOTE: this will free all luavars (including self.backend).
 	self.backend.nswin:release()
-	self.backend.nswin = nil
 end
 
 --activation -----------------------------------------------------------------

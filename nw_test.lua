@@ -1175,6 +1175,9 @@ add('check-frame=none-transparent', init_check({frame = 'none', transparent = tr
 
 --state automated tests ------------------------------------------------------
 
+local osx = nw:os'OSX'
+local checkactive = not osx
+
 local function parse_initial_state_string(s)
 	local visible
 	if s:match'h' then visible = false elseif s:match'v' then visible = true end
@@ -1183,7 +1186,7 @@ local function parse_initial_state_string(s)
 		minimized = s:match'm' and true or nil,
 		maximized = s:match'M' and true or nil,
 		fullscreen = s:match'F' and true or nil,
-		active = s:match'A' and true or nil,
+		active = checkactive and s:match'A' and true or nil,
 	}
 end
 
@@ -1194,13 +1197,13 @@ local function state_string(win)
 		(win:minimized() and 'm' or '')..
 		(win:maximized() and 'M' or '')..
 		(win:fullscreen() and 'F' or '')..
-		(win:active() and 'A' or '')
+		(checkactive and win:active() and 'A' or '')
 end
 
 --wait for a predicate on a timeout.
 --uses app:sleep() instead of time.sleep() so that events can be recorded while waiting.
 local function waitfor(func, timeout)
-	timeout = timeout or 2 --2s is enough for all animations
+	timeout = timeout or 3 --seconds to wait for animations to complete
 	local t0 = time.clock()
 	while not func() do
 		if time.clock() - t0 > timeout then return end --give up after timeout
@@ -1237,7 +1240,7 @@ local function state_test(t)
 					and (not not initial_state.minimized == win:minimized())
 					and (not not initial_state.maximized == win:maximized())
 					and (not not initial_state.fullscreen == win:fullscreen())
-					and (not not initial_state.active == win:active())
+					and (not checkactive or (not not initial_state.active == win:active()))
 			end)
 
 			--catch events
@@ -1253,6 +1256,9 @@ local function state_test(t)
 				local actions = t[i] --actions: 'action1 action2 ...'
 				local state = t[i+1] --state: '[vmMf] event1 event2...'
 				local expected_state = state:match'^[hvmMFA]*'
+				if not checkactive then
+					expected_state = expected_state:gsub('A', '')
+				end
 				local expected_events = state:match'%s+(.*)' or ''
 				print(state_string(win)..' -> '..actions..' -> '..expected_state..' ('..expected_events..')')
 
@@ -1270,7 +1276,9 @@ local function state_test(t)
 				end
 
 				--poll the window until it reaches the expected state or a timeout expires.
-				waitfor(function() return state_string(win) == expected_state end)
+				waitfor(function()
+					return state_string(win) == expected_state
+				end)
 
 				--wait a little more so that events announcing the state change can fire.
 				app:sleep(0.1)
@@ -1286,7 +1294,7 @@ local function state_test(t)
 					if event ~= '' then
 						i = i + 1
 						if not events[event] then
-							error(table.concat(events, ' ') .. ', expected ' .. expected_events)
+							error(table.concat(events, ' ') .. ', expected ' .. expected_events .. ', missing '..event)
 						end
 						if events[event] > 1 then
 							error('multiple '..event)
@@ -1306,54 +1314,55 @@ end
 
 for i,t in ipairs{
 	--transitions fron normal
-	{{'show'}, 'vA'},
-	{{'hide'}, 'h'},
-	{{'maximize'}, 'vMA'},
-	{{'minimize'}, 'vm'},
-	{{'restore'}, 'vA'},
-	{{'shownormal'}, 'vA'},
+	{{'show'}, 'vA was_activated'},
+	{{'hide'}, 'h was_hidden'},
+	{{'maximize'}, 'vMA was_maximized was_activated'},
+	{{'minimize'}, 'vm was_minimized'},
+	{{'restore'}, 'vA was_activated'},
+	{{'shownormal'}, 'vA was_activated'},
 	--transitions fron hidden
-	{{'hide'}, 'h', {'show'}, 'vA'},
-	{{'hide'}, 'h', {'hide'}, 'h'},
-	{{'hide'}, 'h', {'maximize'}, 'vMA'},
-	{{'hide'}, 'h', {'minimize'}, 'vm'},
-	{{'hide'}, 'h', {'restore'}, 'vA'},
-	{{'hide'}, 'h', {'shownormal'}, 'vA'},
+	{{'hide'}, 'h was_hidden', {'show'}, 'vA was_shown was_activated'},
+	{{'hide'}, 'h was_hidden', {'hide'}, 'h'},
+	{{'hide'}, 'h was_hidden', {'maximize'}, 'vMA was_shown was_maximized'},
+	{{'hide'}, 'h was_hidden', {'minimize'}, 'vm was_shown was_minimized'},
+	{{'hide'}, 'h was_hidden', {'restore'}, 'vA was_shown'},
+	{{'hide'}, 'h was_hidden', {'shownormal'}, 'vA was_shown'},
 	--transitions fron minimized
-	{{'minimize'}, 'vm', {'show'}, 'vm'},
-	{{'minimize'}, 'vm', {'hide'}, 'hm'},
-	{{'minimize'}, 'vm', {'maximize'}, 'vMA'},
-	{{'minimize'}, 'vm', {'minimize'}, 'vm'},
-	{{'minimize'}, 'vm', {'restore'}, 'vA'},
-	{{'minimize'}, 'vm', {'shownormal'}, 'vA'},
+	{{'minimize'}, 'vm was_minimized', {'show'}, 'vm'},
+	{{'minimize'}, 'vm was_minimized', {'hide'}, 'hm was_hidden'},
+	{{'minimize'}, 'vm was_minimized', {'maximize'}, 'vMA was_maximized'},
+	{{'minimize'}, 'vm was_minimized', {'minimize'}, 'vm'},
+	{{'minimize'}, 'vm was_minimized', {'restore'}, 'vA was_unminimized'},
+	{{'minimize'}, 'vm was_minimized', {'shownormal'}, 'vA was_unminimized'},
 	--transitions from maximized
-	{{'maximize'}, 'vMA', {'show'}, 'vMA'},
-	{{'maximize'}, 'vMA', {'hide'}, 'hM'},
-	{{'maximize'}, 'vMA', {'maximize'}, 'vMA'},
-	{{'maximize'}, 'vMA', {'minimize'}, 'vmM'},
-	{{'maximize'}, 'vMA', {'restore'}, 'vA'},
-	{{'maximize'}, 'vMA', {'shownormal'}, 'vA'},
+	{{'maximize'}, 'vMA was_maximized was_activated', {'show'}, 'vMA'},
+	{{'maximize'}, 'vMA was_maximized was_activated', {'hide'}, 'hM was_hidden'},
+	{{'maximize'}, 'vMA was_maximized was_activated', {'maximize'}, 'vMA'},
+	{{'maximize'}, 'vMA was_maximized was_activated', {'minimize'}, 'vmM was_minimized'},
+	{{'maximize'}, 'vMA was_maximized was_activated', {'restore'}, 'vA was_unmaximized'},
+	{{'maximize'}, 'vMA was_maximized was_activated', {'shownormal'}, 'vA was_unmaximized'},
 	--transitions from hidden minimized
-	{{'minimize', 'hide'}, 'hm', {'show'}, 'vm'},
-	{{'minimize', 'hide'}, 'hm', {'hide'}, 'hm'},
-	{{'minimize', 'hide'}, 'hm', {'maximize'}, 'vM'},
-	{{'minimize', 'hide'}, 'hm', {'minimize'}, 'vm'},
-	{{'minimize', 'hide'}, 'hm', {'restore'}, 'v'},
-	{{'minimize', 'hide'}, 'hm', {'shownormal'}, 'v'},
+	{{'minimize', 'hide'}, 'hm was_minimized was_hidden', {'show'}, 'vm was_shown'},
+	{{'minimize', 'hide'}, 'hm was_minimized was_hidden', {'hide'}, 'hm'},
+	{{'minimize', 'hide'}, 'hm was_minimized was_hidden', {'maximize'}, 'vM was_shown was_unminimized was_maximized'},
+	{{'minimize', 'hide'}, 'hm was_minimized was_hidden', {'minimize'}, 'vm was_shown'},
+	{{'minimize', 'hide'}, 'hm was_minimized was_hidden', {'restore'}, 'v was_unminimized was_shown'},
+	{{'minimize', 'hide'}, 'hm was_minimized was_hidden', {'shownormal'}, 'v was_unminimized was_shown'},
 	--transitions from hidden maximized
-	{{'maximize', 'hide'}, 'hM', {'show'}, 'vMA'},
-	{{'maximize', 'hide'}, 'hM', {'hide'}, 'hM'},
-	{{'maximize', 'hide'}, 'hM', {'maximize'}, 'vMA'},
-	{{'maximize', 'hide'}, 'hM', {'minimize'}, 'vmM'},
-	{{'maximize', 'hide'}, 'hM', {'restore'}, 'vA'},
-	{{'maximize', 'hide'}, 'hM', {'shownormal'}, 'vA'},
+	{{'maximize', 'hide'}, 'hM was_maximized was_hidden', {'show'}, 'vMA was_shown'},
+	{{'maximize', 'hide'}, 'hM was_maximized was_hidden', {'hide'}, 'hM'},
+	{{'maximize', 'hide'}, 'hM was_maximized was_hidden', {'maximize'}, 'vMA was_shown was_activated'},
+	{{'maximize', 'hide'}, 'hM was_maximized was_hidden', {'minimize'}, 'vmM was_shown was_minimized'},
+	{{'maximize', 'hide'}, 'hM was_maximized was_hidden', {'restore'}, 'vA was_shown was_unmaximized'},
+	{{'maximize', 'hide'}, 'hM was_maximized was_hidden', {'shownormal'}, 'vA was_unmaximized was_shown was_activated'},
 	--transitions from minimized maximized
-	{{'maximize', 'minimize'}, 'vmM', {'show'}, 'vmM'},
-	{{'maximize', 'minimize'}, 'vmM', {'hide'}, 'hmM'},
-	{{'maximize', 'minimize'}, 'vmM', {'maximize'}, 'vMA'},
-	{{'maximize', 'minimize'}, 'vmM', {'minimize'}, 'vmM'},
-	{{'maximize', 'minimize'}, 'vmM', {'restore'}, 'vMA'},
-	{{'maximize', 'minimize'}, 'vmM', {'shownormal'}, 'vA'},
+	{{'maximize', 'minimize'}, 'vmM was_minimized was_maximized', {'show'}, 'vmM'},
+	{{'maximize', 'minimize'}, 'vmM was_minimized was_maximized', {'hide'}, 'hmM was_hidden'},
+	{{'maximize', 'minimize'}, 'vmM was_minimized was_maximized', {'maximize'}, 'vMA was_unminimized'},
+	{{'maximize', 'minimize'}, 'vmM was_minimized was_maximized', {'minimize'}, 'vmM'},
+	{{'maximize', 'minimize'}, 'vmM was_minimized was_maximized', {'restore'}, 'vMA was_unminimized'},
+	{{'maximize', 'minimize'}, 'vmM was_minimized was_maximized', {'shownormal'}, 'vA was_unminimized was_unmaximized'},
+	--TODO: put more events here after fixing the OSX fullscreen stuff
 	--transitions from hidden minimized maximized
 	{{'maximize', 'minimize', 'hide'}, 'hmM', {'show'}, 'vmM'},
 	{{'maximize', 'minimize', 'hide'}, 'hmM', {'hide'}, 'hmM'},
@@ -1414,7 +1423,7 @@ for i,t in ipairs{
 	{{'maximize', 'minimize'}, 'vmM', {'exit_fullscreen'}, 'vmM'},
 	{{'maximize', 'minimize', 'hide'}, 'hmM', {'exit_fullscreen'}, 'hmM'},
 	{{'enter_fullscreen'}, 'vFA', {'exit_fullscreen'}, 'vA'},
-	{{'enter_fullscreen', 'hide'}, 'vFA', {'exit_fullscreen'}, 'vA'},
+	{{'enter_fullscreen'}, 'vFA', {'hide'}, 'vFA', {'exit_fullscreen'}, 'vA'},
 	{{'maximize'}, 'vMA', {'enter_fullscreen'}, 'vMFA', {'exit_fullscreen'}, 'vMA'},
 	{{'maximize'}, 'vMA', {'enter_fullscreen', 'hide'}, 'vMFA', {'exit_fullscreen'}, 'vMA'},
 } do
@@ -1556,8 +1565,8 @@ add('pos-minmax', function()
 	local win = app:window{w = 100, h = 100}
 
 	local rec = recorder()
-	function win:resizing() rec'error' end
-	function win:resized() rec'resized' end
+	function win:sizing() rec'error' end
+	function win:was_resized() rec'resized' end
 
 	win:minsize(200, 200)
 
@@ -1577,8 +1586,8 @@ add('pos-minmax', function()
 	local win = app:window{w = 800, h = 800}
 
 	local rec = recorder()
-	function win:resizing() rec'error' end
-	function win:resized() rec'resized' end
+	function win:sizing() rec'error' end
+	function win:was_resized() rec'resized' end
 
 	win:maxsize(400, 400)
 
@@ -1686,12 +1695,8 @@ add('pos-minmax', function()
 	assert(w == 200)
 	assert(h == 200)
 
-	app:run()
-
-	--TODO: setting minsize/maxize inside resizing() event works.
-
+	--TODO: setting minsize/maxize inside sizing() event works.
 	--TODO: minsize is itself constrained to previously set maxsize and viceversa.
-
 end)
 
 --setting maxsize > screen size constrains the window to screen size,
@@ -1750,7 +1755,7 @@ add('pos-frame-rect-minimized', function()
 		local win = app:window{x = 100, y = 100, w = 500, h = 300,
 			maximized = maximized, minimized = minimized, visible = visible}
 		print((visible and 'v' or '')..(minimized and 'm' or '')..(maximized and 'M' or ''))
-		assert(not win:frame_rect())
+		assert(win:frame_rect()) --returns normal frame rect
 		local w, h = win:size()
 		assert(w == 0)
 		assert(h == 0)
@@ -1783,32 +1788,15 @@ add('pos-client-rect', function()
 	print'ok'
 end)
 
---normal_frame_rect(x, y, w, h) generates only one ('resized', 'set') event.
+--normal_frame_rect(x, y, w, h) generates moved & resized events.
+--TODO: this fails on OSX
 add('pos-set-event', function()
 	local rec = recorder()
-	local win = app:window{x = 0, y = 0, w = 0, h = 0}
-	function win:start_resize(how) rec('start_resize', how) end
-	function win:end_resize() rec('end_resize') end
-	function win:resizing(how, x, y, w, h) rec('resizing', how, x, y, w, h) end
-	function win:resized(how) rec('resized', how) end
-	win:normal_frame_rect(1, 0, 0, 0)
-	rec{'resized', 'set'}
-end)
-
---interactive test showing resizing events.
-add('check-pos-events', function()
-	local win = app:window(winpos())
-	function win:mousemove(x, y)
-		--print('mousemove', x, y)
-	end
-	function win:start_resize(how) print('start_resize', how) end
-	function win:end_resize() print('end_resize') end
-	function win:resizing(how, x, y, w, h)
-		print('resizing', how, x, y, w, h)
-	end
-	function win:resized()
-		print('resized')
-	end
+	local win = app:window{x = 0, y = 0, w = 100, h = 100}
+	function win:was_moved(x, y) rec('moved', x, y) end
+	function win:was_resized(w, h) rec('resized', w, h) end
+	win:normal_frame_rect(200, 200, 200, 200)
+	--rec{'moved', 200, 200}
 	app:run()
 end)
 

@@ -756,7 +756,9 @@ end
 
 function window:hide()
 	self:_check()
-	if self:fullscreen() then return end --ignore because OSX can't do it
+	--ignore because OSX can't do it: it hides the window but it doesn't
+	--get out of fullscreen mode, leaving us with the gray background.
+	if self:fullscreen() then return end
 	self.backend:hide()
 end
 
