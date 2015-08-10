@@ -1214,9 +1214,7 @@ add('check-frame=none-transparent', init_check({frame = 'none', transparent = tr
 
 --state automated tests ------------------------------------------------------
 
-nw:app() --TODO: remove this
-local osx = nw:os'OSX'
-local checkactive = not osx
+local checkactive = true --test the active flag too!
 
 local function parse_initial_state_string(s)
 	local visible
@@ -1243,7 +1241,7 @@ end
 --wait for a predicate on a timeout.
 --uses app:sleep() instead of time.sleep() so that events can be recorded while waiting.
 local function waitfor(func, timeout)
-	timeout = timeout or osx and 10 or 1 --seconds to wait for animations to complete
+	timeout = timeout or 10 --seconds to wait for animations to complete
 	local t0 = time.clock()
 	while not func() do
 		if time.clock() - t0 > timeout then return end --give up after timeout
@@ -1293,7 +1291,7 @@ local function state_test(t)
 			local events = {}
 			function win:event(event_name)
 				local t1 = time.clock()
-				print(string.format('   %4dms | EVENT: %s', (t1 - t0) * 1000, event_name))--..' '..state_string(win)))
+				print(string.format('   %4dms | EVENT: %s', (t1 - t0) * 1000, event_name)..' | '..state_string(win))
 				t0 = t1
 				events[#events+1] = event_name
 				events[event_name] = (events[event_name] or 0) + 1
@@ -1315,7 +1313,7 @@ local function state_test(t)
 				events = {}
 				for action in glue.gsplit(actions, ' ') do
 					local t1 = time.clock()
-					print(string.format('   %4dms | ACTION: %s', (t1 - t0) * 1000, action))--..' '..state_string(win))
+					print(string.format('   %4dms | ACTION: %s', (t1 - t0) * 1000, action)..' | '..state_string(win))
 					t0 = t1
 					if action == 'enter_fullscreen' then
 						win:fullscreen(true)
@@ -1458,7 +1456,10 @@ for i,t in ipairs{
 	{'vA', 'maximize restore', 'vA was_maximized was_unmaximized'},
 	{'vA', 'maximize minimize hide', 'hmM was_maximized was_minimized was_deactivated was_hidden'},
 	{'vA', 'maximize minimize restore restore', 'vA was_maximized was_minimized was_deactivated was_unminimized was_activated was_unmaximized'},
-	{'vA', 'maximize minimize hide restore restore', 'v was_maximized was_minimized was_deactivated was_hidden was_shown was_unminimized was_unmaximized'},
+	{'vA', 'maximize minimize hide restore', 'vMA was_maximized was_minimized was_deactivated was_hidden was_shown was_unminimized'},
+	{'hmM', 'restore', 'vMA was_unminimized was_activated', 'restore', 'vA was_unmaximized'}, --same as above but from initial state
+	--TODO: windows does not activate in this case
+	{'vA', 'maximize minimize hide restore restore', 'vA was_maximized was_minimized was_deactivated was_hidden was_shown was_unminimized was_unmaximized'},
 
 	--transitions to enter fullscreen
 	{'vA',  'enter_fullscreen', 'vFA entered_fullscreen'},
