@@ -524,11 +524,10 @@ function window:_new(app, backend_class, useropt)
 	self._sticky = opt.sticky
 	self:edgesnapping(opt.edgesnapping)
 
-	self.app:_window_created(self)
-	self:_event'created'
-
 	self._state = self:state()
 	self._client_rect = {self:client_rect()}
+
+	self.app:_window_created(self)
 
 	--windows are created hidden to allow proper setup before events start.
 	if opt.visible then

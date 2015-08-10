@@ -1,17 +1,18 @@
 TODO
 ------------------------------------------------------------------------------
 refactoring:
-	- make nw:os() available without nw:app()
-	- nw:os() -> app:ver() extensible checker
+	- make nw:os() available without nw:app() or move it to nw:app()
+		- nw:os() -> app:ver() extensible checker
 	- event system:
-		- multiple queries instead of observers?
-		- bubbling up to :parent() and passing self as arg?
+		- cascading queries instead of passive observers?
+		- bubbling up to :parent() and passing self as arg? might need that for views
 	- closed() property and checks
 
 easy:
 
 	- capslock/numlock bug
 	- keychar events
+	- winapi scancodes
 	- check that key state query is not async in key events, including keychar!
 
 	- mouse movement event coalescing?
@@ -83,16 +84,10 @@ commands:
 	invalidate
 
 events:
-	quitting
-	closing
 	magnets
-	created closed
 	displays_changed
 	keydown keypress keyup keychar
-	mousedown mouseup
-	mousewheel mousehwheel
-	mouseenter mouseleave
-	mousemove
+	mousedown mouseup mousemove mousewheel mousehwheel mouseenter mouseleave
 	repaint free_bitmap
 
 extra:

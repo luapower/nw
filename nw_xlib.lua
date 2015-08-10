@@ -366,11 +366,10 @@ function window:new(app, frontend, t)
 	--TODO: this doesn't actually work!
 	self._activable = t.activable
 
-	--disambiguation flag for show/hide vs minimize/unminimize
+	--flag to mask off window's state while the window is unmapped.
 	self._hidden = true
 
-	--window state to be reported while hidden == true.
-	--also used while hidden == false for separating individual changes.
+	--window state to be reported while the window is unmapped.
 	self._minimized = t.minimized or false
 	self._maximized = t.maximized or false
 	self._fullscreen = t.fullscreen or false
@@ -400,13 +399,13 @@ end
 
 function window:forceclose()
 
-	--force-close child windows first to emulate Windows behavior.
+	--force-close child windows first, consistent with Windows.
 	for i,win in ipairs(self.frontend:children()) do
 		win:close(true)
 	end
 
 	--trigger closed event after children are closed but before destroying the window.
-	self.frontend:_backend_closed()
+	self.frontend:_backend_was_closed()
 
 	xlib.destroy_window(self.win)
 	winmap[self.win] = nil
@@ -425,7 +424,7 @@ local last_active_window
 function app:_check_activated()
 	if self._active then return end
 	self._active = true
-	self.frontend:_backend_activated()
+	self.frontend:_backend_changed()
 end
 
 ev[C.FocusIn] = function(e)
@@ -438,7 +437,7 @@ ev[C.FocusIn] = function(e)
 
 	last_focus_out = nil
 	self.app:_check_activated() --window activation implies app activation.
-	self.frontend:_backend_activated()
+	self.frontend:_backend_changed()
 end
 
 --NOTE: set after UnmapNotify when hiding.
@@ -457,26 +456,21 @@ ev[C.FocusOut] = function(e)
 		self.app.frontend:runafter(focus_out_timeout, function()
 			if last_focus_out and time.clock() - last_focus_out > focus_out_timeout then
 				last_focus_out = nil
+
 				self.app._active = false
-				self.app.frontend:_backend_deactivated()
+				self.app.frontend:_backend_changed()
 			end
 			focus_timer_started = false
 		end)
 		focus_timer_started = true
 	end
 
-	self.frontend:_backend_deactivated()
-end
-
---if the app was active but the
-function app:_check_app_deactivate()
-	if not self._active then return end
-	self.frontend:_backend_deactivated()
+	self.frontend:_backend_changed()
 end
 
 function app:activate()
 	if self._active then return end
-	--unlike OSX, in X you don't activate an app, you have to activate a specific window.
+	--unlike OSX, in X you don't activate an app, you can only activate a window.
 	--activating this app means activating the last window that was active.
 	local win = last_active_window
 	if win and not win.frontend:dead() then
@@ -485,7 +479,7 @@ function app:activate()
 end
 
 function app:active_window()
-	--return the active window only if the app is active, to emulate OSX behavior.
+	--return the active window only if the app is active, consistent with OSX.
 	return self._active and win(xlib.get_input_focus()) or nil
 end
 
@@ -532,7 +526,7 @@ function window:show()
 	xlib.map(self.win)
 
 	if not self._minimized then
-		--except when minimized, activate window to emulate Windows behavior.
+		--activate the window but not when minimized, consistent with Windows.
 		self:activate()
 	else
 		--if minimized, MapNotify is not sent, but PropertyNotify/WM_STATE is.
@@ -560,12 +554,12 @@ end
 function window:_mapped()
 	if not self._hidden then return end --unminimized, ignore
 	self._hidden = false --switch to real state
-	self.frontend:_backend_was_shown()
+	self.frontend:_backend_changed()
 end
 
 function window:_unmapped()
 	if not self._hidden then return end --minimized, ignore
-	self.frontend:_backend_was_hidden()
+	self.frontend:_backend_changed()
 end
 
 --NOTE: unminimizing triggers this too.
@@ -586,15 +580,11 @@ end
 
 --state/minimizing -----------------------------------------------------------
 
-function window:_get_minimized_state()
-	return xlib.get_wm_state(self.win) == C.IconicState
-end
-
 function window:minimized()
 	if self._hidden then
 		return self._minimized
 	end
-	return self:_get_minimized_state()
+	return xlib.get_wm_state(self.win) == C.IconicState
 end
 
 function window:minimize()
@@ -606,7 +596,10 @@ function window:minimize()
 	end
 end
 
-function window:_wm_state_changed()
+function evprop.WM_STATE(e)
+	local self = win(e.window)
+	if not self then return end
+
 	if self._hidden then
 		local cmd = self._wm_state_cmd
 		self._wm_state_cmd = nil --one-time thing
@@ -616,22 +609,8 @@ function window:_wm_state_changed()
 			self:_unmapped()
 		end
 	else
-		local min = self:_get_minimized_state()
-		if min ~= self._minimized then
-			if min then
-				self.frontend:_backend_was_minimized()
-			else
-				self.frontend:_backend_was_unminimized()
-			end
-			self._minimized = min
-		end
+		self.frontend:_backend_changed()
 	end
-end
-
-function evprop.WM_STATE(e)
-	local self = win(e.window)
-	if not self then return end
-	self:_wm_state_changed()
 end
 
 --state/maximizing -----------------------------------------------------------
@@ -667,34 +646,12 @@ function window:maximize()
 	end
 end
 
-function window:_net_wm_state_changed()
-
-	local fs = self:_get_fullscreen_state()
-	if fs ~= self._fullscreen then
-		if fs then
-			self.frontend:_backend_entered_fullscreen()
-		else
-			self.frontend:_backend_exited_fullscreen()
-		end
-		self._fullscreen = fs
-	end
-
-	local max = self:_get_maximized_state()
-	if max ~= self._maximized then
-		if max then
-			self.frontend:_backend_was_maximized()
-		else
-			self.frontend:_backend_was_unmaximized()
-		end
-		self._maximized = max
-	end
-
-end
-
 function evprop._NET_WM_STATE(e)
 	local self = win(e.window)
 	if not self then return end
-	self:_net_wm_state_changed()
+	self._fullscreen = self:_get_fullscreen_state()
+	self._maximized = self:_get_maximized_state()
+	self.frontend:_backend_changed()
 end
 
 --state/restoring ------------------------------------------------------------
@@ -852,11 +809,11 @@ function window:_frame_extents()
 	return unmapped_frame_extents(self.win)
 end
 
-function window:get_normal_rect()
+function window:get_normal_frame_rect()
 	return self:get_frame_rect()
 end
 
-function window:set_normal_rect(x, y, w, h)
+function window:set_normal_frame_rect(x, y, w, h)
 	self:set_frame_rect(x, y, w, h)
 end
 
@@ -938,7 +895,7 @@ ev[C.ConfigureNotify] = function(e)
 	local e = e.xconfigure
 	local self = win(e.window)
 	if not self then return end
-	self.frontend:_backend_resized()
+	self.frontend:_backend_changed()
 end
 
 --positioning/magnets --------------------------------------------------------
@@ -995,7 +952,8 @@ function app:displays()
 
 			t[#t+1] = self.frontend:_display{
 				x = x, y = y, w = w, h = h,
-				cx = cx, cy = cy, cw = cw, ch = ch}
+				cx = cx, cy = cy, cw = cw, ch = ch,
+				scalingfactor = 1}
 		end
 	else
 		--Xinerama not present or single monitor setup
@@ -1017,7 +975,8 @@ function app:displays()
 
 		t[1] = self.frontend:_display{
 			x = x, y = y, w = w, h = h,
-			cx = cx, cy = cy, cw = cw, ch = ch}
+			cx = cx, cy = cy, cw = cw, ch = ch,
+			scalingfactor = 1}
 	end
 	return t
 end
@@ -1389,6 +1348,10 @@ local function make_bitmap(w, h, win, win_depth, ssbuf)
 
 	local paint, free
 
+	--NOTE: can't create pix if the window is unmapped.
+	local st = xlib.get_wm_state(win)
+	if st and st ~= C.WithdrawnState then return end
+
 	if false and xcb_has_shm() then
 
 		local shmid = shm.shmget(shm.IPC_PRIVATE, size, bit.bor(shm.IPC_CREAT, 0x1ff))
@@ -1512,6 +1475,8 @@ function window:bitmap()
 			end,
 		}, self.win, self._depth)
 	end
+	--can't paint the bitmap while the window is unmapped.
+	if self._hidden or self:minimized() then return end
 	return self._dynbitmap:get()
 end
 

@@ -59,8 +59,6 @@ function app:new(frontend)
 	rid.usUsage     = 6 --keyboard
 	winapi.RegisterRawInputDevices(rid, 1, ffi.sizeof(rid))
 
-	self._active = false
-
 	return self
 end
 
@@ -90,7 +88,7 @@ app.window = window
 
 local Window = winapi.subclass({}, winapi.Window)
 
-local winmap = {} --win->window, for app:active_window()
+local winmap = {} --winapi_window->frontend_window
 
 function window:new(app, frontend, t)
 	self = glue.inherit({app = app, frontend = frontend}, self)
@@ -166,6 +164,12 @@ function window:new(app, frontend, t)
 	--register window
 	winmap[self.win] = self.frontend
 
+	--if this is the first window, register it as the last active window
+	--just in case the user calls app:activate() before this window activates.
+	if not self.app._last_active_window then
+		self.app._last_active_window = self
+	end
+
 	return self
 end
 
@@ -195,14 +199,22 @@ function Window:on_destroy()
 		self.backend:_free_icon_api()
 		self.backend:_free_drop_target()
 		winmap[self] = nil
+		--register another random window as the last active window so that
+		--app:activate() works even before the next window gets activated.
+		--in any case we want to release the reference to self.
+		if self.app._last_active_window == self then
+			local _, frontend = next(winmap)
+			self.app._last_active_window = frontend.backend
+		end
 	end
 end
 
 --activation -----------------------------------------------------------------
 
 function app:activate()
-	--unlike OSX, in Windows you don't activate an app, you have to activate a specific window.
-	--activating this app means activating the last window that was active.
+	--unlike OSX, in Windows you don't activate an app, you have to activate
+	--a specific window. Activating this app means activating the last window
+	--of this app that was active before the app got deactivated.
 	local win = self._last_active_window
 	if win and not win.frontend:dead() then
 		win.win:setforeground()
@@ -216,7 +228,7 @@ function app:active_window()
 end
 
 function app:active()
-	return self._active
+	return self:active_window() and true or false
 end
 
 function window:activate()
@@ -228,18 +240,23 @@ function window:activate()
 end
 
 function window:active()
-	--return the active flag only if the app is active, consistent with OSX.
-	return self.app._active and not self._inactive and self.win.active or false
+	--returns true only if the app is active, consistent with OSX.
+	return not self._inactive and self.app:active_window() == self.frontend
+end
+
+--NOTE: this also triggers when the app is inactive and another window
+--was closed, so we need to set _last_active_window here.
+function Window:on_activate()
+	self.backend._inactive = nil --no need for this anymore
+	self.backend.app._last_active_window = self.backend --for the next app:activate()
 end
 
 --this event is received when the window's titlebar is activated.
---this is more accurate than on_activate() which also triggers when the app
---is inactive and the window flashes its taskbar button instead of activating.
+--this is more accurate event-wise than on_activate() which also triggers when
+--the app is inactive and the window flashes its taskbar button instead of activating.
 function Window:on_nc_activate()
 	self.backend._inactive = nil --no need for this anymore
-	self.backend.app._active = true --window activation implies app activation.
 	self.backend.app.frontend:_backend_changed()
-	self.backend.app._last_active_window = self.backend --for the next app:activate()
 	self.backend:_reset_keystate()
 	self.frontend:_backend_changed()
 end
@@ -253,7 +270,6 @@ function Window:on_deactivate()
 end
 
 function Window:on_deactivate_app() --triggered after on_deactivate().
-	self.backend.app._active = false
 	self.frontend.app:_backend_changed()
 end
 
@@ -298,14 +314,14 @@ function window:maximized()
 end
 
 function window:maximize()
+	--this flag is for enter_fullscreen() to know that the window is maximized
+	--in case it is called before the on_pos_changed() event arrives.
+	self._will_maximize = true
 	self.win:maximize(nil, true) --async call consistent with Linux
 end
 
 function window:restore()
-	if self._maximized then
-		self.win.restore_to_maximized = true
-	end
-	if self.win.restore_to_maximized then
+	if self:minimized() and self:maximized() then
 		--NOTE: doing this synchronously otherwise we get an unmaximized window.
 		self.win:restore()
 	else
@@ -318,6 +334,7 @@ function window:shownormal()
 end
 
 function Window:on_pos_changed(pos)
+	self._will_maximize = false
 	self.frontend:_backend_changed()
 end
 
@@ -330,7 +347,7 @@ end
 function window:enter_fullscreen()
 	--save state for restoring
 	self._fs = {
-		maximized = self:maximized(),
+		maximized = self._will_maximize or self:maximized(),
 		normal_rect = self.win.normal_rect,
 		frame = self.win.frame,
 		sizeable = self.win.sizeable,
@@ -392,9 +409,8 @@ function window:exit_fullscreen()
 	--restore synchronously to avoid re-entring.
 	if self._fs.maximized then
 		self.win:maximize()
-	else
-		self.win:shownormal()
 	end
+	self.frontend:_backend_changed()
 end
 
 function Window:on_minimizing()

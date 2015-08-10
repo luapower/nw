@@ -601,10 +601,8 @@ end)
 --2. the app activation event comes before the win activation event.
 --3. the OS deactivates the app when the last window is closed (Windows).
 --4. the app deactivation event comes after the win deactivation event.
---5. activation events deferred for when the app starts, and then,
---a single app:activated() event is fired, followed by a single
---win:activated() event from the last window that was activated.
---6. app:active() is true all the way.
+--5. a single app:activated() event is fired.
+--6. app:active() is true at all times.
 --7. only in Windows, after the last window is closed, the app is deactivated.
 --8. app:active_window() works (gives the expected window).
 add('activation-events', function()
@@ -613,14 +611,14 @@ add('activation-events', function()
 	local win1 = app:window(winpos())
 	local win2 = app:window(winpos())
 	local win3 = app:window(winpos())
-	function app:activated() rec'app-activated' end
-	function app:deactivated() rec'app-deactivated' end
-	function win1:activated() rec'win1-activated' end
-	function win2:activated() rec'win2-activated' end
-	function win3:activated() rec'win3-activated' end
-	function win1:deactivated() rec'win1-deactivated' end
-	function win2:deactivated() rec'win2-deactivated' end
-	function win3:deactivated() rec'win3-deactivated' end
+	function app:was_activated() rec'app-activated' end
+	function app:was_deactivated() rec'app-deactivated' end
+	function win1:was_activated() rec'win1-activated' end
+	function win2:was_activated() rec'win2-activated' end
+	function win3:was_activated() rec'win3-activated' end
+	function win1:was_deactivated() rec'win1-deactivated' end
+	function win2:was_deactivated() rec'win2-deactivated' end
+	function win3:was_deactivated() rec'win3-deactivated' end
 	app:runafter(1, function()
 		rec'started'
 		assert(app:active())
@@ -641,11 +639,16 @@ add('activation-events', function()
 			assert(app:active())
 		end
 		rec'ended'
+		app:quit()
 	end)
-	sleep(10)
+	app:run()
 	rec{
 		'before-run',
 		'app-activated',
+		'win1-activated',
+		'win1-deactivated',
+		'win2-activated',
+		'win2-deactivated',
 		'win3-activated',
 		'started',
 		'win3-deactivated', 'win1-activated',
@@ -665,18 +668,27 @@ end)
 --this is an interactive test: you must activate another app to see it.
 add('check-activation-app-activate-flashing', function()
 	local win = app:window(winpos())
-	function win:activated() print'win-activated' end
-	function app:activated() print'app-activated' end
-	function win:deactivated() print'win-deactivated' end
-	function app:deactivated()
+	function win:was_activated() print'win-activated' end
+	function app:was_activated() print'app-activated' end
+	function win:was_deactivated() print'win-deactivated' end
+	function app:was_deactivated()
 		print'app-deactivated'
 		app:runafter(1, function()
 			app:activate()
+			--check that the window is not considered active until the user
+			--clicks on the flashing taskbar button.
+			app:runevery(0.1, function()
+				print('window is active:', win:active(), 'active window:', app:active_window())
+				if win:active() then
+					--user clicked on the taskbar button
+					app:stop()
+					return false
+				end
+			end)
 		end)
 	end
 	app:run()
 end)
-
 
 --app:activate() works, activating the app continuously.
 --this is an interactive test: you must activate another app to see it.
@@ -699,8 +711,8 @@ end)
 --in OSX the app's main menu is activated.
 --this is an interactive test: you must activate another app to see it.
 add('check-activation-app-activate-no-windows', function()
-	function app:activated() print'activated' end
-	function app:deactivated() print'deactivated' end
+	function app:was_activated() print'activated' end
+	function app:was_deactivated() print'deactivated' end
 	local win = app:window(winpos{visible = false})
 	app:runevery(0.1, function()
 		app:activate()
@@ -726,17 +738,23 @@ add('check-activation-app-active', function()
 end)
 
 --when the app is inactive, window:activate() is deferred to when the app becomes active.
---this is an interactive test: you must activate win2 and then activate another app to see it.
+--this is an interactive test: you must activate a window and then activate another app
+--to see the other window flashing.
 add('check-activation-window-activate-defer', function()
 	local win1 = app:window(winpos()); win1.name = 'w1'
 	local win2 = app:window(winpos()); win2.name = 'w2'
-	function win1:activated() print'win1-activated' end
-	function win2:activated() print'win2-activated' end
-	function app:activated() print'app-activated' end
-	function app:deactivated()
+	local last
+	function win1:was_activated() last = self; print'win1-activated' end
+	function win2:was_activated() last = self; print'win2-activated' end
+	function app:was_activated() print'app-activated' end
+	function app:was_deactivated()
 		print'app-deactivated'
-		win1:activate()
-		app:runafter(1, function()
+		if last == win1 then
+			win2:activate()
+		else
+			win1:activate()
+		end
+		app:runafter(0.5, function()
 			app:activate()
 		end)
 	end
@@ -763,10 +781,10 @@ add('check-activation-window-activate-hidden', function()
 	local rec = recorder()
 	local win1 = app:window(winpos{visible = false})
 	local win2 = app:window(winpos{visible = false})
-	function win1:activated() rec'win1-activated' end
-	function win2:activated() rec'win2-activated' end
+	function win1:was_activated() rec'win1-activated' end
+	function win2:was_activated() rec'win2-activated' end
 	app:runafter(0, function()
-		print'click on this terminal window now...'
+		print'Right-click on this terminal window NOW! You have 2 SECONDS!'
 		win1:activate()
 		win2:activate()
 		win1:activate()
@@ -783,10 +801,15 @@ end)
 
 --activable flag works for child toolbox windows.
 --this is an interactive test: move the child window and it doesn't activate.
-add('check-activation-window-nonactivable', function()
+add('check-activation-window-non-activable', function()
 	local win1 = app:window{x = 100, y = 100, w = 500, h = 200}
 	local win2 = app:window{x = 200, y = 130, w = 200, h = 300,
 		activable = false, frame = 'toolbox', parent = win1}
+	function win1:was_activated() rec'win1-activated' end
+	function win1:was_deactivated() rec'win1-deactivated' end
+	function win2:was_activated() rec'win2-activated' end
+	function win2:was_deactivated() rec'win2-deactivated' end
+	app:runevery(0.1, function() print('win1 active', win1:active()) end)
 	app:run()
 end)
 
@@ -799,11 +822,15 @@ add('app-hide', function()
 	assert(not app:hidden())
 	app:hide()
 	sleep(0.1)
-	assert(app:hidden())
+	if nw:os'OSX' then
+		assert(app:hidden())
+	end
 	app:unhide()
 	sleep(0.1)
 	assert(not app:hidden())
-	rec{'hide', 'unhide'}
+	if nw:os'OSX' then
+		rec{'hide', 'unhide'}
+	end
 end)
 
 --default initial properties -------------------------------------------------
@@ -872,7 +899,8 @@ end
 local function init_check(t, child)
 	return function()
 
-		print[[
+		local function help()
+			print[[
 
 	F1       help
 	H        hide
@@ -907,7 +935,10 @@ local function init_check(t, child)
 	9        app hide and unhide after 1s (OSX)
 	F2       toggle rendering
 	enter    print state
-]]
+			]]
+		end
+
+		help()
 
 		app:autoquit(true)
 
@@ -1087,7 +1118,7 @@ local function init_check(t, child)
 						self.app:hidden(false)
 					end)
 				elseif key == 'F1' then
-					print(help)
+					help()
 				elseif key == 'F2' then
 					allow_rendering = not allow_rendering
 					set_rendering()
@@ -1143,16 +1174,16 @@ local function init_check(t, child)
 	end
 end
 
---init states
+--initial states
 add('check', init_check{})
-add('check-init-hidden', init_check{visible = false})
-add('check-init-minimized', init_check{visible = true, minimized = true})
-add('check-init-maximized', init_check{visible = true, maximized = true})
-add('check-init-minimized-maximized', init_check{visible = true, minimized = true, maximized = true})
-add('check-init-hidden-minimized', init_check{visible = false, minimized = true})
-add('check-init-hidden-maximized', init_check{visible = false, maximized = true})
-add('check-init-hidden-minimized-maximized', init_check{visible = false, minimized = true, maximized = true})
-add('check-init-disabled', init_check({enabled = false}))
+add('check-hidden', init_check{visible = false})
+add('check-minimized', init_check{visible = true, minimized = true})
+add('check-maximized', init_check{visible = true, maximized = true})
+add('check-minimized-maximized', init_check{visible = true, minimized = true, maximized = true})
+add('check-hidden-minimized', init_check{visible = false, minimized = true})
+add('check-hidden-maximized', init_check{visible = false, maximized = true})
+add('check-hidden-minimized-maximized', init_check{visible = false, minimized = true, maximized = true})
+add('check-disabled', init_check({enabled = false}))
 
 --restrictions
 add('check-non-minimizable', init_check{minimizable = false})
@@ -1204,7 +1235,7 @@ end
 --wait for a predicate on a timeout.
 --uses app:sleep() instead of time.sleep() so that events can be recorded while waiting.
 local function waitfor(func, timeout)
-	timeout = timeout or 3 --seconds to wait for animations to complete
+	timeout = timeout or osx and 3 or 1 --seconds to wait for animations to complete
 	local t0 = time.clock()
 	while not func() do
 		if time.clock() - t0 > timeout then return end --give up after timeout
@@ -1232,8 +1263,12 @@ local function state_test(t)
 
 			--wait for the window to get to initial state
 			waitfor(function()
-				win:activate()
-				app:activate()
+
+				--previous test might have left the app inactive. fix that.
+				if not win:minimized() and win:visible() and not app:active() then
+					app:activate()
+				end
+
 				return
 					    (initial_state.visible ~= nil or win:visible())
 					and (initial_state.visible ~= true or win:visible())
@@ -1261,7 +1296,7 @@ local function state_test(t)
 					expected_state = expected_state:gsub('A', '')
 				end
 				local expected_events = state:match'%s+(.*)' or ''
-				print(state_string(win)..' -> '..actions..' -> '..expected_state..' ('..expected_events..')')
+				print(state_string(win)..' -> '..actions..' -> '..expected_state..(expected_events ~= '' and ' ('..expected_events..')' or ''))
 
 				--perform all the actions and record all events
 				events = {}
@@ -1314,128 +1349,129 @@ local function state_test(t)
 end
 
 for i,t in ipairs{
-	--transitions fron normal
-	{{'show'}, 'vA'},
-	{{'hide'}, 'h was_hidden'},
-	{{'maximize'}, 'vMA was_maximized'},
-	{{'minimize'}, 'vm was_minimized'},
-	{{'restore'}, 'vA'},
-	{{'shownormal'}, 'vA'},
-	--transitions fron hidden
-	{{'hide'}, 'h was_hidden', {'show'}, 'vA was_shown was_activated'},
-	{{'hide'}, 'h was_hidden', {'hide'}, 'h'},
-	{{'hide'}, 'h was_hidden', {'maximize'}, 'vMA was_shown was_maximized'},
-	{{'hide'}, 'h was_hidden', {'minimize'}, 'vm was_shown was_minimized'},
-	{{'hide'}, 'h was_hidden', {'restore'}, 'vA was_shown'},
-	{{'hide'}, 'h was_hidden', {'shownormal'}, 'vA was_shown'},
-	--transitions fron minimized
-	{{'minimize'}, 'vm was_minimized', {'show'}, 'vm'},
-	{{'minimize'}, 'vm was_minimized', {'hide'}, 'hm was_hidden'},
-	{{'minimize'}, 'vm was_minimized', {'maximize'}, 'vMA was_maximized'},
-	{{'minimize'}, 'vm was_minimized', {'minimize'}, 'vm'},
-	{{'minimize'}, 'vm was_minimized', {'restore'}, 'vA was_unminimized'},
-	{{'minimize'}, 'vm was_minimized', {'shownormal'}, 'vA was_unminimized'},
-	--transitions from maximized
-	{{'maximize'}, 'vMA was_maximized', {'show'}, 'vMA'},
-	{{'maximize'}, 'vMA was_maximized', {'hide'}, 'hM was_hidden'},
-	{{'maximize'}, 'vMA was_maximized', {'maximize'}, 'vMA'},
-	{{'maximize'}, 'vMA was_maximized', {'minimize'}, 'vmM was_minimized'},
-	{{'maximize'}, 'vMA was_maximized', {'restore'}, 'vA was_unmaximized'},
-	{{'maximize'}, 'vMA was_maximized', {'shownormal'}, 'vA was_unmaximized'},
-	--transitions from hidden minimized
-	{{'minimize', 'hide'}, 'hm was_minimized was_hidden', {'show'}, 'vm was_shown'},
-	{{'minimize', 'hide'}, 'hm was_minimized was_hidden', {'hide'}, 'hm'},
-	{{'minimize', 'hide'}, 'hm was_minimized was_hidden', {'maximize'}, 'vM was_shown was_unminimized was_maximized'},
-	{{'minimize', 'hide'}, 'hm was_minimized was_hidden', {'minimize'}, 'vm was_shown'},
-	{{'minimize', 'hide'}, 'hm was_minimized was_hidden', {'restore'}, 'v was_unminimized was_shown'},
-	{{'minimize', 'hide'}, 'hm was_minimized was_hidden', {'shownormal'}, 'v was_unminimized was_shown'},
-	--transitions from hidden maximized
-	{{'maximize', 'hide'}, 'hM was_maximized was_hidden', {'show'}, 'vMA was_shown'},
-	{{'maximize', 'hide'}, 'hM was_maximized was_hidden', {'hide'}, 'hM'},
-	{{'maximize', 'hide'}, 'hM was_maximized was_hidden', {'maximize'}, 'vMA was_shown was_activated'},
-	{{'maximize', 'hide'}, 'hM was_maximized was_hidden', {'minimize'}, 'vmM was_shown was_minimized'},
-	{{'maximize', 'hide'}, 'hM was_maximized was_hidden', {'restore'}, 'vA was_shown was_unmaximized'},
-	{{'maximize', 'hide'}, 'hM was_maximized was_hidden', {'shownormal'}, 'vA was_unmaximized was_shown was_activated'},
-	--transitions from minimized maximized
-	{{'maximize', 'minimize'}, 'vmM was_minimized was_maximized', {'show'}, 'vmM'},
-	{{'maximize', 'minimize'}, 'vmM was_minimized was_maximized', {'hide'}, 'hmM was_hidden'},
-	{{'maximize', 'minimize'}, 'vmM was_minimized was_maximized', {'maximize'}, 'vMA was_unminimized'},
-	{{'maximize', 'minimize'}, 'vmM was_minimized was_maximized', {'minimize'}, 'vmM'},
-	{{'maximize', 'minimize'}, 'vmM was_minimized was_maximized', {'restore'}, 'vMA was_unminimized'},
-	{{'maximize', 'minimize'}, 'vmM was_minimized was_maximized', {'shownormal'}, 'vA was_unminimized was_unmaximized'},
-	--TODO: put more events here after fixing the OSX fullscreen stuff
-	--transitions from hidden minimized maximized
-	{{'maximize', 'minimize', 'hide'}, 'hmM', {'show'}, 'vmM'},
-	{{'maximize', 'minimize', 'hide'}, 'hmM', {'hide'}, 'hmM'},
-	{{'maximize', 'minimize', 'hide'}, 'hmM', {'maximize'}, 'vM'},
-	{{'maximize', 'minimize', 'hide'}, 'hmM', {'minimize'}, 'vmM'},
-	{{'maximize', 'minimize', 'hide'}, 'hmM', {'restore'}, 'vM'},
-	{{'maximize', 'minimize', 'hide'}, 'hmM', {'shownormal'}, 'v'},
 
-	--transitions from fullscreen
-	{{'enter_fullscreen'}, 'vFA', {'show'}, 'vFA'},
-	{{'enter_fullscreen'}, 'vFA', {'hide'}, 'vFA'},
-	{{'enter_fullscreen'}, 'vFA', {'maximize'}, 'vFA'},
-	{{'enter_fullscreen'}, 'vFA', {'minimize'}, 'vFA'},
-	{{'enter_fullscreen'}, 'vFA', {'restore'}, 'vA'},
-	{{'enter_fullscreen'}, 'vFA', {'shownormal'}, 'vFA'},
-	--transitions from hidden fullscreen
-	{{'enter_fullscreen', 'hide'}, 'vFA', {'show'}, 'vFA'},
-	{{'enter_fullscreen', 'hide'}, 'vFA', {'hide'}, 'vFA'},
-	{{'enter_fullscreen', 'hide'}, 'vFA', {'maximize'}, 'vFA'},
-	{{'enter_fullscreen', 'hide'}, 'vFA', {'minimize'}, 'vFA'},
-	{{'enter_fullscreen', 'hide'}, 'vFA', {'restore'}, 'vA'},
-	{{'enter_fullscreen', 'hide'}, 'vFA', {'shownormal'}, 'vFA'},
+	--basic check: check single transitions fron initial hidden state
+	{'h', 'show', 'vA was_shown was_activated'},
+	{'h', 'hide', 'h'},
+	{'h', 'maximize', 'vMA was_shown was_maximized was_activated'},
+	{'h', 'minimize', 'vm was_minimized'},
+	{'h', 'restore', 'vA was_shown was_activated'},
+	{'h', 'shownormal', 'vA was_shown was_activated'},
+
+	--basic check: check single transitions fron initial normal state
+	{'vA', 'show', 'vA'},
+	{'vA', 'hide', 'h was_hidden was_deactivated'},
+	{'vA', 'maximize', 'vMA was_maximized'},
+	{'vA', 'minimize', 'vm was_minimized was_deactivated'},
+	{'vA', 'restore', 'vA'},
+	{'vA', 'shownormal', 'vA'},
+
+	--basic check: check single transitions fron initial minimized state
+	{'vm', 'show', 'vm'},
+	{'vm', 'hide', 'hm was_hidden'},
+	{'vm', 'maximize', 'vMA was_unminimized was_maximized was_activated'},
+	{'vm', 'minimize', 'vm'},
+	{'vm', 'restore', 'vA was_unminimized was_activated'},
+	{'vm', 'shownormal', 'vA was_unminimized was_activated'},
+
+	--basic check: check single transitions fron initial hidden minimized state
+	{'hm', 'show', 'vm was_shown'},
+	{'hm', 'hide', 'hm'},
+	{'hm', 'maximize', 'vMA was_shown was_unminimized was_maximized was_activated'},
+	{'hm', 'minimize', 'vm was_shown'},
+	{'hm', 'restore', 'vA was_shown was_unminimized was_activated'},
+	{'hm', 'shownormal', 'vA was_shown was_unminimized was_activated'},
+
+	--basic check: check single transitions fron initial maximized state
+	{'vMA', 'show', 'vMA'},
+	{'vMA', 'hide', 'hM was_hidden was_deactivated'},
+	{'vMA', 'maximize', 'vMA'},
+	{'vMA', 'minimize', 'vmM was_minimized was_deactivated'},
+	{'vMA', 'restore', 'vA was_unmaximized'},
+	{'vMA', 'shownormal', 'vA was_unmaximized'},
+
+	--basic check: check single transitions fron initial hidden maximized state
+	{'hM', 'show', 'vMA was_shown was_activated'},
+	{'hM', 'hide', 'hM'},
+	{'hM', 'maximize', 'vMA was_shown was_activated'},
+	{'hM', 'minimize', 'vmM was_minimized'},
+	{'hM', 'restore', 'vA was_unmaximized'},
+	{'hM', 'shownormal', 'vA was_unmaximized'},
+
+	--basic check: check single transitions fron initial minimized maximized state
+	{'vmM', 'show', 'vmM'},
+	{'vmM', 'hide', 'hmM was_hidden'},
+	{'vmM', 'maximize', 'vMA was_unminimized'},
+	{'vmM', 'minimize', 'vmM'},
+	{'vmM', 'restore', 'vMA was_unminimized'},
+	{'vmM', 'shownormal', 'vA was_unminimized was_unmaximized'},
+
+	--basic check: check single transitions fron initial hidden minimized maximized state
+	{'hmM', 'show', 'vmM was_shown'},
+	{'hmM', 'hide', 'hmM'},
+	{'hmM', 'maximize', 'vMA was_unminimized was_activated'},
+	{'hmM', 'minimize', 'vmM was_shown'},
+	{'hmM', 'restore', 'vMA was_unminimized was_activated'},
+	{'hmM', 'shownormal', 'vA was_unminimized was_unmaximized was_activated'},
+
+	--basic check: transitions from fullscreen
+	{'vA', 'enter_fullscreen', 'vFA', 'show', 'vFA'},
+	{'vA', 'enter_fullscreen', 'vFA', 'hide', 'vFA'},
+	{'vA', 'enter_fullscreen', 'vFA', 'maximize', 'vFA'},
+	{'vA', 'enter_fullscreen', 'vFA', 'minimize', 'vFA'},
+	{'vA', 'enter_fullscreen', 'vFA', 'restore', 'vA'},
+	{'vA', 'enter_fullscreen', 'vFA', 'shownormal', 'vFA'},
+
 	--transitions from maximized fullscreen
-	--TODO: maximize followed immediately by enter_fullscreen doesn't work
-	--because maximize() is async and enter_fullscreen() saves the maximized
-	--state that it finds at invocation time, which is before the maximization.
-	{{'maximize'}, 'vMA', {'enter_fullscreen'}, 'vMFA', {'show'}, 'vMFA'},
-	{{'maximize'}, 'vMA', {'enter_fullscreen'}, 'vMFA', {'hide'}, 'vMFA'},
-	{{'maximize'}, 'vMA', {'enter_fullscreen'}, 'vMFA', {'maximize'}, 'vMFA'},
-	{{'maximize'}, 'vMA', {'enter_fullscreen'}, 'vMFA', {'minimize'}, 'vMFA'},
-	{{'maximize'}, 'vMA', {'enter_fullscreen'}, 'vMFA', {'restore'}, 'vMA'},
-	{{'maximize'}, 'vMA', {'enter_fullscreen'}, 'vMFA', {'shownormal'}, 'vMFA'},
-	--transitions from hidden maximized fullscreen
-	{{'maximize'}, 'vMA', {'enter_fullscreen', 'hide'}, 'vMFA', {'show'}, 'vMFA'},
-	{{'maximize'}, 'vMA', {'enter_fullscreen', 'hide'}, 'vMFA', {'hide'}, 'vMFA'},
-	{{'maximize'}, 'vMA', {'enter_fullscreen', 'hide'}, 'vMFA', {'maximize'}, 'vMFA'},
-	{{'maximize'}, 'vMA', {'enter_fullscreen', 'hide'}, 'vMFA', {'minimize'}, 'vMFA'},
-	{{'maximize'}, 'vMA', {'enter_fullscreen', 'hide'}, 'vMFA', {'restore'}, 'vMA'},
-	{{'maximize'}, 'vMA', {'enter_fullscreen', 'hide'}, 'vMFA', {'shownormal'}, 'vMFA'},
+	{'vA', 'maximize enter_fullscreen', 'vMFA', 'show', 'vMFA'},
+	{'vA', 'maximize enter_fullscreen', 'vMFA', 'hide', 'vMFA'},
+	{'vA', 'maximize enter_fullscreen', 'vMFA', 'maximize', 'vMFA'},
+	{'vA', 'maximize enter_fullscreen', 'vMFA', 'minimize', 'vMFA'},
+	{'vA', 'maximize enter_fullscreen', 'vMFA', 'restore', 'vMA exited_fullscreen'},
+	{'vA', 'maximize enter_fullscreen', 'vMFA', 'shownormal', 'vMFA'},
+
+	--combined checks: check sequences of multiple transitions.
+	--1. check that calls are not merged (i.e. that all events fire)
+	--2. check that subsequent commands are not ignored while other commands perform.
+	--3. check that the final state is correct.
+	{'vA', 'hide show', 'vA was_hidden was_shown'},
+	{'h', 'show hide', 'h was_shown was_hidden'},
+	{'vA', 'maximize restore', 'vA was_maximized was_unmaximized'},
+	{'vA', 'maximize minimize hide', 'hmM was_maximized was_minimized was_deactivated was_hidden'},
+	{'vA', 'maximize minimize restore restore', 'vA was_maximized was_minimized was_deactivated was_unminimized was_activated was_unmaximized'},
+	{'vA', 'maximize minimize hide restore restore', 'v was_maximized was_minimized was_deactivated was_hidden was_shown was_unminimized was_unmaximized'},
+
 	--transitions to enter fullscreen
-	{{'enter_fullscreen'}, 'vFA'},
-	{{'hide'}, 'h', {'enter_fullscreen'}, 'vFA'},
-	{{'minimize'}, 'vm', {'enter_fullscreen'}, 'vF'},
-	{{'maximize'}, 'vMA', {'enter_fullscreen'}, 'vMFA'},
-	{{'minimize', 'hide'}, 'hm', {'enter_fullscreen'}, 'vF'},
-	{{'maximize', 'minimize'}, 'vmM', {'enter_fullscreen'}, 'vMF'},
-	{{'maximize', 'minimize', 'hide'}, 'hmM', {'enter_fullscreen'}, 'vMF'},
-	{{'enter_fullscreen'}, 'vFA', {'enter_fullscreen'}, 'vFA'},
-	{{'enter_fullscreen', 'hide'}, 'vFA', {'enter_fullscreen'}, 'vFA'},
-	{{'maximize'}, 'vMA', {'enter_fullscreen'}, 'vMFA', {'enter_fullscreen'}, 'vMFA'},
-	{{'maximize'}, 'vMA', {'enter_fullscreen', 'hide'}, 'vMFA', {'enter_fullscreen'}, 'vMFA'},
+	{'vA',  'enter_fullscreen', 'vFA entered_fullscreen'},
+	{'h',   'enter_fullscreen', 'vFA was_shown entered_fullscreen was_activated'},
+	{'vm',  'enter_fullscreen', 'vFA was_unminimized entered_fullscreen was_activated'},
+	{'vMA', 'enter_fullscreen', 'vMFA entered_fullscreen'},
+	{'hm',  'enter_fullscreen', 'vFA was_shown was_unminimized was_activated entered_fullscreen'},
+	{'vmM', 'enter_fullscreen', 'vMFA was_unminimized entered_fullscreen was_activated'},
+	{'hmM', 'enter_fullscreen', 'vMFA was_shown was_unminimized entered_fullscreen was_activated'},
+	{'vA',  'enter_fullscreen', 'vFA', 'enter_fullscreen', 'vFA'},
+	{'vMA', 'enter_fullscreen', 'vMFA', 'enter_fullscreen', 'vMFA'},
+
 	--transitions to exit fullscreen
-	{{'exit_fullscreen'}, 'vA'},
-	{{'hide'}, 'h', {'exit_fullscreen'}, 'h'},
-	{{'minimize'}, 'vm', {'exit_fullscreen'}, 'vm'},
-	{{'maximize'}, 'vMA', {'exit_fullscreen'}, 'vMA'},
-	{{'minimize', 'hide'}, 'hm', {'exit_fullscreen'}, 'hm'},
-	{{'maximize', 'minimize'}, 'vmM', {'exit_fullscreen'}, 'vmM'},
-	{{'maximize', 'minimize', 'hide'}, 'hmM', {'exit_fullscreen'}, 'hmM'},
-	{{'enter_fullscreen'}, 'vFA', {'exit_fullscreen'}, 'vA'},
-	{{'enter_fullscreen'}, 'vFA', {'hide'}, 'vFA', {'exit_fullscreen'}, 'vA'},
-	{{'maximize'}, 'vMA', {'enter_fullscreen'}, 'vMFA', {'exit_fullscreen'}, 'vMA'},
-	{{'maximize'}, 'vMA', {'enter_fullscreen', 'hide'}, 'vMFA', {'exit_fullscreen'}, 'vMA'},
+	{'vA',  'exit_fullscreen', 'vA'},
+	{'h',   'exit_fullscreen', 'h'},
+	{'vm',  'exit_fullscreen', 'vm'},
+	{'vMA', 'exit_fullscreen', 'vMA'},
+	{'hm',  'exit_fullscreen', 'hm'},
+	{'vmM', 'exit_fullscreen', 'vmM'},
+	{'hmM', 'exit_fullscreen', 'hmM'},
+	{'vA',  'enter_fullscreen', 'vFA', 'exit_fullscreen', 'vA exited_fullscreen'},
+	{'vMA', 'enter_fullscreen', 'vMFA', 'exit_fullscreen', 'vMA exited_fullscreen'},
 } do
+
+	--make up a name for the test
 	local nt = {}
-	local tt = {'vA'}
-	for i = 1, #t, 2 do
-		glue.extend(nt, t[i])
-		glue.append(tt, table.concat(t[i], ' '), t[i+1])
+	for i = 2, #t, 2 do
+		glue.append(nt, t[i] and t[i]:gsub(' ', '-'))
 	end
-	local test_name = table.concat(nt,'-')
-	add('state-'..test_name, state_test(tt))
+	local test_name = (t[1] == 'vA' and '' or t[1]..'-')..table.concat(nt, '-')
+
+	add('state-'..test_name, state_test(t))
 end
 
 --state/enabled --------------------------------------------------------------
