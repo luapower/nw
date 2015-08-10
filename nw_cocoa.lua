@@ -133,7 +133,7 @@ end
 local window = {}
 app.window = window
 
-local nswin_map = {} --nswin->window
+local winmap = {} --Window->frontend_window
 
 local Window = objc.class('Window', 'NSWindow <NSWindowDelegate, NSDraggingDestination>')
 
@@ -275,7 +275,7 @@ function window:new(app, frontend, t)
 	self.nswin.app = app
 
 	--register window.
-	nswin_map[objc.nptr(self.nswin)] = self.frontend
+	winmap[objc.nptr(self.nswin)] = self.frontend
 
 	--enable events.
 	self.nswin:setDelegate(self.nswin)
@@ -286,7 +286,18 @@ end
 --closing --------------------------------------------------------------------
 
 --NOTE: close() doesn't call windowShouldClose.
+--NOTE: fullscreen mode is a global state: closing a fullscreen window leaves
+--that state inconsistent such that the next window will have the fullscreen bit set.
 function window:forceclose()
+	if self._entering_fs or self._exiting_fs or self:fullscreen() then
+		self._want_close = true
+		self:exit_fullscreen()
+	else
+		self:_forceclose()
+	end
+end
+
+function window:_forceclose()
 	self._closing = true
 	self._hiding = nil
 	self.nswin:close()
@@ -304,7 +315,7 @@ function Window:windowWillClose()
 	self.backend._closing = nil
 
 	if self.backend._hiding then
-		self.backend:_hidden()
+		self.backend:_was_hidden()
 		return
 	end
 
@@ -318,7 +329,7 @@ function Window:windowWillClose()
 	self.frontend:_backend_was_closed()
 	self.backend:_free_bitmap()
 
-	nswin_map[objc.nptr(self)] = nil --unregister
+	winmap[objc.nptr(self)] = nil --unregister
 	self:setDelegate(nil) --ignore further events
 
 	--release the view manually.
@@ -346,7 +357,7 @@ end
 
 --NOTE: keyWindow() only returns the active window if the app itself is active.
 function app:active_window()
-	return nswin_map[objc.nptr(self.nsapp:keyWindow())]
+	return winmap[objc.nptr(self.nsapp:keyWindow())]
 end
 
 function app:active()
@@ -363,8 +374,8 @@ function App:applicationDidResignActive()
 end
 
 function Window:windowDidBecomeKey()
-	if self.backend._entering_fs then
-		self.backend._entering_fs = nil
+	if self.backend._wait_enter_fs then
+		self.backend._wait_enter_fs = nil
 		self.backend:_enter_fullscreen()
 	end
 	self:reset_keystate()
@@ -462,7 +473,7 @@ function window:hide()
 	self.nswin:close()
 end
 
-function window:_hidden() --windowWillClose() event for when self._hidden is set.
+function window:_was_hidden() --windowWillClose() event for when self._hidden is set.
 	self._hiding = nil
 	self._visible = false
 	self.frontend:_backend_changed()
@@ -600,6 +611,7 @@ function window:_maximize_frame()
 	if self._frameless then
 		self:_maximize_frame_manually()
 	else
+		self:_save_restore_frame()
 		self.nswin.nw_zooming = true --NOTE: assuming synchronous operation
 		self.nswin:zoom(nil)
 		self.nswin.nw_zooming = false
@@ -704,15 +716,24 @@ end
 
 function window:fullscreen()
 	return bit.band(tonumber(self.nswin:styleMask()),
-		objc.NSFullScreenWindowMask) == objc.NSFullScreenWindowMask
+			objc.NSFullScreenWindowMask) == objc.NSFullScreenWindowMask
 end
 
 function window:enter_fullscreen()
-	if not self:visible() then
-		self._entering_fs = true
+	if self._exiting_fs then
+		--there's no API to cancel an in-progress toggleFullScreen() animation.
+		--best we can do is to wait to let it finish and go from there.
+		self._enter_fs = true
+	elseif self._exit_fs then
+		--cancel the cancelation of enter_fullscreen().
+		self._exit_fs = false
+	elseif self._entering_fs then
+		--we're animating our ass off to that effect already.
+	elseif not self:visible() then
+		--let it show first, and tell it to go fullscreen then.
+		self._wait_enter_fs = true
 		self.nswin:makeKeyAndOrderFront(nil) --NOTE: async operation
-		return
-	else
+	elseif not self:fullscreen() then
 		self:_enter_fullscreen()
 	end
 end
@@ -720,17 +741,31 @@ end
 --NOTE: toggleFullScreen() on a minimized window works.
 --NOTE: calling close() after toggleFullScreen() results in a crash.
 --NOTE: toggleFullScreen() on a closed window works.
+--NOTE: toggleFullScreen() while toggling is in progress is ignored.
+--NOTE: toggleFullScreen() is async even though it doesn't appear so because
+--it discards keyboard and mouse events while animating.
 function window:_enter_fullscreen()
 	self._visible = true
 	self._minimized = nil
+	self._entering_fs = true
 	self.nswin:toggleFullScreen(nil) --NOTE: async operation
 end
 
 function window:exit_fullscreen()
-	if not self:visible() then
-		self:show()
+	if self._entering_fs then
+		--there's no API to cancel an in-progress toggleFullScreen() animation.
+		--best we can do is to wait to let it finish and go from there.
+		self._exit_fs = true
+	elseif self._exiting_fs then
+		--we're animating our ass off to that effect already.
+	elseif self:fullscreen() then
+		self._exiting_fs = true
+		if not self:visible() then
+			self:show()
+		else
+			self.nswin:toggleFullScreen(nil) --NOTE: async operation
+		end
 	end
-	self.nswin:toggleFullScreen(nil) --NOTE: async operation
 end
 
 function Window:windowWillEnterFullScreen()
@@ -749,7 +784,14 @@ function Window:windowWillEnterFullScreen()
 end
 
 function Window:windowDidEnterFullScreen()
+	self.backend._entering_fs = false
 	self.frontend:_backend_changed()
+
+	--great, now see if we have to exit already.
+	if self.backend._exit_fs then
+		self.backend._exit_fs = false
+		self.backend:exit_fullscreen()
+	end
 end
 
 function Window:windowWillExitFullScreen()
@@ -761,9 +803,20 @@ function Window:windowWillExitFullScreen()
 end
 
 function Window:windowDidExitFullScreen()
-	--window will exit fullscreen before closing. suppress that.
-	if self.frontend:dead() then return end
+	self.backend._exiting_fs = false
 	self.frontend:_backend_changed()
+
+	--great, now see if we have to close or go back to fullscreen already.
+	if self.backend._want_close then
+		self.backend._enter_fs = false
+		self.backend:_forceclose()
+	elseif self.backend._enter_fs then
+		self.backend._enter_fs = false
+		--if we do it now we get a crash, so we queue it.
+		self.frontend.app:runafter(0, function()
+			self.backend:enter_fullscreen()
+		end)
+	end
 end
 
 --state/enabled --------------------------------------------------------------

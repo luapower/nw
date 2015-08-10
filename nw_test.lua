@@ -907,7 +907,9 @@ local function init_check(t, child)
 	S        show
 	N        minimize
 	M        maximize
-	F        fullscreen on/off
+	F        fullscreen toggle
+	G        fullscreen on
+	shift+G  fullscreen off
 	esc      restore
 	D        shownormal
 	A        activate win1
@@ -1032,7 +1034,6 @@ local function init_check(t, child)
 				end)
 				win:invalidate()
 			end
-
 			function win:keypress(key)
 				if key == 'H' then
 					self:hide()
@@ -1043,9 +1044,16 @@ local function init_check(t, child)
 				elseif key == 'esc' then
 					self:restore()
 				elseif key == 'F' then
-					self:fullscreen(not self:fullscreen())
+					local fs = not self:fullscreen()
+					self:fullscreen(fs)
+					if app:key'shift' then --toggle it back immediately
+						self:fullscreen(not fs)
+					end
+					if app:key'ctrl' then --now toggle it back again
+						self:fullscreen(fs)
+					end
 				elseif key == 'G' then
-					self:fullscreen(false)
+					self:fullscreen(not app:key'shift')
 				elseif key == 'M' then
 					self:maximize()
 				elseif key == 'N' then
@@ -1235,7 +1243,7 @@ end
 --wait for a predicate on a timeout.
 --uses app:sleep() instead of time.sleep() so that events can be recorded while waiting.
 local function waitfor(func, timeout)
-	timeout = timeout or osx and 3 or 1 --seconds to wait for animations to complete
+	timeout = timeout or osx and 10 or 1 --seconds to wait for animations to complete
 	local t0 = time.clock()
 	while not func() do
 		if time.clock() - t0 > timeout then return end --give up after timeout
@@ -1249,6 +1257,8 @@ end
 local function state_test(t)
 	return function()
 		app:run(function()
+
+			local t0 = time.clock()
 
 			--parse initial state string
 			local initial_state
@@ -1282,7 +1292,9 @@ local function state_test(t)
 			--catch events
 			local events = {}
 			function win:event(event_name)
-				print('   EVENT: '..event_name)
+				local t1 = time.clock()
+				print(string.format('   %4dms | EVENT: %s', (t1 - t0) * 1000, event_name))--..' '..state_string(win)))
+				t0 = t1
 				events[#events+1] = event_name
 				events[event_name] = (events[event_name] or 0) + 1
 			end
@@ -1296,12 +1308,15 @@ local function state_test(t)
 					expected_state = expected_state:gsub('A', '')
 				end
 				local expected_events = state:match'%s+(.*)' or ''
-				print(state_string(win)..' -> '..actions..' -> '..expected_state..(expected_events ~= '' and ' ('..expected_events..')' or ''))
+				print(state_string(win)..' -> '..actions..' -> '..expected_state..
+					(expected_events ~= '' and ' ('..expected_events..')' or ''))
 
 				--perform all the actions and record all events
 				events = {}
 				for action in glue.gsplit(actions, ' ') do
-					print('   ACTION: '..action)
+					local t1 = time.clock()
+					print(string.format('   %4dms | ACTION: %s', (t1 - t0) * 1000, action))--..' '..state_string(win))
+					t0 = t1
 					if action == 'enter_fullscreen' then
 						win:fullscreen(true)
 					elseif action == 'exit_fullscreen' then
@@ -1313,6 +1328,7 @@ local function state_test(t)
 
 				--poll the window until it reaches the expected state or a timeout expires.
 				waitfor(function()
+					--print('', state_string(win), expected_state)
 					return state_string(win) == expected_state
 				end)
 
@@ -1340,10 +1356,13 @@ local function state_test(t)
 			end
 
 			--close the window
+			app:autoquit(false) --but don't exit the loop!
 			win:close()
 
 			--wait for it to be closed
 			assert(waitfor(function() return win:dead() end), 'window not dead')
+
+			print'  --------+---------------------------------'
 		end)
 	end
 end
@@ -2220,7 +2239,7 @@ add('input-mouseenter', function()
 	app:run()
 end)
 
-add('input', function()
+add('check-input', function()
 	local win1 = app:window(winpos())
 	local win2 = app:window(winpos())
 

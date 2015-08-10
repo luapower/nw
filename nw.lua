@@ -792,7 +792,9 @@ end
 function window:restore()
 	self:_check()
 	if self:fullscreen() then
+		print('yes you are you idiot1')
 		self:fullscreen(false)
+		print('yes you are you idiot2')
 	else
 		self.backend:restore()
 	end
@@ -811,10 +813,8 @@ function window:fullscreen(fullscreen)
 	if fullscreen == nil then
 		return self.backend:fullscreen()
 	elseif fullscreen then
-		if self.backend:fullscreen() then return end --ignore null transitions
 		self.backend:enter_fullscreen()
 	else
-		if not self.backend:fullscreen() then return end --ignore null transitions
 		self.backend:exit_fullscreen()
 	end
 end

@@ -422,3 +422,6 @@ LOG
 06/08 - documetned & published ringbuffer; installed win8.1; tested all hi-dpi API
 07/08 - hi-dpi secondary monitor; tested cocoa hi-dpi change event and unscaled rendering
 07/08 - fixed cbframe regression; cbframe cpu stack; osx fixed resizing events
+08/08 - finished automated state tests; made winapi pass (simplified activation, etc.)
+09/08 - made osx pass automated state tests
+
