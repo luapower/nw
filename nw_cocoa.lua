@@ -468,6 +468,7 @@ end
 --results in a window that is not hidden and doesn't respond to mouse events.
 function window:hide()
 	if not self._visible then return end
+	if self:fullscreen() then return end --TODO: make this transition
 	self._minimized = self.nswin:isMiniaturized()
 	self._hiding = true --disambiguating close() from hide() in windowWillClose() event.
 	self.nswin:close()
@@ -538,7 +539,6 @@ end
 --NOTE: isZoomed() returns true while in fullscreen mode.
 --NOTE: isZoomed() calls windowWillResize_toSize(), believe it!
 function window:maximized()
-	if self:fullscreen() then return end --TODO: make this transition
 	if self._maximized ~= nil then
 		return self._maximized
 	elseif self._frameless then
@@ -646,6 +646,7 @@ function window:_unmaximize_minimized()
 end
 
 function window:maximize()
+	if self:fullscreen() then return end --TODO: make this transition
 	if self:minimized() then
 		if self:maximized() then
 			self:_unminimize()
