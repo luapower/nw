@@ -280,28 +280,27 @@ function window:visible()
 end
 
 function window:show()
-	if self.win.minimized then
-		--show minimized without activating, consistent with Linux.
+	if self.win.minimized then --NOTE: this assumes that minimize() is synchronous
+		--show minimized without activating, consistent with Linux and OSX.
 		--self.win:show() also shows the window in minimized state, but it
 		--selects the window on the taskbar (it activates it).
 		self:minimize()
 	else
-		self.win:show(nil, true) --async call consistent with Linux
+		self.win:show() --sync call
 	end
 end
 
 function window:hide()
-	self.win:hide(true) --async call consistent with Linux
+	self.win:hide() --sync call
 end
 
 function window:minimized()
 	return self.win.minimized
 end
 
+--NOTE: minimize() is not activating the window, consistent with OSX and Linux.
 function window:minimize()
-	--async call consistent with Linux.
-	--not activating the window consistent with OSX and Linux.
-	self.win:minimize(true, true)
+	self.win:minimize() --sync call, assumed by show()
 end
 
 function window:maximized()
@@ -314,27 +313,22 @@ function window:maximized()
 end
 
 function window:maximize()
-	--this flag is for enter_fullscreen() to know that the window is maximized
-	--in case it is called before the on_pos_changed() event arrives.
-	self._will_maximize = true
-	self.win:maximize(nil, true) --async call consistent with Linux
+	self.win:maximize() --sync call, assumed by enter_fullscreen()
 end
 
 function window:restore()
-	if self:minimized() and self:maximized() then
-		--NOTE: doing this synchronously otherwise we get an unmaximized window.
-		self.win:restore()
-	else
-		self.win:restore(nil, true) --async call consistent with Linux
-	end
+	self.win:restore() --sync call
+	self.frontend.app:activate()
 end
 
 function window:shownormal()
-	self.win:shownormal(nil, true) --async call consistent with Linux
+	self.win:shownormal() --sync call
+	--activating because minimize->hide->shownormal doesn't.
+	self:activate()
+	self.app:activate()
 end
 
 function Window:on_pos_changed(pos)
-	self._will_maximize = false
 	self.frontend:_backend_changed()
 end
 
@@ -345,10 +339,12 @@ function window:fullscreen()
 end
 
 function window:enter_fullscreen()
+	if self._fullscreen then return end
+
 	--save state for restoring
 	self._fs = {
-		maximized = self._will_maximize or self:maximized(),
-		normal_rect = self.win.normal_rect,
+		maximized = self:maximized(), --NOTE: this assumes that maximize() is synchronous
+		normal_rect = self.win.normal_rect, --NOTE: this assumes that set_normal_rect() is synchronous
 		frame = self.win.frame,
 		sizeable = self.win.sizeable,
 	}
@@ -390,6 +386,8 @@ function window:enter_fullscreen()
 end
 
 function window:exit_fullscreen()
+	if not self._fullscreen then return end
+
 	--disable events while we're changing the frame and size.
 	local events = self.frontend:events(false)
 	self._norepaint = true

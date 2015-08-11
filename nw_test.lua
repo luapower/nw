@@ -1439,6 +1439,53 @@ for i,t in ipairs{
 	{'vA', 'enter_fullscreen', 'vFA', 'restore', 'vA'},
 	{'vA', 'enter_fullscreen', 'vFA', 'shownormal', 'vFA'},
 
+	--combined checks: check sequences of commands because some commands perform
+	--asynchronously which may reveal bad assumptions made by other commands
+	--that look at the current state to decide how to perform the operation.
+	--1. check that calls are not merged (i.e. that all relevant events fire).
+	--2. check that subsequent commands are not ignored while other commands perform.
+	--3. check that the final state is correct.
+
+	--basic check: duplicate commands
+	{'vA',  'hide hide hide', 'h was_hidden'},
+	{'h',   'show show show', 'vA was_shown'},
+	{'vA',  'maximize maximize maximize', 'vMA was_maximized'},
+	{'vA',  'minimize minimize minimize', 'vm was_minimized'},
+	{'vm',  'restore restore restore', 'vA was_unminimized'},
+	{'vMA', 'restore restore restore', 'vA was_unmaximized'},
+	{'vMA', 'shownormal shownormal shownormal', 'vA was_unmaximized'},
+	{'vm',  'shownormal shownormal shownormal', 'vA was_unminimized'},
+	{'vmM', 'shownormal shownormal shownormal', 'vA was_unminimized was_unmaximized'},
+
+	--combined check: check more complex combinations
+	{'vA',  'hide show', 'vA was_hidden was_shown'},
+	{'h',   'show hide', 'h was_shown was_hidden'},
+	{'vA',  'maximize restore', 'vA was_maximized was_unmaximized'},
+	{'vA',  'minimize restore', 'vA was_minimized was_deactivated was_unminimized was_activated'},
+	{'vA',  'maximize minimize restore', 'vMA was_maximized was_minimized was_deactivated was_unminimized was_activated'},
+	{'vA',  'maximize minimize restore restore', 'vA was_maximized was_minimized was_deactivated was_unminimized was_unmaximized was_activated'},
+	{'vA',  'maximize hide', 'hM was_maximized was_hidden'},
+	{'vA',  'minimize hide', 'hm was_minimized was_hidden'},
+	{'vA',  'maximize minimize hide', 'hmM was_maximized was_minimized was_deactivated was_hidden'},
+
+	--even more complex combinations (particularly minimized->hide->shownormal doesn't activate the window on Windows)
+	{'vA',  'maximize hide restore',    'vA was_maximized was_deactivated was_hidden was_unmaximized'},
+	{'vA',  'maximize hide shownormal', 'vA was_maximized was_deactivated was_hidden was_unmaximized'},
+
+	{'vA',  'minimize hide show',       'vm was_minimized was_deactivated was_hidden was_shown'},
+	{'vA',  'minimize hide restore',    'vA was_minimized was_deactivated was_hidden was_shown was_unminimized was_activated'},
+	{'vA',  'minimize hide shownormal', 'vA was_minimized was_deactivated was_hidden was_shown was_unminimized was_activated'},
+	{'vA',  'maximize minimize hide show',           'vmM was_maximized was_minimized was_deactivated was_hidden was_shown'},
+	{'vA',  'maximize minimize hide restore',        'vMA was_maximized was_minimized was_deactivated was_hidden was_shown was_unminimized was_activated'},
+	{'vA',  'maximize minimize hide shownormal',      'vA was_maximized was_minimized was_deactivated was_hidden was_shown was_unminimized was_unmaximized was_activated'},
+	{'vA',  'maximize minimize hide restore restore', 'vA was_maximized was_minimized was_deactivated was_hidden was_shown was_unminimized was_unmaximized was_activated'},
+	{'hM',  'restore',         'vA was_shown was_unmaximized was_activated'},
+	{'hm',  'restore',         'vA was_shown was_unminimized was_activated'},
+	{'hmM', 'restore',        'vMA was_shown was_unminimized was_activated'},
+	{'hmM', 'restore restore', 'vA was_shown was_unminimized was_activated was_unmaximized'},
+
+	--transtions in and out of fullscreen
+
 	--transitions from maximized fullscreen
 	{'vA', 'maximize enter_fullscreen', 'vMFA', 'show', 'vMFA'},
 	{'vA', 'maximize enter_fullscreen', 'vMFA', 'hide', 'vMFA'},
@@ -1447,21 +1494,7 @@ for i,t in ipairs{
 	{'vA', 'maximize enter_fullscreen', 'vMFA', 'restore', 'vMA exited_fullscreen'},
 	{'vA', 'maximize enter_fullscreen', 'vMFA', 'shownormal', 'vMFA'},
 
-	--combined checks: check sequences of multiple transitions.
-	--1. check that calls are not merged (i.e. that all events fire)
-	--2. check that subsequent commands are not ignored while other commands perform.
-	--3. check that the final state is correct.
-	{'vA', 'hide show', 'vA was_hidden was_shown'},
-	{'h', 'show hide', 'h was_shown was_hidden'},
-	{'vA', 'maximize restore', 'vA was_maximized was_unmaximized'},
-	{'vA', 'maximize minimize hide', 'hmM was_maximized was_minimized was_deactivated was_hidden'},
-	{'vA', 'maximize minimize restore restore', 'vA was_maximized was_minimized was_deactivated was_unminimized was_activated was_unmaximized'},
-	{'vA', 'maximize minimize hide restore', 'vMA was_maximized was_minimized was_deactivated was_hidden was_shown was_unminimized'},
-	{'hmM', 'restore', 'vMA was_unminimized was_activated', 'restore', 'vA was_unmaximized'}, --same as above but from initial state
-	--TODO: windows does not activate in this case
-	{'vA', 'maximize minimize hide restore restore', 'vA was_maximized was_minimized was_deactivated was_hidden was_shown was_unminimized was_unmaximized'},
-
-	--transitions to enter fullscreen
+	--transitions to fullscreen
 	{'vA',  'enter_fullscreen', 'vFA entered_fullscreen'},
 	{'h',   'enter_fullscreen', 'vFA was_shown entered_fullscreen was_activated'},
 	{'vm',  'enter_fullscreen', 'vFA was_unminimized entered_fullscreen was_activated'},
@@ -1482,6 +1515,7 @@ for i,t in ipairs{
 	{'hmM', 'exit_fullscreen', 'hmM'},
 	{'vA',  'enter_fullscreen', 'vFA', 'exit_fullscreen', 'vA exited_fullscreen'},
 	{'vMA', 'enter_fullscreen', 'vMFA', 'exit_fullscreen', 'vMA exited_fullscreen'},
+
 } do
 
 	--make up a name for the test
