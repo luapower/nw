@@ -1493,20 +1493,23 @@ end
 --hi-dpi support -------------------------------------------------------------
 
 function app:get_autoscaling()
-	return not self._scaling_disabled
+	if nw.frontend:os'Windows 6.3' then --Win8.1+ per-monitor DPI
+		return winapi.GetProcessDPIAwareness() == winapi.PROCESS_DPI_UNAWARE
+	elseif nw.frontend:os'Windows 6.0' then --Vista+ global DPI
+		return not winapi.IsProcessDPIAware()
+	end
 end
 
---NOTE: this must be called before the stretcher kicks in, i.e. before
---creating windows or calling display-related APIs.
---This will silently fail otherwise!
+--NOTE: must call this before the stretcher kicks in, i.e. before creating
+--any windows or calling monitor APIs. It will silently fail otherwise!
 function app:disable_autoscaling()
-	if self._scaling_disabled then return end
+	if self._scaling_disabled then return end --must not call these APIs twice
 	if nw.frontend:os'Windows 6.3' then --Win8.1+ per-monitor DPI
 		winapi.SetProcessDPIAwareness(winapi.PROCESS_PER_MONITOR_DPI_AWARE)
 	elseif nw.frontend:os'Windows 6.0' then --Vista+ global DPI
 		winapi.SetProcessDPIAware()
 	end
-	self._scaling_disabled = true
+	self._scaling_disabled = true --disable_autoscaling() barrier
 end
 
 function app:enable_autoscaling()

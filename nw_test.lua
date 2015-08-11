@@ -1291,7 +1291,7 @@ local function state_test(t)
 			local events = {}
 			function win:event(event_name)
 				local t1 = time.clock()
-				print(string.format('   %4dms | EVENT: %s', (t1 - t0) * 1000, event_name)..' | '..state_string(win))
+				print(string.format('   %4dms | %-5s | EVENT: %s', (t1 - t0) * 1000, state_string(win), event_name))
 				t0 = t1
 				events[#events+1] = event_name
 				events[event_name] = (events[event_name] or 0) + 1
@@ -1313,7 +1313,7 @@ local function state_test(t)
 				events = {}
 				for action in glue.gsplit(actions, ' ') do
 					local t1 = time.clock()
-					print(string.format('   %4dms | ACTION: %s', (t1 - t0) * 1000, action)..' | '..state_string(win))
+					print(string.format('   %4dms | %-5s | ACTION: %s', (t1 - t0) * 1000, state_string(win), action))
 					t0 = t1
 					if action == 'enter_fullscreen' then
 						win:fullscreen(true)
@@ -2091,7 +2091,9 @@ end)
 
 local function test_autoscaling(scaling)
 	app:autoscaling(scaling)
-	print('autoscaling: ', scaling, app:autoscaling() == scaling and 'ok' or 'failed')
+	print('wanted autoscaling: ', scaling and 'on' or 'off')
+	print('actual autoscaling: ', app:autoscaling() and 'on' or 'off',
+		app:autoscaling() ~= scaling and '(failed)' or '')
 
 	for i,d in ipairs(app:displays()) do
 
