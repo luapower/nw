@@ -366,10 +366,10 @@ function window:new(app, frontend, t)
 	--TODO: this doesn't actually work!
 	self._activable = t.activable
 
-	--flag to mask off window's state while the window is unmapped.
+	--flag to mask off window's reported state while the window is unmapped.
 	self._hidden = true
 
-	--window state to be reported while the window is unmapped.
+	--state flags to be reported while the window is unmapped.
 	self._minimized = t.minimized or false
 	self._maximized = t.maximized or false
 	self._fullscreen = t.fullscreen or false

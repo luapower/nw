@@ -287,11 +287,12 @@ end
 
 --NOTE: close() doesn't call windowShouldClose.
 --NOTE: fullscreen mode is a global state: closing a fullscreen window leaves
---that state inconsistent such that the next window will have the fullscreen bit set.
+--that state inconsistent such that the next window will have the fullscreen
+--bit set, which is why we have to exit fullscreen before attempting to close.
 function window:forceclose()
 	if self._entering_fs or self._exiting_fs or self:fullscreen() then
-		self._want_close = true
-		self:exit_fullscreen()
+		self._want_close = true --also acts as a state-changing barrier
+		self:_exit_fullscreen()
 	else
 		self:_forceclose()
 	end
@@ -447,6 +448,7 @@ function window:visible()
 end
 
 function window:show()
+	if self._want_close then return end
 	if self._visible then return end
 	if self._minimized then
 		--if it was minimized before hiding, minimize it back.
@@ -467,6 +469,7 @@ end
 --NOTE: orderOut() is buggy: calling it before starting the message loop
 --results in a window that is not hidden and doesn't respond to mouse events.
 function window:hide()
+	if self._want_close then return end
 	if not self._visible then return end
 	if self:fullscreen() then return end --TODO: make this transition
 	self._minimized = self.nswin:isMiniaturized()
@@ -493,6 +496,7 @@ end
 --NOTE: miniaturize() in fullscreen mode is ignored.
 --NOTE: miniaturize() shows the window if hidden.
 function window:minimize()
+	if self._want_close then return end
 	if self:fullscreen() then return end --TODO: make this transition
 	if not self._visible then
 		--if it was hidden, minimize it again to show it.
@@ -646,6 +650,7 @@ function window:_unmaximize_minimized()
 end
 
 function window:maximize()
+	if self._want_close then return end
 	if self:fullscreen() then return end --TODO: make this transition
 	if self:minimized() then
 		if self:maximized() then
@@ -698,6 +703,7 @@ end
 --state/restoring ------------------------------------------------------------
 
 function window:restore()
+	if self._want_close then return end
 	if self:minimized() then
 		self:_unminimize()
 	elseif self:maximized() then
@@ -708,6 +714,7 @@ function window:restore()
 end
 
 function window:shownormal()
+	if self._want_close then return end
 	if self:fullscreen() then return end --TODO: make this transition
 	if self:minimized() and self:maximized() then
 		self:_unmaximize_minimized()
@@ -724,6 +731,7 @@ function window:fullscreen()
 end
 
 function window:enter_fullscreen()
+	if self._want_close then return end
 	if self._exiting_fs then
 		--there's no API to cancel an in-progress toggleFullScreen() animation.
 		--best we can do is to wait to let it finish and go from there.
@@ -756,6 +764,11 @@ function window:_enter_fullscreen()
 end
 
 function window:exit_fullscreen()
+	if self._want_close then return end
+	self:_exit_fullscreen()
+end
+
+function window:_exit_fullscreen()
 	if self._entering_fs then
 		--there's no API to cancel an in-progress toggleFullScreen() animation.
 		--best we can do is to wait to let it finish and go from there.
@@ -794,7 +807,7 @@ function Window:windowDidEnterFullScreen()
 	--great, now see if we have to exit already.
 	if self.backend._exit_fs then
 		self.backend._exit_fs = false
-		self.backend:exit_fullscreen()
+		self.backend:_exit_fullscreen()
 	end
 end
 
