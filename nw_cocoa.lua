@@ -492,6 +492,7 @@ end
 --NOTE: miniaturize() in fullscreen mode is ignored.
 --NOTE: miniaturize() shows the window if hidden.
 function window:minimize()
+	if self:fullscreen() then return end --TODO: make this transition
 	if not self._visible then
 		--if it was hidden, minimize it again to show it.
 		--orderBack() shows the window before minimizing it, but not doing so
@@ -537,6 +538,7 @@ end
 --NOTE: isZoomed() returns true while in fullscreen mode.
 --NOTE: isZoomed() calls windowWillResize_toSize(), believe it!
 function window:maximized()
+	if self:fullscreen() then return end --TODO: make this transition
 	if self._maximized ~= nil then
 		return self._maximized
 	elseif self._frameless then
@@ -705,6 +707,7 @@ function window:restore()
 end
 
 function window:shownormal()
+	if self:fullscreen() then return end --TODO: make this transition
 	if self:minimized() and self:maximized() then
 		self:_unmaximize_minimized()
 	else

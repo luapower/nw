@@ -755,9 +755,6 @@ end
 
 function window:hide()
 	self:_check()
-	--ignore because OSX can't do it: it hides the window but it doesn't
-	--get out of fullscreen mode, leaving us with the gray background.
-	if self:fullscreen() then return end
 	self.backend:hide()
 end
 
@@ -770,7 +767,6 @@ end
 
 function window:minimize()
 	self:_check()
-	if self:fullscreen() then return end --ignore because OSX can't do it
 	self.backend:minimize()
 end
 
@@ -783,7 +779,6 @@ end
 
 function window:maximize()
 	self:_check()
-	if self:fullscreen() then return end --ignore because OSX can't do it
 	self.backend:maximize()
 end
 
@@ -792,9 +787,7 @@ end
 function window:restore()
 	self:_check()
 	if self:fullscreen() then
-		print('yes you are you idiot1')
 		self:fullscreen(false)
-		print('yes you are you idiot2')
 	else
 		self.backend:restore()
 	end
@@ -802,7 +795,6 @@ end
 
 function window:shownormal()
 	self:_check()
-	if self:fullscreen() then return end --ignore because OSX can't do it
 	self.backend:shownormal()
 end
 
@@ -1315,7 +1307,7 @@ end
 --rendering ------------------------------------------------------------------
 
 function window:bitmap()
-	self:_check()
+	if self:dead() then return end
 	return self.backend:bitmap()
 end
 

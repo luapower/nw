@@ -291,6 +291,7 @@ function window:show()
 end
 
 function window:hide()
+	if self:fullscreen() then return end --TODO: remove this after fixing OSX
 	self.win:hide() --sync call
 end
 
@@ -300,6 +301,7 @@ end
 
 --NOTE: minimize() is not activating the window, consistent with OSX and Linux.
 function window:minimize()
+	if self:fullscreen() then return end --TODO: remove this after fixing OSX
 	self.win:minimize() --sync call, assumed by show()
 end
 
@@ -313,6 +315,7 @@ function window:maximized()
 end
 
 function window:maximize()
+	if self:fullscreen() then return end --TODO: remove this after fixing OSX
 	self.win:maximize() --sync call, assumed by enter_fullscreen()
 end
 
@@ -322,10 +325,13 @@ function window:restore()
 end
 
 function window:shownormal()
+	if self:fullscreen() then return end --TODO: remove this after fixing OSX
 	self.win:shownormal() --sync call
-	--activating because minimize->hide->shownormal doesn't.
-	self:activate()
-	self.app:activate()
+	if not self:active() then
+		--activating because minimize->hide->shownormal doesn't.
+		self:activate()
+		self.app:activate()
+	end
 end
 
 function Window:on_pos_changed(pos)
@@ -486,7 +492,7 @@ end
 
 function window:set_frame_rect(x, y, w, h)
 	self:set_normal_frame_rect(x, y, w, h)
-	if self:visible() then
+	if self:visible() and (self:minimized() or self:maximized()) then
 		self:shownormal()
 	end
 end
@@ -574,15 +580,18 @@ function Window:nw_frame_changing(how, rect)
 			winapi.SetWindowPos(self.hwnd, nil, x, y, w, h, 0)
 		end
 
-		--move children too to emulate default OSX behavior.
-		if self.frontend:sticky() then
+		--move sticky children too to emulate default OSX behavior.
+		local children = self.frontend:children()
+		if #children > 0 then
 			local x, y = rect.x, rect.y
 			local x0, y0 = self.backend:get_frame_rect()
 			local dx = x - x0
 			local dy = y - y0
-			for _,win in ipairs(self.frontend:children()) do
-				local x, y = win:frame_rect()
-				win:frame_rect(x + dx, y + dy)
+			for _,win in ipairs(children) do
+				if win:sticky() then
+					local x, y = win:frame_rect()
+					win.backend.win:move(x + dx, y + dy)
+				end
 			end
 		end
 

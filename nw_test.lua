@@ -871,8 +871,8 @@ What you should know about window states:
 - you can't change v, m or M from F (you can only restore from fullscreen).
 - state-changing methods can change one or more of the state flags at once
   depending on the initial state and the method.
-- state-changing methods change the state asynchronously.
-- state-changing methods do not always succeed in changing the state.
+- state-changing methods can behave synchronously or asynchronously.
+- some state-changing methods may not always succeed in changing the state.
 - state changes trigger specific state-changing events, and can also trigger:
 	- window activation and/or deactivation.
 	- window moving and/or resizing.
@@ -925,7 +925,6 @@ local function init_check(t, child)
 	1        toggle enabled
 	2        toggle allow close
 	3        toggle autoquit
-	6        toggle sticky
 	[        lower
 	]        raise
 	<        lower relative to win1
@@ -1102,8 +1101,6 @@ local function init_check(t, child)
 					else
 						win:maxsize(400, 400)
 					end
-				elseif key == '6' then
-					win:sticky(not win:sticky())
 				elseif key == ',' then
 					win:lower(win1)
 				elseif key == '.' then
@@ -1772,7 +1769,7 @@ add('pos-minmax', function()
 	win:close()
 
 	--setting maxsize while maximized works: the window is resized.
-	--TODO: the position is preserved.
+	--TODO: check that the position is preserved.
 	local win = app:window{x = 100, y = 100, w = 500, h = 500, maximized = true}
 	print(win:frame_rect())
 	win:maxsize(200, 200)
@@ -1786,8 +1783,8 @@ add('pos-minmax', function()
 	assert(w == 200)
 	assert(h == 200)
 
-	--TODO: setting minsize/maxize inside sizing() event works.
-	--TODO: minsize is itself constrained to previously set maxsize and viceversa.
+	--TODO: check that setting minsize/maxize inside sizing() event works.
+	--TODO: check that minsize is itself constrained to previously set maxsize and viceversa.
 end)
 
 --setting maxsize > screen size constrains the window to screen size,
