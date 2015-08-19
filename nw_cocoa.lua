@@ -2,21 +2,21 @@
 --native widgets - cococa backend.
 --Written by Cosmin Apreutesei. Public domain.
 
-local ffi = require'ffi'
-local bit = require'bit'
-local glue = require'glue'
+local ffi   = require'ffi'
+local bit   = require'bit'
+local glue  = require'glue'
 local box2d = require'box2d'
-local objc = require'objc'
 local cbframe = require'cbframe'
+local objc  = require'objc'
 
-local _cbframe = objc.debug.cbframe
-objc.debug.cbframe = true --use cbframe for struct-by-val overrides.
 objc.load'Foundation'
 objc.load'AppKit'
 objc.load'Carbon.HIToolbox' --for key codes
 objc.load'ApplicationServices.CoreGraphics'
 --objc.load'CoreGraphics' --for CGWindow*
 objc.load'CoreFoundation' --for CFArray
+
+objc.use_cbframe()
 
 local nw = {name = 'cocoa'}
 
@@ -289,6 +289,8 @@ end
 --NOTE: fullscreen mode is a global state: closing a fullscreen window leaves
 --that state inconsistent such that the next window will have the fullscreen
 --bit set, which is why we have to exit fullscreen before attempting to close.
+--NOTE: since we have to exit fullscreen before closing, this makes close()
+--a potentially async operation.
 function window:forceclose()
 	if self._entering_fs or self._exiting_fs or self:fullscreen() then
 		self._want_close = true --also acts as a state-changing barrier
@@ -447,9 +449,14 @@ function window:visible()
 	return self._visible
 end
 
+--TODO: implement transitions from fullscreen mode instead of ignoring them.
+function window:_fs_blocked()
+	return self._want_close or self._entering_fs or self._exiting_fs or self:fullscreen()
+end
+
 function window:show()
-	if self._want_close then return end
 	if self._visible then return end
+	if self:_fs_blocked() then return end
 	if self._minimized then
 		--if it was minimized before hiding, minimize it back.
 		--orderBack() shows the window before minimizing it which sucks, but
@@ -459,7 +466,7 @@ function window:show()
 		self.nswin:miniaturize(nil)
 	else
 		self._visible = true
-		self.nswin:orderFront(nil) --NOTE: assuming synchronous operation
+		self.nswin:orderFront(nil) --NOTE: sync call
 		self.frontend:_backend_changed()
 		self.nswin:makeKeyWindow() --NOTE: async operation
 	end
@@ -469,12 +476,11 @@ end
 --NOTE: orderOut() is buggy: calling it before starting the message loop
 --results in a window that is not hidden and doesn't respond to mouse events.
 function window:hide()
-	if self._want_close then return end
 	if not self._visible then return end
-	if self:fullscreen() then return end --TODO: make this transition
+	if self:_fs_blocked() then return end
 	self._minimized = self.nswin:isMiniaturized()
 	self._hiding = true --disambiguating close() from hide() in windowWillClose() event.
-	self.nswin:close()
+	self.nswin:close() --NOTE: sync call? better be (all ops check the _visible flag)
 end
 
 function window:_was_hidden() --windowWillClose() event for when self._hidden is set.
@@ -496,8 +502,7 @@ end
 --NOTE: miniaturize() in fullscreen mode is ignored.
 --NOTE: miniaturize() shows the window if hidden.
 function window:minimize()
-	if self._want_close then return end
-	if self:fullscreen() then return end --TODO: make this transition
+	if self:_fs_blocked() then return end
 	if not self._visible then
 		--if it was hidden, minimize it again to show it.
 		--orderBack() shows the window before minimizing it, but not doing so
@@ -505,7 +510,7 @@ function window:minimize()
 		--hovering on titlebar buttons not working.
 		self.nswin:orderBack(nil)
 	end
-	self.nswin:miniaturize(nil)
+	self.nswin:miniaturize(nil) --NOTE: sync call
 	--windowDidMiniaturize() is not called from hidden.
 	if not self._visible then
 		self:_did_change_minimized()
@@ -618,8 +623,8 @@ function window:_maximize_frame()
 		self:_maximize_frame_manually()
 	else
 		self:_save_restore_frame()
-		self.nswin.nw_zooming = true --NOTE: assuming synchronous operation
-		self.nswin:zoom(nil)
+		self.nswin.nw_zooming = true
+		self.nswin:zoom(nil) --NOTE: sync call
 		self.nswin.nw_zooming = false
 		self:_apply_constraints()
 	end
@@ -630,8 +635,8 @@ function window:_unmaximize_frame()
 	if self._frameless then
 		self:_unmaximize_frame_manually()
 	else
-		self.nswin.nw_zooming = true --NOTE: assuming synchronous operation
-		self.nswin:zoom(nil)
+		self.nswin.nw_zooming = true
+		self.nswin:zoom(nil) --NOTE: sync call
 		self.nswin.nw_zooming = false
 		self:_apply_constraints()
 	end
@@ -650,8 +655,7 @@ function window:_unmaximize_minimized()
 end
 
 function window:maximize()
-	if self._want_close then return end
-	if self:fullscreen() then return end --TODO: make this transition
+	if self:_fs_blocked() then return end
 	if self:minimized() then
 		if self:maximized() then
 			self:_unminimize()
@@ -714,8 +718,7 @@ function window:restore()
 end
 
 function window:shownormal()
-	if self._want_close then return end
-	if self:fullscreen() then return end --TODO: make this transition
+	if self:_fs_blocked() then return end
 	if self:minimized() and self:maximized() then
 		self:_unmaximize_minimized()
 	else
@@ -833,6 +836,20 @@ function Window:windowDidExitFullScreen()
 		self.frontend.app:runafter(0, function()
 			self.backend:enter_fullscreen()
 		end)
+	end
+end
+
+function Window:windowDidFailToExitFullScreen()
+	--TODO: find a way to trigger this predictably so we know what to do here
+	if self.backend._want_close then
+		self.backend:_forceclose()
+	end
+end
+
+function Window:windowDidFailToEnterFullScreen()
+	--TODO: find a way to trigger this predictably so we know what to do here
+	if self.backend._want_close then
+		self.backend:_forceclose()
 	end
 end
 
@@ -2506,6 +2523,6 @@ function Window:performDragOperation(sender)
 	return true
 end
 
-objc.debug.cbframe = _cbframe --restore cbframe setting.
+objc.stop_using_cbframe()
 
 return nw

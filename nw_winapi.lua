@@ -6,6 +6,7 @@ local ffi = require'ffi'
 local bit = require'bit'
 local glue = require'glue'
 local box2d = require'box2d'
+local cbframe = require'cbframe'
 local bitmap = require'bitmap' --for clipboard
 local winapi = require'winapi'
 require'winapi.spi'
@@ -17,6 +18,16 @@ require'winapi.bitmap'
 require'winapi.icon'
 require'winapi.dpiaware'
 require'winapi.devcaps'
+require'winapi.monitor'
+require'winapi.cursor'
+require'winapi.keyboard'
+require'winapi.rawinput'
+require'winapi.mouse'
+require'winapi.notifyiconclass'
+require'winapi.filedialogs'
+require'winapi.clipboard'
+require'winapi.shellapi'
+require'winapi.dragdrop'
 
 local nw = {name = 'winapi'}
 
@@ -321,7 +332,7 @@ end
 
 function window:restore()
 	self.win:restore() --sync call
-	self.frontend.app:activate()
+	self.frontend.app:activate() --because maximized hidden windows don't activate
 end
 
 function window:shownormal()
@@ -350,7 +361,7 @@ function window:enter_fullscreen()
 	--save state for restoring
 	self._fs = {
 		maximized = self:maximized(), --NOTE: this assumes that maximize() is synchronous
-		normal_rect = self.win.normal_rect, --NOTE: this assumes that set_normal_rect() is synchronous
+		normal_rect = self.win.normal_rect,
 		frame = self.win.frame,
 		sizeable = self.win.sizeable,
 	}
@@ -675,8 +686,6 @@ end
 
 --displays -------------------------------------------------------------------
 
-require'winapi.monitor'
-
 function app:_display(monitor)
 	local ok, info = pcall(winapi.GetMonitorInfo, monitor)
 	if not ok then return end
@@ -739,8 +748,6 @@ end
 
 --cursors --------------------------------------------------------------------
 
-require'winapi.cursor'
-
 local cursors = {
 	--pointers
 	arrow = winapi.IDC_ARROW,
@@ -775,9 +782,6 @@ function Window:on_set_cursor(_, ht)
 end
 
 --keyboard -------------------------------------------------------------------
-
-require'winapi.keyboard'
-require'winapi.rawinput'
 
 local keynames = { --vkey code -> vkey name
 
@@ -1086,8 +1090,6 @@ function Window:on_raw_input(raw)
 end
 
 --mouse ----------------------------------------------------------------------
-
-require'winapi.mouse'
 
 function app:double_click_time()
 	return winapi.GetDoubleClickTime() / 1000 --seconds
@@ -1632,8 +1634,6 @@ end
 
 --notification icons ---------------------------------------------------------
 
-require'winapi.notifyiconclass'
-
 local notifyicon = {}
 app.notifyicon = notifyicon
 
@@ -1850,8 +1850,6 @@ end
 
 --file chooser ---------------------------------------------------------------
 
-require'winapi.filedialogs'
-
 --given a list of file types eg. {'gif', ...} make a list of filters
 --to pass to open/save dialog functions.
 --we can't allow wildcards and custom text because OSX doesn't (so english only).
@@ -1908,9 +1906,6 @@ function app:savedialog(opt)
 end
 
 --clipboard ------------------------------------------------------------------
-
-require'winapi.clipboard'
-require'winapi.shellapi'
 
 function app:clipboard_empty(format)
 	return winapi.CountClipboardFormats() == 0
@@ -2028,8 +2023,6 @@ end
 
 --drag & drop ----------------------------------------------------------------
 
-require'winapi.dragdrop'
-local cbframe = require'cbframe'
 local ptonumber = winapi.ptonumber
 
 function Window:WM_DROPFILES(hdrop)

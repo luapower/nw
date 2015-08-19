@@ -2,23 +2,24 @@
 --native widgets - Xlib backend.
 --Written by Cosmin Apreutesei. Public domain.
 
-if not ... then require'nw_test'; return end
+--Thanks to X authors for making this a torturous coding experience.
 
-local ffi = require'ffi'
-local bit = require'bit'
-local glue = require'glue'
+local ffi   = require'ffi'
+local bit   = require'bit'
+local glue  = require'glue'
 local box2d = require'box2d'
-local xlib = require'xlib'
+local xlib  = require'xlib'
+local dbg   = require'xlib_debug'
 require'xlib_keysym_h'
 require'xlib_xshm_h'
-local time = require'time' --for timers
-local heap = require'heap' --for timers
+local time  = require'time' --for timers
+local heap  = require'heap' --for timers
 local box2d = require'box2d' --for win:display()
-local pp = require'pp'
-local cast = ffi.cast
-local free = glue.free
-local xid = xlib.xid
-local C = xlib.C
+local pp    = require'pp'
+local cast  = ffi.cast
+local free  = glue.free
+local xid   = xlib.xid
+local C     = xlib.C
 
 local nw = {name = 'xlib'}
 
@@ -38,85 +39,46 @@ nw.app = app
 function app:new(frontend)
 	self   = glue.inherit({frontend = frontend}, self)
 	xlib   = xlib.connect()
+	dbg    = dbg.connect(xlib)
+	--dbg.trace()
 	xlib.synchronize(true) --shave off one source of unpredictability
 	xlib.set_xsettings_change_notify() --setup to receive XSETTINGS changes
 	self:_resolve_evprop_names()
 	return self
 end
 
---event debugging ------------------------------------------------------------
-
-local etypes = glue.index{
-	KeyPress             = 2,
-	KeyRelease           = 3,
-	ButtonPress          = 4,
-	ButtonRelease        = 5,
-	MotionNotify         = 6,
-	EnterNotify          = 7,
-	LeaveNotify          = 8,
-	FocusIn              = 9,
-	FocusOut             = 10,
-	KeymapNotify         = 11,
-	Expose               = 12,
-	GraphicsExpose       = 13,
-	NoExpose             = 14,
-	VisibilityNotify     = 15,
-	CreateNotify         = 16,
-	DestroyNotify        = 17,
-	UnmapNotify          = 18,
-	MapNotify            = 19,
-	MapRequest           = 20,
-	ReparentNotify       = 21,
-	ConfigureNotify      = 22,
-	ConfigureRequest     = 23,
-	GravityNotify        = 24,
-	ResizeRequest        = 25,
-	CirculateNotify      = 26,
-	CirculateRequest     = 27,
-	PropertyNotify       = 28,
-	SelectionClear       = 29,
-	SelectionRequest     = 30,
-	SelectionNotify      = 31,
-	ColormapNotify       = 32,
-	ClientMessage        = 33,
-	MappingNotify        = 34,
-	GenericEvent         = 35,
-}
-local t0
-local function evstr(e)
-	t0 = t0 or time.clock()
-	local t1 = time.clock()
-	local s = '   '..('.'):rep((t1 - t0) * 20)..' EVENT'
-	t0 = t1
-	s = s..' '..(etypes[e.type] or e.type)
-	if e.type == C.PropertyNotify then
-		s = s..': '..xlib.atom_name(e.xproperty.atom)
-	end
-	return s
-end
-
 --message loop ---------------------------------------------------------------
 
 local ev = {}     --{event_code = event_handler}
 
-local function pull_event(timeout)
-	local e = xlib.poll(timeout)
-	if not e then return end
-	--print(evstr(e))
-	local f = ev[tonumber(e.type)]
-	if f then f(e) end
-	--NOTE: right here e is invalid because f() can cause re-entering!
-	return true
+local t0 = time.clock()
+local function evstr(e)
+	local dt = time.clock() - t0; t0 = t0 + dt
+	if dt > 0.5 then
+		print(('-'):rep(100))
+	end
+	print('EVENT', dbg.event_tostring(e))
 end
 
 function app:run()
+
+	local function poll(timeout)
+		local e = xlib.poll(timeout)
+		if not e then return end
+		--evstr(e)
+		local f = ev[tonumber(e.type)]
+		if f then f(e) end
+		--NOTE: right here e is invalid because f() can cause re-entering!
+		return true
+	end
+
 	while not self._stop do
 		local timeout = self:_pull_timers()
 		if self._stop then --stop() called from timer
-			while pull_event() do end --empty the queue
+			while poll() do end --empty the queue
 			break
 		end
-		pull_event(timeout)
+		poll(timeout)
 	end
 	self._stop = false
 end
@@ -199,9 +161,9 @@ end
 local window = {}
 app.window = window
 
-local winmap = {} --{Window (always a number) -> window object}
+local winmap = {} --{XWindow (always a number) -> window_backend}
 
-local function win(win) --window_id -> window_object
+local function win(win) --window_id -> window_backend
 	return winmap[xid(win)]
 end
 
@@ -249,23 +211,16 @@ function window:new(app, frontend, t)
 		C.EnterWindowMask,
 		C.LeaveWindowMask,
 		C.PointerMotionMask,
-		--C.PointerMotionHintMask, --disables MotionNotify!
-		C.Button1MotionMask,
-		C.Button2MotionMask,
-		C.Button3MotionMask,
-		C.Button4MotionMask,
-		C.Button5MotionMask,
-		C.ButtonMotionMask,
-		--C.KeymapStateMask, --KeymapNotify
+		--C.KeymapStateMask, --not used
 		C.ExposureMask,
-		C.VisibilityChangeMask,
+		--C.VisibilityChangeMask, --not used
 		C.StructureNotifyMask,
 		--C.ResizeRedirectMask, --not working
 		C.SubstructureNotifyMask,
-		--C.SubstructureRedirectMask,
+		--C.SubstructureRedirectMask, --not used
 		C.FocusChangeMask,
 		C.PropertyChangeMask,
-		C.ColormapChangeMask,
+		--C.ColormapChangeMask, --not used
 		C.OwnerGrabButtonMask,
 	0)
 
@@ -335,7 +290,7 @@ function window:new(app, frontend, t)
 	xlib.set_net_wm_ping_info(self.win)
 
 	if t.title then
-		xlib.set_title(self.win, t.title)
+		self:set_title(t.title)
 	end
 
 	if t.parent then
@@ -362,18 +317,17 @@ function window:new(app, frontend, t)
 		t.maximizable and C.MWM_DECOR_MAXIMIZE or 0)
 	xlib.set_motif_wm_hints(self.win, hints)
 
-	--activable state for setting later via set_wm_hints().
-	--TODO: this doesn't actually work!
-	self._activable = t.activable
-
 	--flag to mask off window's reported state while the window is unmapped.
 	self._hidden = true
 
-	--state flags to be reported while the window is unmapped.
+	--state flags to be reported while the window is hidden.
 	self._minimized = t.minimized or false
 	self._maximized = t.maximized or false
 	self._fullscreen = t.fullscreen or false
 	self._topmost = t.topmost or false
+
+	--tracked normal rect for restoring hidden maximized windows.
+	self._normal_rect = {self:get_frame_rect()}
 
 	winmap[self.win] = self
 
@@ -421,30 +375,31 @@ local last_focus_out
 local focus_timer_started
 local last_active_window
 
-function app:_check_activated()
-	if self._active then return end
-	self._active = true
-	self.frontend:_backend_changed()
-end
-
+--NOTE: FocusIn is also sent after ending a resizing operation.
 ev[C.FocusIn] = function(e)
 	local e = e.xfocus
 	local self = win(e.window)
 	if not self then return end
+	if self._hiding or self._hidden then return end --ignore while hiding
 
-	if last_active_window then return end --ignore duplicate events
 	last_active_window = self
+	last_focus_out = nil --disable the app deactivate timer
 
-	last_focus_out = nil
-	self.app:_check_activated() --window activation implies app activation.
+	--window activation implies app activation.
+	self.app._active = true
+	self.app.frontend:_backend_changed()
 	self.frontend:_backend_changed()
 end
 
---NOTE: set after UnmapNotify when hiding.
+--NOTE: FocusOut is also sent before starting a resizing operation.
+--NOTE: when hiding, FocusOut is sent before PropertyNotify/WM_STATE.
+--NOTE: when minimizing, by the time FocusOut is sent, _NET_WM_STATE_HIDDEN
+--is also set, thus was_minimized event will happen here.
 ev[C.FocusOut] = function(e)
 	local e = e.xfocus
 	local self = win(e.window)
 	if not self then return end
+	if self._hiding or self._hidden then return end --ignore while hiding
 
 	if not last_active_window then return end --ignore duplicate events
 	last_active_window = nil
@@ -469,7 +424,6 @@ ev[C.FocusOut] = function(e)
 end
 
 function app:activate()
-	if self._active then return end
 	--unlike OSX, in X you don't activate an app, you can only activate a window.
 	--activating this app means activating the last window that was active.
 	local win = last_active_window
@@ -480,11 +434,12 @@ end
 
 function app:active_window()
 	--return the active window only if the app is active, consistent with OSX.
-	return self._active and win(xlib.get_input_focus()) or nil
+	local win = self._active and win(xlib.get_input_focus())
+	return win and win.frontend or nil
 end
 
 function app:active()
-	return self._active
+	return self._active or false
 end
 
 function window:activate()
@@ -492,90 +447,81 @@ function window:activate()
 end
 
 function window:active()
-	return app:active_window() == self
+	return self.app:active_window() == self.frontend
 end
 
 --state/visibility -----------------------------------------------------------
 
 function window:visible()
-	local st = xlib.get_wm_state(self.win)
-	return st and st ~= C.WithdrawnState
+	return not self._hidden
 end
 
 function window:show()
-	if not self._hidden then return end
+	if not self._hidden then return end --hiding or visible: ignore
+
+	--set the saved normal rect before mapping the window.
+	--this is because the normal rect is lost when hiding a maximized window.
+	self:set_frame_rect(unpack(self._normal_rect))
 
 	--set the _NET_WM_STATE property before mapping the window.
 	--later on we have to use change_net_wm_state() to change these values.
 	xlib.set_net_wm_state(self.win, {
 		_NET_WM_STATE_MAXIMIZED_HORZ = self._maximized or nil,
 		_NET_WM_STATE_MAXIMIZED_VERT = self._maximized or nil,
+		_NET_WM_STATE_HIDDEN = self._minimized or nil,
 		_NET_WM_STATE_ABOVE = self._topmost or nil,
 		_NET_WM_STATE_FULLSCREEN = self._fullscreen or nil,
 	})
 
-	--set WM_HINTS property before mapping the window.
-	--later on we have to use change_wm_state() to minimize the window.
-	if self._minimized or not self._activable then
-		xlib.set_wm_hints(self.win, {
-			initial_state = self._minimized and C.IconicState or nil,
-			input = not self._activable and 0 or nil, --TODO: doesn't actually work!
-		})
-	end
-
-	xlib.map(self.win)
-
-	if not self._minimized then
-		--activate the window but not when minimized, consistent with Windows.
-		self:activate()
-	else
-		--if minimized, MapNotify is not sent, but PropertyNotify/WM_STATE is.
-		self._wm_state_cmd = 'map'
-	end
+	xlib.map(self.win) --async operation
 end
 
 function window:hide()
 	if self._hidden then return end
+	if self:fullscreen() then return end --TODO: remove this after fixing OSX
 
-	--remember window state while hidden.
+	--window state to report while hidden.
 	self._minimized = self:minimized()
 	self._maximized = self:maximized()
 	self._fullscreen = self:fullscreen()
-	self._hidden = true --switch to stored state
+	self._hiding = true --signal intent to hide in subsequent events
 
-	xlib.withdraw(self.win)
+	xlib.withdraw(self.win) --async operation
+end
 
-	if self._minimized then
-		--if minimized, UnmapNotify is not sent, but PropertyNotify/WM_STATE is.
-		self._wm_state_cmd = 'unmap'
+--[[
+--NOTE: MapNotify is not sent when mapping a minimized window.
+ev[C.MapNotify] = function(e)
+	local self = win(e.xmap.window)
+	if not self then return end
+	if self._hidden then
+		self:_was_shown()
 	end
 end
 
-function window:_mapped()
-	if not self._hidden then return end --unminimized, ignore
-	self._hidden = false --switch to real state
-	self.frontend:_backend_changed()
-end
-
-function window:_unmapped()
-	if not self._hidden then return end --minimized, ignore
-	self.frontend:_backend_changed()
-end
-
---NOTE: unminimizing triggers this too.
-ev[C.MapNotify] = function(e)
-	local e = e.xmap
-	local self = win(e.window)
-	if not self then return end
-	self:_mapped()
-end
-
---NOTE: minimizing triggers this too.
+--NOTE: UnmapNotify is also send when minimizing.
+--NOTE: UnmapNotify is not sent when unmapping a minimized window.
 ev[C.UnmapNotify] = function(e)
-	local e = e.xunmap
+	local self = win(e.xunmap.window)
+	if not self then return end
+	if self._hiding then --hidden
+		self:_was_hidden()
+	else --minimized
+		self.frontend:_backend_changed()
+	end
+end
+]]
+
+function evprop.WM_STATE(e)
 	local self = win(e.window)
 	if not self then return end
-	self:_unmapped()
+	if self._hiding and not xlib.get_wm_state_visible(self.win) then
+		self._hiding = false
+		self._hidden = true --switch to reporting stored state
+	elseif self._hidden and xlib.get_wm_state_visible(self.win) then
+		self._hidden = false --switch to reporting real state
+	end
+	self.frontend:_backend_changed() --visibility and minimization changes
 end
 
 --state/minimizing -----------------------------------------------------------
@@ -584,138 +530,119 @@ function window:minimized()
 	if self._hidden then
 		return self._minimized
 	end
-	return xlib.get_wm_state(self.win) == C.IconicState
+	return xlib.get_net_wm_state_hidden(self.win)
 end
 
 function window:minimize()
+	if self:fullscreen() then return end --TODO: remove this after fixing OSX
 	if self._hidden then
 		self._minimized = true
 		self:show()
 	else
-		xlib.change_wm_state(self.win, C.IconicState)
+		xlib.iconify(self.win)
 	end
 end
 
-function evprop.WM_STATE(e)
-	local self = win(e.window)
-	if not self then return end
-
-	if self._hidden then
-		local cmd = self._wm_state_cmd
-		self._wm_state_cmd = nil --one-time thing
-		if cmd == 'map' then
-			self:_mapped()
-		elseif cmd == 'unmap' then
-			self:_unmapped()
-		end
-	else
-		self.frontend:_backend_changed()
-	end
+function window:_unminimize()
+	xlib.map(self.win)
+	self:activate() --because map alone doesn't activate a minimized window
 end
 
 --state/maximizing -----------------------------------------------------------
-
-function window:_get_maximized_state()
-	return xlib.get_net_wm_state(self.win, '_NET_WM_STATE_MAXIMIZED_HORZ') or false
-end
 
 function window:maximized()
 	if self._hidden then
 		return self._maximized
 	end
-	return self:_get_maximized_state()
-end
-
-function window:_set_maximized(maximized)
-	xlib.change_net_wm_state(self.win, maximized,
-		'_NET_WM_STATE_MAXIMIZED_HORZ',
-		'_NET_WM_STATE_MAXIMIZED_VERT')
+	return xlib.get_net_wm_state_maximized(self.win)
 end
 
 function window:maximize()
+	if self:fullscreen() then return end --TODO: remove this after fixing OSX
 	if self._hidden then
 		self._maximized = true
 		self._minimized = false
 		self:show()
-		self:_set_maximized(true)
-	elseif self:minimized() then
-		self:_set_maximized(true)
-		self:restore()
 	else
-		self:_set_maximized(true)
+		xlib.change_net_wm_state_maximized(self.win, true)
+		self:_unminimize()
+	end
+end
+
+function window:_unmaximize()
+	if self._hidden then
+		self._minimized = false
+		self._maximized = false
+		self:show()
+	else
+		xlib.change_net_wm_state_maximized(self.win, false)
 	end
 end
 
 function evprop._NET_WM_STATE(e)
 	local self = win(e.window)
 	if not self then return end
-	self._fullscreen = self:_get_fullscreen_state()
-	self._maximized = self:_get_maximized_state()
-	self.frontend:_backend_changed()
+	if self._hiding or self._hidden then return end --ignore events while hidden
+	self.frontend:_backend_changed() --maximization and fullscreen changes
 end
 
 --state/restoring ------------------------------------------------------------
 
 function window:restore()
 	if self._hidden then
-		self:show()
-	else
-		if self:minimized() then
-			xlib.map(self.win)
-			--activate window to emulate Windows behavior.
-			self:activate()
-		elseif self:maximized() then
-			self:_set_maximized(false)
+		if self._minimized then
+			self._minimized = false
+		elseif self._fullscreen then
+			self._fullscreen = false
+		elseif self._maximized then
+			self._maximized = false
 		end
+		self:show()
+	elseif self:minimized() then
+		self:_unminimize()
+	elseif self:fullscreen() then
+		self:fullscreen(false)
+	else
+		self:_unmaximize()
 	end
 end
 
 function window:shownormal()
+	if self:fullscreen() then return end --TODO: remove this after fixing OSX
 	if self._hidden then
 		self._minimized = false
-		if self:maximized() then
-			self:_set_maximized(false)
-		end
+		self._maximized = false
+		self._fullscreen = false
 		self:show()
-	elseif self:minimized() then
-		if self:maximized() then
-			self:_set_maximized(false)
-		end
-		xlib.map(self.win)
-		--activate window to emulate Windows behavior.
-		self:activate()
-	elseif self:maximized() then
-		self:_set_maximized(false)
+	else
+		self:fullscreen(false)
+		self:_unmaximize()
+		self:_unminimize()
 	end
 end
 
 --state/fullscreen -----------------------------------------------------------
 
-function window:_get_fullscreen_state()
-	return xlib.get_net_wm_state(self.win, '_NET_WM_STATE_FULLSCREEN') or false
-end
-
 function window:fullscreen()
 	if self._hidden then
 		return self._fullscreen
 	end
-	return self:_get_fullscreen_state()
+	return xlib.get_net_wm_state_fullscreen(self.win)
 end
 
 function window:enter_fullscreen()
 	if self._hidden then
-		--NOTE: currently the frontend doesn't allow this because of OSX.
 		self._fullscreen = true
 		self._minimized = false
 		self:show()
-		self:enter_fullscreen()
 	else
-		xlib.change_net_wm_state(self.win, true, '_NET_WM_STATE_FULLSCREEN')
+		self:_unminimize()
+		xlib.change_net_wm_state_fullscreen(self.win, true)
 	end
 end
 
 function window:exit_fullscreen()
-	xlib.change_net_wm_state(self.win, false, '_NET_WM_STATE_FULLSCREEN')
+	xlib.change_net_wm_state_fullscreen(self.win, false)
 end
 
 --state/enabled --------------------------------------------------------------
@@ -810,11 +737,15 @@ function window:_frame_extents()
 end
 
 function window:get_normal_frame_rect()
-	return self:get_frame_rect()
+	return unpack(self._normal_rect)
 end
 
 function window:set_normal_frame_rect(x, y, w, h)
-	self:set_frame_rect(x, y, w, h)
+	if self:maximized() then
+		self._normal_rect = {x, y, w, h}
+	else
+		self:set_frame_rect(x, y, w, h)
+	end
 end
 
 function window:get_frame_rect()
@@ -895,6 +826,17 @@ ev[C.ConfigureNotify] = function(e)
 	local e = e.xconfigure
 	local self = win(e.window)
 	if not self then return end
+
+	if self._hiding or self._hidden then return end --reparenting, ignore
+
+	--track normal rect because there's no way to get it from X.
+	--NOTE: we have to track this through resizes instead of just saving it
+	--before maximizing because by the time PropertyNotify for _NET_WM_STATE
+	--is triggered the frame is already maximized.
+	if not (self:maximized() or self:fullscreen()) then
+		self._normal_rect = {self:get_frame_rect()}
+	end
+
 	self.frontend:_backend_changed()
 end
 
@@ -906,11 +848,12 @@ function window:magnets() end
 --titlebar -------------------------------------------------------------------
 
 function window:get_title()
-	return xlib.get_title(self.win)
+	return xlib.get_wm_name(self.win)
 end
 
 function window:set_title(title)
-	xlib.set_title(self.win, title)
+	xlib.set_wm_name(self.win, title)
+	xlib.set_wm_icon_name(self.win, title)
 end
 
 --z-order --------------------------------------------------------------------
@@ -1350,7 +1293,7 @@ local function make_bitmap(w, h, win, win_depth, ssbuf)
 
 	--NOTE: can't create pix if the window is unmapped.
 	local st = xlib.get_wm_state(win)
-	if st and st ~= C.WithdrawnState then return end
+	if st and st == C.WithdrawnState then return end
 
 	if false and xcb_has_shm() then
 

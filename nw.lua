@@ -2,10 +2,10 @@
 --native widgets - frontend.
 --Written by Cosmin Apreutesei. Public domain.
 
-local ffi = require'ffi'
-local glue = require'glue'
+local ffi   = require'ffi'
+local glue  = require'glue'
 local box2d = require'box2d'
-local time = require'time'
+local time  = require'time'
 
 local nw = {}
 
@@ -524,6 +524,8 @@ function window:_new(app, backend_class, useropt)
 	self._sticky = opt.sticky
 	self:edgesnapping(opt.edgesnapping)
 
+	self.event = opt.event
+
 	self._state = self:state()
 	self._client_rect = {self:client_rect()}
 
@@ -786,7 +788,7 @@ end
 
 function window:restore()
 	self:_check()
-	if self:fullscreen() then
+	if self:visible() and self:fullscreen() then
 		self:fullscreen(false)
 	else
 		self.backend:restore()
