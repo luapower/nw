@@ -43,17 +43,6 @@ local function pack_rect(rect, x, y, w, h)
 	return rect
 end
 
---os version -----------------------------------------------------------------
-
-function nw:os(ver)
-	local vinfo = winapi.RtlGetVersion()
-	return string.format('Windows %d.%d.SP%d.%d',
-		vinfo.dwMajorVersion, vinfo.dwMinorVersion,
-		vinfo.wServicePackMajor, vinfo.wServicePackMinor)
-end
-
-nw.min_os = 'Windows 5.1' --Windows XP+
-
 --app object -----------------------------------------------------------------
 
 local app = {}
@@ -71,6 +60,17 @@ function app:new(frontend)
 	winapi.RegisterRawInputDevices(rid, 1, ffi.sizeof(rid))
 
 	return self
+end
+
+--version checks -------------------------------------------------------------
+
+function app:ver(what)
+	if what == 'windows' then
+		local vinfo = winapi.RtlGetVersion()
+		return string.format('%d.%d.%d.%d',
+			vinfo.dwMajorVersion, vinfo.dwMinorVersion,
+			vinfo.wServicePackMajor, vinfo.wServicePackMinor)
+	end
 end
 
 --message loop ---------------------------------------------------------------
@@ -464,7 +464,7 @@ local function frame_args(frame, has_menu)
 		frame = framed,
 		window_edge = framed,
 		sizeable = framed,
-		menu = has_menu,
+		menu = has_menu and true or false,
 	}
 end
 
@@ -488,27 +488,27 @@ function window:get_normal_frame_rect()
 	end
 end
 
-function window:set_normal_frame_rect(x, y, w, h)
-	if self._fullscreen then
-		self._fs.normal_rect = pack_rect(nil, x, y, w, h)
-	else
-		self.win.normal_rect = pack_rect(nil, x, y, w, h)
-		self.frontend:_backend_changed()
-	end
-end
-
 function window:get_frame_rect()
 	return unpack_rect(self.win.screen_rect)
 end
 
 function window:set_frame_rect(x, y, w, h)
-	self:set_normal_frame_rect(x, y, w, h)
-	if self:visible() and (self:minimized() or self:maximized()) then
+	if self:visible() and self:minimized() then
+		self:restore()
+	end
+	if self._fullscreen then
+		self._fs.normal_rect = pack_rect(nil, x, y, w, h)
+	else
+		self.win.normal_rect = pack_rect(nil, x, y, w, h)
+	end
+	if self:visible() and self:maximized() then
 		self:shownormal()
+	else
+		self.frontend:_backend_changed()
 	end
 end
 
-function window:get_size()
+function window:get_client_size()
 	local r = self.win.client_rect
 	return r.w, r.h
 end
@@ -1502,9 +1502,9 @@ end
 --hi-dpi support -------------------------------------------------------------
 
 function app:get_autoscaling()
-	if nw.frontend:os'Windows 6.3' then --Win8.1+ per-monitor DPI
+	if self.frontend:ver'Windows 6.3' then --Win8.1+ per-monitor DPI
 		return winapi.GetProcessDPIAwareness() == winapi.PROCESS_DPI_UNAWARE
-	elseif nw.frontend:os'Windows 6.0' then --Vista+ global DPI
+	elseif self.frontend:ver'Windows 6.0' then --Vista+ global DPI
 		return not winapi.IsProcessDPIAware()
 	end
 end
@@ -1513,9 +1513,9 @@ end
 --any windows or calling monitor APIs. It will silently fail otherwise!
 function app:disable_autoscaling()
 	if self._scaling_disabled then return end --must not call these APIs twice
-	if nw.frontend:os'Windows 6.3' then --Win8.1+ per-monitor DPI
+	if self.frontend:ver'Windows 6.3' then --Win8.1+ per-monitor DPI
 		winapi.SetProcessDPIAwareness(winapi.PROCESS_PER_MONITOR_DPI_AWARE)
-	elseif nw.frontend:os'Windows 6.0' then --Vista+ global DPI
+	elseif self.frontend:ver'Windows 6.0' then --Vista+ global DPI
 		winapi.SetProcessDPIAware()
 	end
 	self._scaling_disabled = true --disable_autoscaling() barrier
@@ -1526,7 +1526,7 @@ function app:enable_autoscaling()
 end
 
 function app:_get_scaling_factor(monitor)
-	if self.frontend.nw:os'Windows 6.3' then
+	if self.frontend:ver'Windows 6.3' then
 		--in Win8.1+ we have per-monitor DPI
 		local dpi = winapi.GetDPIForMonitor(monitor, winapi.MDT_EFFECTIVE_DPI)
 		return dpi / 96

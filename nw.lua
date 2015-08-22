@@ -49,64 +49,7 @@ function nw:init(bkname)
 	end
 	bkname = bkname or assert(self.backends[ffi.os], 'unsupported OS %s', ffi.os)
 	self.backend = require(bkname)
-	assert(self:os(self.backend.min_os), 'unsupported OS %s < %s', self:os(), self.backend.min_os)
 	self.backend.frontend = self
-end
-
---os version -----------------------------------------------------------------
-
---check if ver2 >= ver1, where ver1 and ver2 have the form 'name maj.min....'.
-local function check_version(ver1, ver2)
-	ver1 = ver1:lower()
-	ver2 = ver2:lower()
-	local os1, v1 = ver1:match'^([^%s]+)(.*)'
-	local os2, v2 = ver2:match'^([^%s]+)(.*)'
-	if not os1 then return false end     --empty string or starts with spaces
-	if os1 ~= os2 then return false end  --different OS
-	v1 = v1:match'^%s*(.*)'
-	v2 = v2:match'^%s*(.*)'
-	if v1 == v2 then
-		return true          --shortcut: equal version strings.
-	end
-	while v1 ~= '' do       --while there's the next part of ver1 to check...
-		if v2 == '' then     --there's no next part of ver2 to check against.
-			return false
-		end
-		local p1, p2         --part prefix (eg. SP3)
-		local n1, n2         --part number
-		p1, n1, v1 = v1:match'^([^%.%d]*)(%d*)%.?(.*)' --eg. 'SP3.0' -> 'SP', '3', '0'
-		p2, n2, v2 = v2:match'^([^%.%d]*)(%d*)%.?(.*)'
-		assert(p1 ~= '' or n1 ~= '', 'invalid syntax') --ver1 part is a dot.
-		assert(p2 ~= '' or n2 ~= '', 'invalid syntax') --ver2 part is a dot.
-		if p1 ~= '' and p1 ~= p2 then
-			return false      --prefixes don't match.
-		end
-		if n1 ~= '' then     --above checks imply n2 ~= '' also.
-			local n1 = tonumber(n1)
-			local n2 = tonumber(n2)
-			if n1 ~= n2 then  --version parts are different, decide now.
-				return n2 > n1
-			end
-		end
-	end
-	return true             --no more parts of v1 to check.
-end
-
-local osver
-local osver_checks = {}    --cached version checks
-
-function nw:os(ver)
-	osver = osver or self.backend:os()
-	if ver then
-		local check = osver_checks[ver]
-		if check == nil then
-			check = check_version(ver, osver)
-			osver_checks[ver] = check
-		end
-		return check
-	else
-		return osver
-	end
 end
 
 --oo -------------------------------------------------------------------------
@@ -157,6 +100,7 @@ end
 
 --handle a query event by calling its event handler
 function object:_handle(event, ...)
+	if self._dead then return end
 	if self._events_disabled then return end
 	if not self[event] then return end
 	return self[event](self, ...)
@@ -164,6 +108,7 @@ end
 
 --fire an event, i.e. call observers and create a meta event 'event'
 function object:_fire(event, ...)
+	if self._dead then return end
 	if self._events_disabled then return end
 	--call any observers
 	if self.observers and self.observers[event] then
@@ -223,6 +168,49 @@ function app:_new(nw, backend_class)
 	self.backend = backend_class:new(self)
 	self._state = self:state()
 	return self
+end
+
+--version checks -------------------------------------------------------------
+
+--check if v2 >= v1, where v1 and v2 have the form 'maj.min.etc...'.
+local function check_version(v1, v2)
+	local v1 = v1:lower()
+	local v2 = v2:lower()
+	local ret
+	while v1 ~= '' do       --while there's another part of ver1 to check...
+		if v2 == '' then     --there's no part of ver2 to check against.
+			return false
+		end
+		local n1, n2
+		n1, v1 = v1:match'^(%d*)%.?(.*)' --eg. '3.0' -> '3', '0'
+		n2, v2 = v2:match'^(%d*)%.?(.*)'
+		assert(n1 ~= '', 'invalid syntax') --ver1 part is a dot.
+		assert(n2 ~= '', 'invalid syntax') --ver2 part is a dot.
+		if ret == nil then      --haven't decided yet
+			if n1 ~= '' then     --above checks imply n2 ~= '' also.
+				local n1 = tonumber(n1)
+				local n2 = tonumber(n2)
+				if n1 ~= n2 then  --version parts are different, decide now.
+					ret = n2 > n1
+				end
+			end
+		end
+	end
+	if ret ~= nil then      --a comparison has been made.
+		return ret
+	end
+	return true             --no more parts of v1 to check.
+end
+
+local qcache = {} --{query = true|false}
+function app:ver(q)
+	if qcache[q] == nil then
+		local what, qver = q:match'^([^%s]+)%s*(.*)$'
+		assert(what, 'invalid query')
+		local ver = self.backend:ver(what:lower())
+		qcache[q] = ver and check_version(qver, ver) or false
+	end
+	return qcache[q]
 end
 
 --message loop ---------------------------------------------------------------
@@ -480,7 +468,7 @@ function window:_new(app, backend_class, useropt)
 	if not (opt.x and opt.y and opt.w and opt.h) and (opt.cx or opt.cy or opt.cw or opt.ch) then
 		local x1, y1, w1, h1 = app:client_to_frame(
 			opt.frame,
-			opt.menu and true,
+			opt.menu and true or false,
 			opt.cx or 0,
 			opt.cy or 0,
 			opt.cw or 0,
@@ -600,6 +588,7 @@ function window:_backend_changed()
 	end
 
 	--check if client rectangle changed and generate 'moved' and 'resized' events.
+	if self:dead() then return end
 	local cx0, cy0, cw0, ch0 = unpack(self._client_rect)
 	local cx, cy, cw, ch = self:client_rect()
 	local t = self._client_rect
@@ -717,7 +706,7 @@ end
 --state/app visibility (OSX only) --------------------------------------------
 
 function app:hidden(hidden)
-	if not self.nw:os'OSX' then return false end
+	if not self:ver'OSX' then return false end
 	if hidden == nil then
 		return self.backend:hidden()
 	elseif hidden then
@@ -728,12 +717,12 @@ function app:hidden(hidden)
 end
 
 function app:unhide()
-	if not self.nw:os'OSX' then return end
+	if not self:ver'OSX' then return end
 	return self.backend:unhide()
 end
 
 function app:hide()
-	if not self.nw:os'OSX' then return end
+	if not self:ver'OSX' then return end
 	return self.backend:hide()
 end
 
@@ -861,6 +850,14 @@ function app:frame_to_client(frame, has_menu, x, y, w, h)
 	return cx, cy, cw, ch
 end
 
+function app:frame_extents(frame, has_menu)
+	local cx, cy, cw, ch = 200, 200, 200, 200 --avoid possible re-adjustments
+	local x, y, w, h = self:client_to_frame(frame, has_menu, cx, cy, cw, ch)
+	local w0, h0 = w-cw, h-ch
+	local w1, h1 = cx-x, cy-y
+	return w1, h1, w0-w1, h0-h1
+end
+
 --positioning/rectangles -----------------------------------------------------
 
 local function override_rect(x, y, w, h, x1, y1, w1, h1)
@@ -885,13 +882,7 @@ end
 
 function window:normal_frame_rect(x1, y1, w1, h1)
 	self:_check()
-	if x1 or y1 or w1 or h1 then
-		if self:fullscreen() then return end --ignore because OSX can't do it
-		local x, y, w, h = self.backend:get_normal_frame_rect()
-		self.backend:set_normal_frame_rect(override_rect(x, y, w, h, x1, y1, w1, h1))
-	else
-		return self.backend:get_normal_frame_rect()
-	end
+	return self.backend:get_normal_frame_rect()
 end
 
 function window:client_rect(x1, y1, w1, h1)
@@ -906,15 +897,15 @@ function window:client_rect(x1, y1, w1, h1)
 		local dw, dh = w - ccw, h - cch
 		self.backend:set_frame_rect(cx + dx, cy + dy, cw + dw, ch + dh)
 	else
-		return self:to_screen(0, 0, self:size())
+		return self:to_screen(0, 0, self:client_size())
 	end
 end
 
-function window:size(cw, ch) --sets or returns cw, ch
+function window:client_size(cw, ch) --sets or returns cw, ch
 	self:_check()
 	if cw or ch then
 		if not cw or not ch then
-			local cw0, ch0 = self:size()
+			local cw0, ch0 = self:client_size()
 			cw = cw or cw0
 			ch = ch or ch0
 		end
@@ -923,7 +914,7 @@ function window:size(cw, ch) --sets or returns cw, ch
 		if self:minimized() then
 			return 0, 0
 		end
-		return self.backend:get_size()
+		return self.backend:get_client_size()
 	end
 end
 
@@ -996,9 +987,6 @@ function window:edgesnapping(mode)
 		if self._edgesnapping ~= mode then
 			self._magnets = nil
 			self._edgesnapping = mode
-			if self.backend.set_edgesnapping then
-				self.backend:set_edgesnapping(mode)
-			end
 		end
 	end
 end

@@ -95,32 +95,30 @@ local function recorder()
 	end
 end
 
---os version -----------------------------------------------------------------
+--version checks -------------------------------------------------------------
 
-add('os', function()
-	print(nw:os())
-	assert(nw:os(nw:os():upper())) --perfect case-insensitive match
-	assert(not nw:os'')
-	assert(not nw:os'XXX')
+add('ver', function()
+	assert(app:ver(ffi.os:upper())) --case-insensitive match
+	assert(not app:ver'XXX')
 	if ffi.os == 'OSX' then
-		assert(nw:os'osx')
-		assert(nw:os'OSX 1')
-		assert(nw:os'OSX 10')
-		assert(nw:os'OSX 10.2')
-		assert(not nw:os'OSX ChubbyCheese')
-		assert(not nw:os'OSX 55')
-		assert(not nw:os'OS')
+		assert(app:ver'osx')
+		assert(app:ver'OSX 1')
+		assert(app:ver'OSX 10')
+		assert(app:ver'OSX 10.2')
+		assert(not app:ver'OSX 55')
+		assert(not app:ver'OS')
 	elseif ffi.os == 'Windows' then
-		assert(nw:os'windows')
-		assert(nw:os'WINDOWS 1')
-		assert(nw:os'WINDOWS 5')
-		assert(nw:os'WINDOWS 5.0')
-		assert(nw:os'WINDOWS 5.0.sp1')
-		assert(not nw:os'WINDOWS 55.0.sp1')
-		assert(not nw:os'Window')
+		assert(app:ver'windows')
+		assert(app:ver'WINDOWS 1')
+		assert(app:ver'WINDOWS 5')
+		assert(app:ver'WINDOWS 5.0')
+		assert(app:ver'WINDOWS 5.0.1')
+		assert(not app:ver'WINDOWS 55.0.1')
+		assert(not app:ver'Window')
 	elseif ffi.os == 'Linux' then
-		assert(nw:os'linux')
-		assert(nw:os'Linux')
+		assert(app:ver'X 11')
+		assert(app:ver'linux')
+		assert(app:ver'Linux')
 	end
 	print'ok'
 end)
@@ -880,7 +878,7 @@ What you should know about window states:
 
 local function state_string(win)
 	if win:dead() then return 'x' end
-	local w,h = win:size()
+	local w,h = win:client_size()
 	local fx,fy,fw,fh = win:frame_rect()
 	local nx,ny,nw,nh = win:normal_frame_rect()
 	return
@@ -1078,10 +1076,17 @@ local function init_check(t, child)
 						win:frame_rect(box2d.offset(ofs, win:frame_rect()))
 					end
 				elseif key == 'left' or key == 'right' or key == 'up' or key == 'down' then
-					local x, y = win:frame_rect()
-					win:frame_rect(
-						x + (key == 'left' and -10 or key == 'right' and 10 or 0),
-						y + (key == 'up'   and -10 or key == 'down'  and 10 or 0))
+					if app:key'shift' then
+						local x, y = win:client_rect()
+						win:client_rect(
+							x + (key == 'left' and -10 or key == 'right' and 10 or 0),
+							y + (key == 'up'   and -10 or key == 'down'  and 10 or 0))
+					else
+						local x, y = win:frame_rect()
+						win:frame_rect(
+							x + (key == 'left' and -10 or key == 'right' and 10 or 0),
+							y + (key == 'up'   and -10 or key == 'down'  and 10 or 0))
+					end
 				elseif key == '1' then
 					win:enabled(not win:enabled())
 				elseif key == 'C' then
@@ -1144,8 +1149,10 @@ local function init_check(t, child)
 					print('sticky            ', win:sticky())
 					print('frame_rect        ', win:frame_rect())
 					print('client_rect       ', win:client_rect())
+					--TODO: implement this
+					--print('normal_client_rect', win:normal_client_rect())
 					print('normal_frame_rect ', win:normal_frame_rect())
-					print('size              ', win:size())
+					print('client_size       ', win:client_size())
 					print('minsize           ', win:minsize())
 					print('maxsize           ', win:maxsize())
 					print('cursor            ', win:cursor())
@@ -1558,28 +1565,167 @@ add('check-enabled', function()
 	app:run()
 end)
 
+--positioning/app-level frame-client conversions -----------------------------
+
+add('pos-client-to-frame', function()
+	local cx, cy, cw, ch = 100, 200, 300, 400
+
+	local x, y, w, h = app:client_to_frame('normal', false, cx, cy, cw, ch)
+	assert(x <= cx)
+	assert(y <= cy)
+	assert(w >= cw)
+	assert(h >= ch)
+
+	local x, y, w, h = app:client_to_frame('none', false, cx, cy, cw, ch)
+	assert(x == cx)
+	assert(y == cy)
+	assert(w == cw)
+	assert(h == ch)
+
+	--the minimum frame rect for a zero-sized client rect is not entirely correct.
+	--in practice there's a minimum width on the titlebar but we don't get that.
+	local x, y, w, h = app:client_to_frame('normal', false, 0, 0, 0, 0)
+	print('min. frame rect:   ', x, y, w, h)
+
+	--if no frame, frame rect and client rect match, even at zero size.
+	local x, y, w, h = app:client_to_frame('none', false, 0, 0, 0, 0)
+	assert(x == 0)
+	assert(y == 0)
+	assert(w == 0)
+	assert(h == 0)
+
+	print'ok'
+end)
+
+add('pos-frame-to-client', function()
+	local x, y, w, h = 100, 200, 300, 400
+
+	local cx, cy, cw, ch = app:frame_to_client('normal', false, x, y, w, h)
+	assert(x <= cx)
+	assert(y <= cy)
+	assert(w >= cw)
+	assert(h >= ch)
+
+	local cx, cy, cw, ch = app:frame_to_client('none', false, x, y, w, h)
+	assert(x == cx)
+	assert(y == cy)
+	assert(w == cw)
+	assert(h == ch)
+
+	--the minimum client rect for a zero-sized frame rect is zero-sized (not negative).
+	local cx, cy, cw, ch = app:frame_to_client('normal', false, 0, 0, 0, 0)
+	assert(cw == 0)
+	assert(ch == 0)
+
+	--if no frame, frame rect and client rect match, even at zero size.
+	local cx, cy, cw, ch = app:frame_to_client('none', false, 0, 0, 0, 0)
+	assert(cx == 0)
+	assert(cy == 0)
+	assert(cw == 0)
+	assert(ch == 0)
+
+	print'ok'
+end)
+
+--positioning/screen-client conversions --------------------------------------
+
+--to_screen() and to_client() conversions work.
+add('pos-conversions', function()
+	local win = app:window{x = 100, y = 100, w = 100, h = 100, visible = false}
+	local x, y, w, h = win:to_screen(100, 100, 100, 100)
+	print(x, y, w, h)
+	assert(x >= 200 and x <= 250)
+	assert(y >= 200 and y <= 250)
+	assert(w == 100)
+	assert(h == 100)
+	local x, y, w, h = win:to_client(x, y, w, h)
+	assert(x == 100)
+	assert(y == 100)
+	assert(w == 100)
+	assert(h == 100)
+	print'ok'
+end)
+
 --positioning ----------------------------------------------------------------
 
---test that initial coordinates and size are set correctly.
+--test that window has a default position before being shown.
+add('pos-init-default', function()
+	local win = app:window{w = 300, h = 200, visible = false}
+	print('normal_frame_rect ', win:normal_frame_rect())
+	print('frame_rect        ', win:frame_rect())
+	print('client_rect       ', win:client_rect())
+end)
+
+--test that window has a set position before being shown.
+--note how the frame rect is wrong in Linux before the window is shown.
+--did I mention that X is a piece of garbage?
+add('pos-init-default-pos', function()
+	local win = app:window{x = 100, y = 100, w = 300, h = 200, visible = false}
+	print('normal_frame_rect ', win:normal_frame_rect())
+	print('frame_rect        ', win:frame_rect())
+	print('client_rect       ', win:client_rect())
+	app:run(function()
+		win:show()
+		app:sleep(0.1)
+		print('normal_frame_rect ', win:normal_frame_rect())
+		print('frame_rect        ', win:frame_rect())
+		print('client_rect       ', win:client_rect())
+	end)
+end)
+
+--test that initial coordinates and size are set correctly after window is shown.
 --test that frame_rect() works in normal state.
 --test that size() works and gives sane values.
 add('pos-init', function()
 	local x0, y0, w0, h0 = 51, 52, 201, 202
-	local win = app:window{x = x0, y = y0, w = w0, h = h0}
-	local x, y, w, h = win:frame_rect()
-	assert(x == x0)
-	assert(y == y0)
-	assert(w == w0)
-	assert(h == h0)
-	local w, h = win:size()
-	assert(w >= w0 - 50 and w <= w0)
-	assert(h >= h0 - 50 and h <= h0)
-	print'ok'
+	local win = app:window{x = x0, y = y0, w = w0, h = h0, visible = false}
+	function win:was_shown()
+		local x, y, w, h = win:frame_rect()
+		print(x, y, w, h)
+		assert(x == x0)
+		assert(y == y0)
+		assert(w == w0)
+		assert(h == h0)
+		local w, h = win:client_size()
+		assert(w >= w0 - 50 and w <= w0)
+		assert(h >= h0 - 50 and h <= h0)
+		print'ok'
+		app:quit()
+	end
+	win:show()
+	app:run()
+end)
+
+--check that a window spanning the entire workspace -2px on all sides.
+add('check-pos-init-client', function()
+	local sx, sy, sw, sh = app:main_display():client_rect()
+	local fw1, fh1, fw2, fh2 = app:frame_extents'normal'
+	local b = 2
+	local win = app:window{
+		cx = sx + fw1 + b,
+		cy = sy + fh1 + b,
+		cw = sw - fw1 - fw2 - 2*b,
+		ch = sh - fh1 - fh2 - 2*b,
+	}
+	app:run()
+end)
+
+--check that a window spanning the entire workspace -2px on all sides.
+add('check-pos-init-frame', function()
+	local sx, sy, sw, sh = app:main_display():client_rect()
+	local b = 2
+	local win = app:window{
+		x = sx + b,
+		y = sy + b,
+		w = sw - 2*b,
+		h = sh - 2*b,
+	}
+	app:run()
 end)
 
 --test if x,y,w,h mixed with cx,cy,cw,ch works.
 --this is an eye-test for framed windows.
-add('pos-init-mixed', function()
+add('check-pos-init-mixed', function()
 	app:window{cx = 200, cy = 200, cw = 200, ch = 200}
 	app:window{x = 200, cy = 200, w = 200, ch = 200}
 	app:window{cx = 200, y = 200, cw = 200, h = 200}
@@ -1599,7 +1745,7 @@ add('pos-init-client-noframe', function()
 end)
 
 --check that the default window position is cascaded.
-add('pos-init-cascade', function()
+add('check-pos-init-cascade', function()
 	for i = 1,30 do
 		app:window{w = 500, h = 300}
 	end
@@ -1616,18 +1762,17 @@ end)
 add('pos-out', function()
 
 	local win = app:window(winpos{x = -5000, y = -5000})
-	print(win:frame_rect())
+	print('visible off-screen          ', win:frame_rect())
 	win:close()
 
 	local win = app:window(winpos{visible = true})
 	win:frame_rect(-5000, -5000)
-	print(win:frame_rect())
+	print('visible, moved off-screen   ', win:frame_rect())
 	win:close()
 
 	local win = app:window(winpos{visible = false})
 	win:frame_rect(-5000, -5000)
-	print(win:frame_rect())
-	print(win:frame_rect())
+	print('hidden, moved off-screen    ', win:frame_rect())
 	win:close()
 
 	--frame = 'none' and initial off-screen position is the only way to
@@ -1635,201 +1780,22 @@ add('pos-out', function()
 	--is nil for them.
 	local win = app:window(winpos{x = -5000, y = -5000, frame = 'none'})
 	local x, y = win:frame_rect()
-	assert(x == -5000)
-	assert(y == -5000)
-	print(win:frame_rect())
+	--NOTE: in Linux this is > 5000 because, well, because X sucks.
+	assert(x >= -5000)
+	assert(y >= -5000)
+	print('no-frame visible off-screen ', win:frame_rect())
 	win:close()
 
 	local win = app:window(winpos{frame = 'none'})
 	win:frame_rect(-5000, -5000)
-	print(win:frame_rect())
+	print('no-frame visible moved off  ', win:frame_rect())
 	win:close()
-end)
-
---resize the windows to see the constraints in effect.
-add('pos-minmax', function()
-
-	--check that initial constraints are set and the window size respects them.
-	local win = app:window{w = 800, h = 800, min_cw = 200, min_ch = 200, max_cw = 400, max_ch = 400}
-
-	local minw, minh = win:minsize()
-	assert(minw == 200)
-	assert(minh == 200)
-
-	local maxw, maxh = win:maxsize()
-	assert(maxw == 400)
-	assert(maxh == 400)
-
-	local w, h = win:size()
-	assert(w == 400)
-	assert(h == 400)
-
-	win:close()
-
-	--check that minsize() is set and that it resizes the window.
-	local win = app:window{w = 100, h = 100}
-
-	local rec = recorder()
-	function win:sizing() rec'error' end
-	function win:was_resized() rec'resized' end
-
-	win:minsize(200, 200)
-
-	rec{'resized'}
-
-	local minw, minh = win:minsize()
-	assert(minw == 200)
-	assert(minh == 200)
-
-	local w, h = win:size()
-	assert(w == 200)
-	assert(h == 200)
-
-	win:close()
-
-	--check that maxsize() is set and that it resizes the window.
-	local win = app:window{w = 800, h = 800}
-
-	local rec = recorder()
-	function win:sizing() rec'error' end
-	function win:was_resized() rec'resized' end
-
-	win:maxsize(400, 400)
-
-	rec{'resized'}
-
-	local maxw, maxh = win:maxsize()
-	assert(maxw == 400)
-	assert(maxh == 400)
-
-	local w, h = win:size()
-	assert(w == 400)
-	assert(h == 400)
-
-	win:close()
-
-	--check that initial partial constraints work too.
-	local win = app:window{w = 800, h = 100, max_cw = 400, min_ch = 200}
-
-	local minw, minh = win:minsize()
-	assert(minw == nil)
-	assert(minh == 200)
-
-	local maxw, maxh = win:maxsize()
-	assert(maxw == 400)
-	assert(maxh == nil)
-
-	local w, h = win:size()
-	assert(w == 400)
-	assert(h == 200)
-
-	win:close()
-
-	--check that runtime partial constraints work too.
-	local win = app:window{w = 100, h = 800}
-
-	win:minsize(200, nil)
-	local minw, minh = win:minsize()
-	assert(minw == 200)
-	assert(minh == nil)
-
-	win:maxsize(nil, 400)
-	local maxw, maxh = win:maxsize()
-	assert(maxw == nil)
-	assert(maxh == 400)
-
-	local w, h = win:size()
-	assert(w == 200)
-	assert(h == 400)
-
-	win:close()
-
-	--frame_rect() is constrained too.
-	local win = app:window{w = 100, h = 100, min_cw = 200, max_cw = 500, min_ch = 200, max_ch = 500}
-
-	win:frame_rect(nil, nil, 100, 100)
-	local w, h = win:size()
-	assert(w == 200)
-	assert(h == 200)
-
-	win:frame_rect(nil, nil, 600, 600)
-	local w, h = win:size()
-	assert(w == 500)
-	assert(h == 500)
-
-	win:close()
-
-	--maximized state is constrained too (runtime).
-	local win = app:window{w = 100, h = 100, min_cw = 200, min_ch = 200, max_cw = 500, max_ch = 500}
-	win:maximize()
-
-	local maxw, maxh = win:size()
-	assert(maxw == 500)
-	assert(maxh == 500)
-
-	--maximized() responds true even when constrained.
-	assert(win:maximized())
-
-	win:close()
-
-	--maximized state is constrained too (init).
-	local win = app:window{w = 100, h = 100, min_cw = 200, min_ch = 200,
-		max_cw = 500, max_ch = 500, maximized = true}
-
-	local maxw, maxh = win:size()
-	assert(maxw == 500)
-	assert(maxh == 500)
-
-	--maximized() responds true even when constrained.
-	assert(win:maximized())
-
-	win:close()
-
-	--setting maxsize while maximized works: the window is resized.
-	--TODO: check that the position is preserved.
-	local win = app:window{x = 100, y = 100, w = 500, h = 500, maximized = true}
-	print(win:frame_rect())
-	win:maxsize(200, 200)
-	print(win:frame_rect())
-
-	local maxw, maxh = win:size()
-	assert(maxw == 200)
-	assert(maxh == 200)
-
-	local w, h = win:size()
-	assert(w == 200)
-	assert(h == 200)
-
-	--TODO: check that setting minsize/maxize inside sizing() event works.
-	--TODO: check that minsize is itself constrained to previously set maxsize and viceversa.
-end)
-
---setting maxsize > screen size constrains the window to screen size,
---but the window can be resized to larger than screen size manually.
-add('pos-minmax-large-max', function()
-	local win = app:window{x = 100, y = 100, w = 10000, h = 10000, max_cw = 10000, max_ch = 10000}
-	app:run()
-end)
-
---setting minsize > screen size works.
---it's buggy/slow on both Windows and OSX for very large sizes.
-add('pos-minmax-large-min', function()
-	local win = app:window{x = 100, y = 100, w = 10000, h = 10000, min_cw = 10000, min_ch = 10000}
-	app:run()
-end)
-
---constraints apply to fullscreen mode too
-add('pos-minmax-fullscreen', function()
-	local win = app:window(winpos{max_cw = 500, max_ch = 500})
-	win:fullscreen(true)
-	app:run()
 end)
 
 --normal_frame_rect() -> x, y, w, h works.
---normal_frame_rect(x, y, w, h) works.
 add('pos-normal-frame-rect', function()
-	local x0, y0, w0, h0 = 51, 52, 201, 202
-	local win = app:window{x = 0, y = 0, w = 0, h = 0}
+	local x, y, w, h = 51, 52, 201, 202
+	local win = app:window{x = x, y = y, w = w, h = h}
 	local function check()
 		local x, y, w, h = win:normal_frame_rect()
 		assert(x == x0)
@@ -1861,7 +1827,7 @@ add('pos-frame-rect-minimized', function()
 			maximized = maximized, minimized = minimized, visible = visible}
 		print((visible and 'v' or '')..(minimized and 'm' or '')..(maximized and 'M' or ''))
 		assert(win:frame_rect()) --returns normal frame rect
-		local w, h = win:size()
+		local w, h = win:client_size()
 		assert(w == 0)
 		assert(h == 0)
 	end
@@ -1905,84 +1871,27 @@ add('pos-set-event', function()
 	app:run()
 end)
 
---to_screen() and to_client() conversions work.
-add('pos-conversions', function()
-	local win = app:window{x = 100, y = 100, w = 100, h = 100, visible = false}
-	local x, y, w, h = win:to_screen(100, 100, 100, 100)
-	print(x, y, w, h)
-	assert(x >= 200 and x <= 250)
-	assert(y >= 200 and y <= 250)
-	assert(w == 100)
-	assert(h == 100)
-	local x, y, w, h = win:to_client(x, y, w, h)
-	assert(x == 100)
-	assert(y == 100)
-	assert(w == 100)
-	assert(h == 100)
-	print'ok'
+--stickiness -----------------------------------------------------------------
+
+--children are sticky: they follow parent on move (but not on resize, maximize, etc).
+--interactive test: move the parent to see child moving too.
+add('check-pos-children-sticky', function()
+	local win1 = app:window{x = 100, y = 100, w = 500, h = 200}
+	local win2 = app:window{x = 200, y = 130, w = 200, h = 300, parent = win1, sticky = true}
+	app:run()
 end)
 
-add('pos-client-to-frame', function()
-	local cx, cy, cw, ch = 100, 200, 300, 400
-
-	local x, y, w, h = app:client_to_frame('normal', cx, cy, cw, ch)
-	assert(x <= cx)
-	assert(y <= cy)
-	assert(w >= cw)
-	assert(h >= ch)
-
-	local x, y, w, h = app:client_to_frame('none', cx, cy, cw, ch)
-	assert(x == cx)
-	assert(y == cy)
-	assert(w == cw)
-	assert(h == ch)
-
-	--the minimum frame rect for a zero-sized client rect is not entirely correct.
-	--in practice there's a minimum width on the titlebar but we don't get that.
-	local x, y, w, h = app:client_to_frame('normal', 0, 0, 0, 0)
-	print('min. frame rect:   ', x, y, w, h)
-
-	--if no frame, frame rect and client rect match, even at zero size.
-	local x, y, w, h = app:client_to_frame('none', 0, 0, 0, 0)
-	assert(x == 0)
-	assert(y == 0)
-	assert(w == 0)
-	assert(h == 0)
-
-	print'ok'
+--children are not sticky: they don't follow parent on move or resize or maximize.
+--interactive test: move the parent to see child moving too.
+add('check-pos-children-nonsticky', function()
+	local win1 = app:window{x = 100, y = 100, w = 500, h = 200}
+	local win2 = app:window{x = 200, y = 130, w = 200, h = 300, parent = win1, sticky = false}
+	app:run()
 end)
 
-add('pos-frame-to-client', function()
-	local x, y, w, h = 100, 200, 300, 400
+--edge snapping --------------------------------------------------------------
 
-	local cx, cy, cw, ch = app:frame_to_client('normal', x, y, w, h)
-	assert(x <= cx)
-	assert(y <= cy)
-	assert(w >= cw)
-	assert(h >= ch)
-
-	local cx, cy, cw, ch = app:frame_to_client('none', x, y, w, h)
-	assert(x == cx)
-	assert(y == cy)
-	assert(w == cw)
-	assert(h == ch)
-
-	--the minimum client rect for a zero-sized frame rect is zero-sized (not negative).
-	local cx, cy, cw, ch = app:frame_to_client('normal', 0, 0, 0, 0)
-	assert(cw == 0)
-	assert(ch == 0)
-
-	--if no frame, frame rect and client rect match, even at zero size.
-	local cx, cy, cw, ch = app:frame_to_client('none', 0, 0, 0, 0)
-	assert(cx == 0)
-	assert(cy == 0)
-	assert(cw == 0)
-	assert(ch == 0)
-
-	print'ok'
-end)
-
---edge snapping. interactive test: move and resize windows around.
+--interactive test: move and resize windows around.
 add('check-pos-snap', function()
 	app:window(winpos{w = 300, title = 'no snap', edgesnapping = false})
 	app:window(winpos{w = 300, title = 'snap to: default'})
@@ -1996,11 +1905,184 @@ add('check-pos-snap', function()
 	app:run()
 end)
 
---children are sticky: they follow parent on move (but not on resize, maximize, etc).
---interactive test: move the parent to see child moving too.
-add('check-pos-children', function()
-	local win1 = app:window{x = 100, y = 100, w = 500, h = 200}
-	local win2 = app:window{x = 200, y = 130, w = 200, h = 300, parent = win1}
+--size constraints -----------------------------------------------------------
+
+--resize the windows to see the constraints in effect.
+add('pos-minmax', function()
+
+	--check that initial constraints are set and the window size respects them.
+	local win = app:window{w = 800, h = 800, min_cw = 200, min_ch = 200, max_cw = 400, max_ch = 400}
+
+	local minw, minh = win:minsize()
+	assert(minw == 200)
+	assert(minh == 200)
+
+	local maxw, maxh = win:maxsize()
+	assert(maxw == 400)
+	assert(maxh == 400)
+
+	local w, h = win:client_size()
+	assert(w == 400)
+	assert(h == 400)
+
+	win:close()
+
+	--check that minsize() is set and that it resizes the window.
+	local win = app:window{w = 100, h = 100}
+
+	local rec = recorder()
+	function win:sizing() rec'error' end
+	function win:was_resized() rec'resized' end
+
+	win:minsize(200, 200)
+
+	rec{'resized'}
+
+	local minw, minh = win:minsize()
+	assert(minw == 200)
+	assert(minh == 200)
+
+	local w, h = win:client_size()
+	assert(w == 200)
+	assert(h == 200)
+
+	win:close()
+
+	--check that maxsize() is set and that it resizes the window.
+	local win = app:window{w = 800, h = 800}
+
+	local rec = recorder()
+	function win:sizing() rec'error' end
+	function win:was_resized() rec'resized' end
+
+	win:maxsize(400, 400)
+
+	rec{'resized'}
+
+	local maxw, maxh = win:maxsize()
+	assert(maxw == 400)
+	assert(maxh == 400)
+
+	local w, h = win:client_size()
+	assert(w == 400)
+	assert(h == 400)
+
+	win:close()
+
+	--check that initial partial constraints work too.
+	local win = app:window{w = 800, h = 100, max_cw = 400, min_ch = 200}
+
+	local minw, minh = win:minsize()
+	assert(minw == nil)
+	assert(minh == 200)
+
+	local maxw, maxh = win:maxsize()
+	assert(maxw == 400)
+	assert(maxh == nil)
+
+	local w, h = win:client_size()
+	assert(w == 400)
+	assert(h == 200)
+
+	win:close()
+
+	--check that runtime partial constraints work too.
+	local win = app:window{w = 100, h = 800}
+
+	win:minsize(200, nil)
+	local minw, minh = win:minsize()
+	assert(minw == 200)
+	assert(minh == nil)
+
+	win:maxsize(nil, 400)
+	local maxw, maxh = win:maxsize()
+	assert(maxw == nil)
+	assert(maxh == 400)
+
+	local w, h = win:client_size()
+	assert(w == 200)
+	assert(h == 400)
+
+	win:close()
+
+	--frame_rect() is constrained too.
+	local win = app:window{w = 100, h = 100, min_cw = 200, max_cw = 500, min_ch = 200, max_ch = 500}
+
+	win:frame_rect(nil, nil, 100, 100)
+	local w, h = win:client_size()
+	assert(w == 200)
+	assert(h == 200)
+
+	win:frame_rect(nil, nil, 600, 600)
+	local w, h = win:client_size()
+	assert(w == 500)
+	assert(h == 500)
+
+	win:close()
+
+	--maximized state is constrained too (runtime).
+	local win = app:window{w = 100, h = 100, min_cw = 200, min_ch = 200, max_cw = 500, max_ch = 500}
+	win:maximize()
+
+	local maxw, maxh = win:client_size()
+	assert(maxw == 500)
+	assert(maxh == 500)
+
+	--maximized() responds true even when constrained.
+	assert(win:maximized())
+
+	win:close()
+
+	--maximized state is constrained too (init).
+	local win = app:window{w = 100, h = 100, min_cw = 200, min_ch = 200,
+		max_cw = 500, max_ch = 500, maximized = true}
+
+	local maxw, maxh = win:client_size()
+	assert(maxw == 500)
+	assert(maxh == 500)
+
+	--maximized() responds true even when constrained.
+	assert(win:maximized())
+
+	win:close()
+
+	--setting maxsize while maximized works: the window is resized.
+	--TODO: check that the position is preserved.
+	local win = app:window{x = 100, y = 100, w = 500, h = 500, maximized = true}
+	print(win:frame_rect())
+	win:maxsize(200, 200)
+	print(win:frame_rect())
+
+	local maxw, maxh = win:client_size()
+	assert(maxw == 200)
+	assert(maxh == 200)
+
+	local w, h = win:client_size()
+	assert(w == 200)
+	assert(h == 200)
+
+	--TODO: check that setting minsize/maxize inside sizing() event works.
+	--TODO: check that minsize is itself constrained to previously set maxsize and viceversa.
+end)
+
+--setting maxsize > screen size constrains the window to screen size,
+--but the window can be resized to larger than screen size manually.
+add('pos-minmax-large-max', function()
+	local win = app:window{x = 100, y = 100, w = 10000, h = 10000, max_cw = 10000, max_ch = 10000}
+	app:run()
+end)
+
+--setting minsize > screen size works.
+--it's buggy/slow on both Windows and OSX for very large sizes.
+add('pos-minmax-large-min', function()
+	local win = app:window{x = 100, y = 100, w = 10000, h = 10000, min_cw = 10000, min_ch = 10000}
+	app:run()
+end)
+
+--constraints apply to fullscreen mode too.
+add('pos-minmax-fullscreen', function()
+	local win = app:window(winpos{max_cw = 500, max_ch = 500})
+	win:fullscreen(true)
 	app:run()
 end)
 
@@ -2160,12 +2242,12 @@ local function test_autoscaling(scaling)
 		assert(d1.y == d.y)
 
 		--check that autoscaling does not affect window's client size.
-		local cw, ch = win:size()
+		local cw, ch = win:client_size()
 		assert(cw == cw0)
 		assert(ch == ch0)
 		print(string.format('window at (%d,%d):', x, y))
 		print('', 'display:    ', d:rect())
-		print('', 'client size:', win:size())
+		print('', 'client size:', win:client_size())
 
 		win:close()
 	end
@@ -2182,7 +2264,7 @@ add('display-scalingfactor-changed-check', function()
 		print('scalingfactor_changed', factor)
 	end
 	app:runevery(1, function()
-		print(string.format('scaling factor: %d, client size: %d x %d', win:display().scalingfactor, win:size()))
+		print(string.format('scaling factor: %d, client size: %d x %d', win:display().scalingfactor, win:client_size()))
 	end)
 	app:run()
 end)

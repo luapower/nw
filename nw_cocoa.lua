@@ -40,13 +40,6 @@ local function flip_screen_rect(main_h, x, y, w, h)
 	return x, main_h - h - y, w, h
 end
 
---os version -----------------------------------------------------------------
-
-function nw:os()
-	local s = objc.tolua(objc.NSProcessInfo:processInfo():operatingSystemVersionString()) --OSX 10.2+
-	return 'OSX '..(s:match'%d+%.%d+%.%d+')
-end
-
 --app object -----------------------------------------------------------------
 
 local app = {}
@@ -81,6 +74,15 @@ function app:new(frontend)
 	self:activate()
 
 	return self
+end
+
+--version checks -------------------------------------------------------------
+
+function app:ver(what)
+	if what == 'osx' then
+		local s = objc.tolua(objc.NSProcessInfo:processInfo():operatingSystemVersionString()) --OSX 10.2+
+		return s:match'%d+%.%d+%.%d+'
+	end
 end
 
 --message loop ---------------------------------------------------------------
@@ -201,7 +203,7 @@ function window:new(app, frontend, t)
 	self.nswin:setMovable(false)
 
 	--enable the fullscreen button.
-	if not toolbox and t.fullscreenable and nw.frontend:os'OSX 10.7' then
+	if not toolbox and t.fullscreenable and self.app.frontend:ver'OSX 10.7' then
 		self.nswin:setCollectionBehavior(bit.bor(tonumber(self.nswin:collectionBehavior()),
 			objc.NSWindowCollectionBehaviorFullScreenPrimary)) --OSX 10.7+
 	end
@@ -908,9 +910,8 @@ function window:get_normal_frame_rect()
 	return flip_screen_rect(nil, unpack_nsrect(self.nswin:frame()))
 end
 
-function window:set_normal_frame_rect(x, y, w, h)
+function window:_set_frame_rect(x, y, w, h)
 	self.nswin:setFrame_display(objc.NSMakeRect(flip_screen_rect(nil, x, y, w, h)), true)
-	self:_apply_constraints()
 end
 
 function window:get_frame_rect()
@@ -918,13 +919,14 @@ function window:get_frame_rect()
 end
 
 function window:set_frame_rect(x, y, w, h)
-	self:set_normal_frame_rect(x, y, w, h)
+	self:_set_frame_rect(x, y, w, h)
+	self:_apply_constraints()
 	if self:visible() and self:minimized() then
 		self:restore()
 	end
 end
 
-function window:get_size()
+function window:get_client_size()
 	local sz = self.nswin:contentView():bounds().size
 	return sz.width, sz.height
 end
@@ -969,7 +971,7 @@ function window:_apply_constraints()
 	local x, y, w, h = self:get_normal_frame_rect()
 	if x ~= x1 or y ~= y1 then
 		applying = true --_apply_constraints() barrier
-		self:set_normal_frame_rect(x1, y1, w, h)
+		self:_set_frame_rect(x1, y1, w, h)
 		applying = nil
 	end
 end

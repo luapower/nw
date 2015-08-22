@@ -23,14 +23,6 @@ local C     = xlib.C
 
 local nw = {name = 'xlib'}
 
---os version -----------------------------------------------------------------
-
-function nw:os(ver)
-	return 'Linux 11.0' --11.0 is the X version
-end
-
-nw.min_os = 'Linux 11.0'
-
 --app object -----------------------------------------------------------------
 
 local app = {}
@@ -45,6 +37,18 @@ function app:new(frontend)
 	xlib.set_xsettings_change_notify() --setup to receive XSETTINGS changes
 	self:_resolve_evprop_names()
 	return self
+end
+
+--version checks -------------------------------------------------------------
+
+function app:ver(what)
+	if what == 'x' then
+		return '11.0' --TODO: return exact X version
+	elseif what == 'linux' then
+		return '2' --TODO: kernel version
+	elseif what == 'libc' then
+		--TODO: libc version
+	end
 end
 
 --message loop ---------------------------------------------------------------
@@ -326,9 +330,6 @@ function window:new(app, frontend, t)
 	self._fullscreen = t.fullscreen or false
 	self._topmost = t.topmost or false
 
-	--tracked normal rect for restoring hidden maximized windows.
-	self._normal_rect = {self:get_frame_rect()}
-
 	winmap[self.win] = self
 
 	return self
@@ -362,8 +363,8 @@ function window:forceclose()
 	self.frontend:_backend_was_closed()
 
 	xlib.destroy_window(self.win)
-	winmap[self.win] = nil
-	self.win = nil
+	winmap[self.win] = nil --discard further messages
+	self.win = nil --prevent usage
 end
 
 --activation -----------------------------------------------------------------
@@ -461,7 +462,9 @@ function window:show()
 
 	--set the saved normal rect before mapping the window.
 	--this is because the normal rect is lost when hiding a maximized window.
-	self:set_frame_rect(unpack(self._normal_rect))
+	if self._normal_rect then
+		self:set_frame_rect(unpack(self._normal_rect))
+	end
 
 	--set the _NET_WM_STATE property before mapping the window.
 	--later on we have to use change_net_wm_state() to change these values.
@@ -488,29 +491,6 @@ function window:hide()
 
 	xlib.withdraw(self.win) --async operation
 end
-
---[[
---NOTE: MapNotify is not sent when mapping a minimized window.
-ev[C.MapNotify] = function(e)
-	local self = win(e.xmap.window)
-	if not self then return end
-	if self._hidden then
-		self:_was_shown()
-	end
-end
-
---NOTE: UnmapNotify is also send when minimizing.
---NOTE: UnmapNotify is not sent when unmapping a minimized window.
-ev[C.UnmapNotify] = function(e)
-	local self = win(e.xunmap.window)
-	if not self then return end
-	if self._hiding then --hidden
-		self:_was_hidden()
-	else --minimized
-		self.frontend:_backend_changed()
-	end
-end
-]]
 
 function evprop.WM_STATE(e)
 	local self = win(e.window)
@@ -737,20 +717,15 @@ function window:_frame_extents()
 end
 
 function window:get_normal_frame_rect()
-	return unpack(self._normal_rect)
-end
-
-function window:set_normal_frame_rect(x, y, w, h)
-	if self:maximized() then
-		self._normal_rect = {x, y, w, h}
-	else
-		self:set_frame_rect(x, y, w, h)
+	if self._normal_rect then
+		return unpack(self._normal_rect)
 	end
+	return self:get_frame_rect()
 end
 
 function window:get_frame_rect()
 	local x, y = self:to_screen(0, 0)
-	local w, h = self:get_size()
+	local w, h = self:get_client_size()
 	return frame_rect(x, y, w, h, self:_frame_extents())
 end
 
@@ -761,7 +736,7 @@ function window:set_frame_rect(x, y, w, h)
 	xlib.config(self.win, {x = x, y = y, width = cw, height = ch, border_width = 0})
 end
 
-function window:get_size()
+function window:get_client_size()
 	local _, _, w, h = xlib.get_geometry(self.win)
 	return w, h
 end
@@ -771,7 +746,7 @@ end
 function window:_apply_constraints()
 
 	--get the current client size and the new (constrained) client size
-	local cw0, ch0 = self:get_size()
+	local cw0, ch0 = self:get_client_size()
 	local cw, ch = self:__constrain(cw0, ch0)
 
 	--update constraints
@@ -836,6 +811,9 @@ ev[C.ConfigureNotify] = function(e)
 	if not (self:maximized() or self:fullscreen()) then
 		self._normal_rect = {self:get_frame_rect()}
 	end
+
+	--NOTE: don't bother trying to implement sticky children.
+	--It's impossible to do that right with the async model (think about it).
 
 	self.frontend:_backend_changed()
 end
@@ -1411,7 +1389,7 @@ function window:bitmap()
 	if not self._dynbitmap then
 		self._dynbitmap = dynbitmap({
 			size = function()
-				return self.frontend:size()
+				return self.frontend:client_size()
 			end,
 			freeing = function(_, bitmap)
 				self.frontend:_backend_free_bitmap(bitmap)
