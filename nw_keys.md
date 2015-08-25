@@ -1,5 +1,4 @@
 ---
-project:   nw
 tagline:   native widgets key codes
 ---
 

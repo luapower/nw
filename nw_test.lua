@@ -119,6 +119,7 @@ add('ver', function()
 		assert(app:ver'X 11')
 		assert(app:ver'linux')
 		assert(app:ver'Linux')
+		print(app:ver'linux')
 	end
 	print'ok'
 end)

@@ -156,7 +156,9 @@ function window:new(app, frontend, t)
 			not toolbox and t.minimizable and objc.NSMiniaturizableWindowMask or 0,
 			t.resizeable and objc.NSResizableWindowMask or 0)
 	else
-		style = objc.NSBorderlessWindowMask
+		style = bit.bor(
+			objc.NSBorderlessWindowMask,
+			t.resizeable and objc.NSResizableWindowMask or 0)
 		--for frameless windows we have to handle maximization manually.
 		self._frameless = true
 	end
@@ -197,9 +199,9 @@ function window:new(app, frontend, t)
 	self._disabled = not t.enabled
 
 	--enable receiving events while moving and resizing.
-	--NOTE: this prevents moving while the window is not processing messages
-	--and makes moving the window a bit jerky. OTOH we get magnets and proper
-	--event sequence (when was Cocoa fast anyway?).
+	--NOTE: this prevents the window from being moved if we're not processing
+	--messages and it makes moving the window a bit jerky. OTOH we get magnets
+	--and proper event sequence (when was Cocoa fast anyway?).
 	self.nswin:setMovable(false)
 
 	--enable the fullscreen button.
@@ -1891,7 +1893,7 @@ function window:_init_content_view()
 	--create the dynbitmap to paint on the content view.
 	self._dynbitmap = dynbitmap{
 		size = function()
-			return self.frontend:size()
+			return self.frontend:client_size()
 		end,
 		freeing = function(_, bitmap)
 			self.frontend:_backend_free_bitmap(bitmap)

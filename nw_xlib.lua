@@ -43,11 +43,8 @@ end
 
 function app:ver(what)
 	if what == 'x' then
-		return '11.0' --TODO: return exact X version
-	elseif what == 'linux' then
-		return '2' --TODO: kernel version
-	elseif what == 'libc' then
-		--TODO: libc version
+		local maj, min = xlib.version()
+		return maj..'.'..min
 	end
 end
 
@@ -302,6 +299,8 @@ function window:new(app, frontend, t)
 	end
 
 	--set motif hints before mapping the window.
+	--NOTE: MWM_DECOR_RESIZEH alone brings all frame elements with it,
+	--so we can't have frameless windows that are also resizeable.
 	local hints = ffi.new'PropMotifWmHints'
 	hints.flags = bit.bor(
 		C.MWM_HINTS_FUNCTIONS,

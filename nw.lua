@@ -208,7 +208,7 @@ function app:ver(q)
 		local what, qver = q:match'^([^%s]+)%s*(.*)$'
 		assert(what, 'invalid query')
 		local ver = self.backend:ver(what:lower())
-		qcache[q] = ver and check_version(qver, ver) or false
+		qcache[q] = ver and (qver == '' and ver or check_version(qver, ver)) or false
 	end
 	return qcache[q]
 end

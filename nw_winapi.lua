@@ -107,6 +107,8 @@ function window:new(app, frontend, t)
 	local framed = t.frame == 'normal' or t.frame == 'toolbox'
 	self._layered = t.transparent
 
+	--NOTE: sizeable flag (WS_SIZEBOX) needs the frame flag (WS_DLGFRAME),
+	--which means we can't have frameless windows that are also resizeable.
 	self.win = Window{
 		--state
 		x = t.x,

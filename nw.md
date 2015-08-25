@@ -1,5 +1,4 @@
 ---
-project:   nw
 tagline:   native widgets
 platforms: mingw32, mingw64, osx32, osx64
 ---
