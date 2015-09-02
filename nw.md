@@ -42,10 +42,10 @@ __window list__
 __window creation__
 `app:window(t) -> win`								create a window (fields of `t` below)
 *__position__*
-*`x`, `y`*		 										frame position
-*`w`, `h`*												frame size (w,h or cw,ch required)
-*`cx`, `cy`*											client area position
-*`cw`, `ch`*											client area size (w,h or cw,ch required)
+*`x`, `y`*		 										frame position (nil, nil)
+*`w`, `h`*												frame size (this or cw,ch required)
+*`cx`, `cy`*											client area position (nil, nil)
+*`cw`, `ch`*											client area size (this or w,h required)
 *`min_cw`, `min_ch`*									min client rect size
 *`max_cw`, `max_ch`*									max client rect size
 *__state__*
@@ -57,7 +57,7 @@ __window creation__
 *`title`* 												initial title ('')
 *`transparent`*										make it transparent (false)
 *__behavior__*
-*`parent`*												is parented (nil)
+*`parent`*												parent window (nil)
 *`sticky`*												moves with parent (false)
 *`topmost`*												stays on top of other windows (false)
 *`minimizable`*										allow minimization (true)
