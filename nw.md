@@ -134,7 +134,7 @@ __client/screen conversion__
 __frame/client conversion__
 `app:client_to_frame(frame, has_menu,`			client rect -> window frame rect conversion
 	`x, y, w, h) -> x, y, w, h`
-`app:frame_to_client(frame, has_menu,			window frame rect -> client rect conversion
+`app:frame_to_client(frame, has_menu,`			window frame rect -> client rect conversion
 	`x, y, w, h) -> x, y, w, h`
 `app:frame_extents(frame, has_menu)`			frame extents for a frame type
 	`-> left, top, right, bottom`
@@ -146,8 +146,8 @@ __size and position__
 `win:client_rect(cx, cy, cw, ch)`				set client rect (and change state to normal)
 `win:client_size() -> cw, ch`						get client rect size
 `win:client_size(cw, ch)`							set client rect size
-`win:sizing(when, how, x, y, w, h) \			event: window size/position is about to change
-	-> [x, y, w, h]`
+`win:sizing(when, how, x, y, w, h)`				event: window size/position is about to change
+	`-> [x, y, w, h]`
 `win:was_moved(cx, cy)`								event: window was moved
 `win:was_resized(cw, ch)`							event: window was resized
 __size constraints__
@@ -173,9 +173,9 @@ __displays__
 `app:display_count() -> n`							number of displays
 `app:main_display() -> disp	`					get the display whose screen rect starts at (0,0)
 `app:active_display() -> disp`					get the display which has keyboard focus
-`disp:screen_rect() -> x, y, w, h` \			display's screen rectangle
+`disp:screen_rect() -> x, y, w, h`				display's screen rectangle
 `disp.x, disp.y, disp.w, disp.h`
-`disp:client_rect() -> x, y, w, h` \			display's screen rectangle minus the taskbar
+`disp:client_rect() -> x, y, w, h`				display's screen rectangle minus the taskbar
 `disp.cx, disp.cy, disp.cw, disp.ch`
 `app:displays_changed()`							event: displays changed
 `win:display() -> disp`								the display the window is on
