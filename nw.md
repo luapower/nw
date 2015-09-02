@@ -206,7 +206,7 @@ __views__
 `win:view(t) -> view`								create a view (fields of `t` below)
 *`x`, `y`, `w`, `h`*									view's position (in window's client space) and size
 *`visible`*												start visible (true)
-*`anchors`*												resizing anchors ('lt') can be 'ltrb'
+*`anchors`*												resizing anchors ('lt'); can be 'ltrb'
 `view:free()`											destroy the view
 `view:dead() -> t|f`									check if the view was freed
 `view:visible() -> t|f`								get visibility
@@ -223,11 +223,11 @@ __views__
 `view:was_moved(x, y)`								event: view was moved
 `view:was_resized(w, h)`							event: view was resized
 __mouse__
-`win/view:mouse() -> t`								mouse state: x, y, left, right, middle, xbutton1, xbutton2, inside
+`win/view:mouse() -> t`								mouse state: *`x`, `y`, `left`, `right`, `middle`, `ex1`, `ex2`, `inside`*
 `win/view:mouseenter()`								event: mouse entered the client area of the window
 `win/view:mouseleave()`								event: mouse left the client area of the window
 `win/view:mousemove(x, y)`							event: mouse move
-`win/view:mousedown(button, x, y)`				event: a mouse button was pressed: 'left', 'right', 'middle', 'ex1', 'ex2'
+`win/view:mousedown(button, x, y)`				event: a mouse button was pressed: *'left', 'right', 'middle', 'ex1', 'ex2'*
 `win/view:mouseup(button, x, y)`					event: a mouse button was depressed
 `win/view:click(button, count, x, y)`			event: a mouse button was pressed (see notes for double-click)
 `win/view:wheel(delta, x, y)`						event: mouse wheel was moved
