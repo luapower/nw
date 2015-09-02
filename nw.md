@@ -43,9 +43,9 @@ __window creation__
 `app:window(t) -> win`								create a window (fields of `t` below)
 *__position__*
 *`x`, `y`*		 										frame position
-*`w`, `h`*												frame size
+*`w`, `h`*												frame size (w,h or cw,ch required)
 *`cx`, `cy`*											client area position
-*`cw`, `ch`*											client area size
+*`cw`, `ch`*											client area size (w,h or cw,ch required)
 *`min_cw`, `min_ch`*									min client rect size
 *`max_cw`, `max_ch`*									max client rect size
 *__state__*
