@@ -159,12 +159,12 @@ __size constraints__
 __window edge snapping__
 `win:edgesnapping() -> mode`						get edge snapping mode
 `win:edgesnapping(mode)`							set edge snapping mode
-`win:magnets(which) -> magnets_t`				event: get magnets
+`win:magnets(which) -> {r1, ...}`				event: get edge snapping rectangles
 __window z-order__
 `win:topmost() -> t|f`								get the topmost flag
 `win:topmost(t|f)`									set the topmost flag
-`win:raise([rel_to_win])`							raise above all/specific window
-`win:lower([rel_to_win])`							lower below all/specific window
+`win:raise([rel_to_win])`							raise above all windows/specific window
+`win:lower([rel_to_win])`							lower below all windows/specific window
 __window title__
 `win:title() -> title`								get title
 `win:title(title)`									set title
@@ -181,7 +181,7 @@ __displays__
 `win:display() -> disp`								the display the window is on
 __cursors__
 `win:cursor() -> name`								get the cursor
-`win:cursor(name)`									change the cursor
+`win:cursor(name)`									set the cursor
 __frame flags__
 `win:frame() -> frame`								window's frame: 'normal', 'none', 'toolbox'
 `win:transparent() -> t|f`							transparent flag
@@ -223,11 +223,11 @@ __views__
 `view:was_moved(x, y)`								event: view was moved
 `view:was_resized(w, h)`							event: view was resized
 __mouse__
-`win/view:mouse() -> t`								mouse state: *`x`, `y`, `left`, `right`, `middle`, `ex1`, `ex2`, `inside`*
+`win/view:mouse() -> t`								mouse state: x, y, inside, left, right, middle, ex1, ex2
 `win/view:mouseenter()`								event: mouse entered the client area of the window
 `win/view:mouseleave()`								event: mouse left the client area of the window
 `win/view:mousemove(x, y)`							event: mouse was moved
-`win/view:mousedown(button, x, y)`				event: mouse button was pressed: *'left', 'right', 'middle', 'ex1', 'ex2'*
+`win/view:mousedown(button, x, y)`				event: mouse button was pressed: 'left', 'right', 'middle', 'ex1', 'ex2'
 `win/view:mouseup(button, x, y)`					event: mouse button was depressed
 `win/view:click(button, count, x, y)`			event: mouse button was clicked
 `win/view:wheel(delta, x, y)`						event: mouse wheel was moved
@@ -235,7 +235,7 @@ __mouse__
 __rendering__
 `win/view:repaint()`									event: window needs redrawing
 `win/view:invalidate()`								request window redrawing
-`win/view:bitmap() -> bmp`							get a [bitmap] object to draw on
+`win/view:bitmap() -> bmp`							get a bgra8 [bitmap] object to draw on
 `bmp:clear()`											fill the bitmap with zero bytes
 `bmp:cairo() -> cr`									get a cairo context on the bitmap
 `win/view:free_cairo()`								event: cairo context needs freeing
