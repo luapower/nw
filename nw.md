@@ -24,11 +24,11 @@ __app loop__
 `app:running() -> t|f`								check if the loop is running
 __app quitting__
 `app:quit()`											quit app, i.e. close all windows and stop the loop
+`app:autoquit(t|f)`									flag: quit the app when the last window is closed
 `app:autoquit() -> t|f`								get app autoquit flag
-`app:autoquit(t|f)`									set app autoquit flag (quit the app when the last window is closed)
 `app:quitting() -> [false]`						event: quitting (return false to refuse)
+`win:autoquit(t|f)`									flag: quit the app when the window is closed
 `win:autoquit() -> t|f`								get window autoquit flag
-`win:autoquit(t|f)`									set window autoquit flag (quit the app when the window is closed)
 __timers__
 `app:runevery(seconds, func)`						run a function on a timer (timer stops if func returns false)
 `app:runafter(seconds, func)`						run a function on a timer once
