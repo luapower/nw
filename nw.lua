@@ -786,18 +786,18 @@ window:_property'enabled'
 
 --positioning/conversions ----------------------------------------------------
 
---point or rect in client space to screen space.
-function window:to_screen(x, y, ...)
+--convert point in client space to screen space.
+function window:to_screen(x, y)
 	self:_check()
 	x, y = self.backend:to_screen(x, y)
-	return x, y, ...
+	return x, y
 end
 
---point or rect in screen space to client space.
-function window:to_client(x, y, ...)
+--convert point in screen space to client space.
+function window:to_client(x, y)
 	self:_check()
 	x, y = self.backend:to_client(x, y)
-	return x, y, ...
+	return x, y
 end
 
 --frame rect for a frame type and client rectangle in screen coordinates.
@@ -865,7 +865,8 @@ function window:client_rect(x1, y1, w1, h1)
 		local dw, dh = w - ccw, h - cch
 		self.backend:set_frame_rect(cx + dx, cy + dy, cw + dw, ch + dh)
 	else
-		return self:to_screen(0, 0, self:client_size())
+		local x, y = self:to_screen(0, 0)
+		return x, y, self:client_size()
 	end
 end
 

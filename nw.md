@@ -129,8 +129,8 @@ __enabled state__
 `win:enabled(t|f)`									enable/disable the window
 `win:enabled() -> t|f`								check if the window is enabled
 __client/screen conversion__
-`win:to_screen(x, y, ...) -> x, y, ...`		client space -> screen space conversion
-`win:to_client(x, y, ...) -> x, y, ...`		screen space -> client space conversion
+`win:to_screen(x, y) -> x, y`						client space -> screen space conversion
+`win:to_client(x, y) -> x, y`						screen space -> client space conversion
 __frame/client conversion__
 `app:client_to_frame(frame, has_menu,`			client rect -> window frame rect conversion
 	`x, y, w, h) -> x, y, w, h`
