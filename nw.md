@@ -226,10 +226,10 @@ __mouse__
 `win/view:mouse() -> t`								mouse state: *`x`, `y`, `left`, `right`, `middle`, `ex1`, `ex2`, `inside`*
 `win/view:mouseenter()`								event: mouse entered the client area of the window
 `win/view:mouseleave()`								event: mouse left the client area of the window
-`win/view:mousemove(x, y)`							event: mouse move
-`win/view:mousedown(button, x, y)`				event: a mouse button was pressed: *'left', 'right', 'middle', 'ex1', 'ex2'*
-`win/view:mouseup(button, x, y)`					event: a mouse button was depressed
-`win/view:click(button, count, x, y)`			event: a mouse button was pressed (see notes for double-click)
+`win/view:mousemove(x, y)`							event: mouse was moved
+`win/view:mousedown(button, x, y)`				event: mouse button was pressed: *'left', 'right', 'middle', 'ex1', 'ex2'*
+`win/view:mouseup(button, x, y)`					event: mouse button was depressed
+`win/view:click(button, count, x, y)`			event: mouse button was clicked
 `win/view:wheel(delta, x, y)`						event: mouse wheel was moved
 `win/view:hwheel(delta, x, y)`					event: mouse horizontal wheel was moved
 __rendering__
