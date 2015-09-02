@@ -204,9 +204,9 @@ __views__
 `win:views() -> {view1, ...}`						list views
 `win:view_count() -> n`								number of views
 `win:view(t) -> view`								create a view (fields of `t` below)
-> `x`, `y`, `w`, `h`									view's position (in window's client space) and size
-> `visible`												start visible (true)
-> `anchors`												resizing anchors ('lt') can be 'ltrb'
+*`x`, `y`, `w`, `h`*									view's position (in window's client space) and size
+*`visible`*												start visible (true)
+*`anchors`*												resizing anchors ('lt') can be 'ltrb'
 `view:free()`											destroy the view
 `view:dead() -> t|f`									check if the view was freed
 `view:visible() -> t|f`								get visibility
