@@ -24,11 +24,11 @@ __app loop__
 `app:running() -> t|f`								check if the loop is running
 __app quitting__
 `app:quit()`											quit app, i.e. close all windows and stop the loop
-`app:autoquit() -> t|f`								get app autoquit state
-`app:autoquit(t|f)`									set app autoquit state (quit app when the last window is closed)
+`app:autoquit() -> t|f`								get app autoquit flag
+`app:autoquit(t|f)`									set app autoquit flag (quit the app when the last window is closed)
 `app:quitting() -> [false]`						event: quitting (return false to refuse)
-`win:autoquit() -> t|f`								get window autoquit state
-`win:autoquit(t|f)`									set window autoquit state (quit app when the window is closed)
+`win:autoquit() -> t|f`								get window autoquit flag
+`win:autoquit(t|f)`									set window autoquit flag (quit the app when the window is closed)
 __timers__
 `app:runevery(seconds, func)`						run a function on a timer (timer stops if func returns false)
 `app:runafter(seconds, func)`						run a function on a timer once
@@ -40,7 +40,7 @@ __window list__
 `app:window_created(win)`							event: a window was created
 `app:window_closed(win)`							event: a window was closed
 __window creation__
-`app:window(t) -> win`								create a window (fields of `t` below)
+`app:window(t) -> win`								create a window (fields of _t_ below)
 *__position__*
 *`x`, `y`*		 										frame position (nil, nil)
 *`w`, `h`*												frame size (this or cw,ch required)
@@ -65,7 +65,7 @@ __window creation__
 *`closeable`*											allow closing (true)
 *`resizeable`*											allow resizing (true)
 *`fullscreenable`*									allow full screen mode (true)
-*`activable`*											allow activation (true) only for 'toolbox' frames
+*`activable`*											allow activation (true); only for 'toolbox' frames
 *`autoquit`*											quit the app on closing (false)
 *`edgesnapping`*										magnetized edges ('screen')
 *__menu__*
@@ -203,7 +203,7 @@ __hi-dpi support__
 __views__
 `win:views() -> {view1, ...}`						list views
 `win:view_count() -> n`								number of views
-`win:view(t) -> view`								create a view (fields of `t` below)
+`win:view(t) -> view`								create a view (fields of _t_ below)
 *`x`, `y`, `w`, `h`*									view's position (in window's client space) and size
 *`visible`*												start visible (true)
 *`anchors`*												resizing anchors ('lt'); can be 'ltrb'
@@ -223,11 +223,11 @@ __views__
 `view:was_moved(x, y)`								event: view was moved
 `view:was_resized(w, h)`							event: view was resized
 __mouse__
-`win/view:mouse() -> t`								mouse state: x, y, inside, left, right, middle, ex1, ex2
+`win/view:mouse() -> t`								mouse state: _x, y, inside, left, right, middle, ex1, ex2_
 `win/view:mouseenter()`								event: mouse entered the client area of the window
 `win/view:mouseleave()`								event: mouse left the client area of the window
 `win/view:mousemove(x, y)`							event: mouse was moved
-`win/view:mousedown(button, x, y)`				event: mouse button was pressed: 'left', 'right', 'middle', 'ex1', 'ex2'
+`win/view:mousedown(button, x, y)`				event: mouse button was pressed; button is _'left', 'right', 'middle', 'ex1', 'ex2'_
 `win/view:mouseup(button, x, y)`					event: mouse button was depressed
 `win/view:click(button, count, x, y)`			event: mouse button was clicked
 `win/view:wheel(delta, x, y)`						event: mouse wheel was moved
@@ -242,14 +242,14 @@ __rendering__
 `win/view:free_bitmap()`							event: bitmap needs freeing
 `win/view:gl() -> gl`								get an OpenGL API for the window
 __events__
-`app/win/view:on(event, func)`					call `func` when `event` happens
+`app/win/view:on(event, func)`					call _func_ when _event_ happens
 `app/win/view:events(enabled) -> prev_state`	enable/disable events
 `app/win/view:event(name, args...)`				meta-event fired on every other event
 __version checks__
-`app:ver(query) -> t|f`								check OS version eg. app:ver'OSX 10.8' is true on OSX 10.8+
+`app:ver(query) -> t|f`								check OS _minimum_ version (eg. 'OSX 10.8')
 __extending__
 `nw.backends -> {os -> module_name}`			default backend modules for each OS
-`nw:init([backend_name])`							init `nw` with a specific backend (can be called only once)
+`nw:init([backend_name])`							init with a specific backend (can be called only once)
 -------------------------------------------- -----------------------------------------------------------------------------
 </div>
 
