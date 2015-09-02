@@ -41,35 +41,35 @@ __window list__
 `app:window_closed(win)`							event: a window was closed
 __window creation__
 `app:window(t) -> win`								create a window (fields of `t` below)
-> __position__
-> `x`, `y`		 										frame position
-> `w`, `h`												frame size
-> `cx`, `cy`											client area position
-> `cw`, `ch`											client area size
-> `min_cw`, `min_ch`									min client rect size
-> `max_cw`, `max_ch`									max client rect size
-> __state__
-> `visible`												start visible (true)
-> `minimized`											start minimized (false)
-> `maximized`											start maximized (false)
-> `enabled`												start enabled (true)
-> __frame__
-> `title` 												initial title ('')
-> `transparent`										make it transparent (false)
-> __behavior__
-> `parent`												is parented (nil)
-> `sticky`												moves with parent (false)
-> `topmost`												stays on top of other windows (false)
-> `minimizable`										allow minimization (true)
-> `maximizable`										allow maximization (true)
-> `closeable`											allow closing (true)
-> `resizeable`											allow resizing (true)
-> `fullscreenable`									allow full screen mode (true)
-> `activable`											allow activation (true) only for 'toolbox' frames
-> `autoquit`											quit the app on closing (false)
-> `edgesnapping`										magnetized edges ('screen')
-> __menu__
-> `menu`													menu bar
+*__position__*
+*`x`, `y`*		 										frame position
+*`w`, `h`*												frame size
+*`cx`, `cy`*											client area position
+*`cw`, `ch`*											client area size
+*`min_cw`, `min_ch`*									min client rect size
+*`max_cw`, `max_ch`*									max client rect size
+*__state__*
+`visible`												start visible (true)
+`minimized`												start minimized (false)
+`maximized`												start maximized (false)
+`enabled`												start enabled (true)
+__frame__
+`title	` 												initial title ('')
+`transparent`											make it transparent (false)
+__behavior__
+`parent`													is parented (nil)
+`sticky`													moves with parent (false)
+`topmost`												stays on top of other windows (false)
+`minimizable`											allow minimization (true)
+`maximizable`											allow maximization (true)
+`closeable`												allow closing (true)
+`resizeable`											allow resizing (true)
+`fullscreenable`										allow full screen mode (true)
+`activable`												allow activation (true) only for 'toolbox' frames
+`autoquit`												quit the app on closing (false)
+`edgesnapping`											magnetized edges ('screen')
+__menu__
+`menu`													menu bar
 __window closing__
 `win:close()`											close the window and destroy it
 `win:dead() -> t|f`									check if the window was destroyed
@@ -132,12 +132,12 @@ __client/screen conversion__
 `win:to_screen(x, y, ...) -> x, y, ...`		client space -> screen space conversion
 `win:to_client(x, y, ...) -> x, y, ...`		screen space -> client space conversion
 __frame/client conversion__
-`app:client_to_frame(frame, has_menu, \		client rect -> window frame rect conversion
-	x, y, w, h) -> x, y, w, h`
-`app:frame_to_client(frame, has_menu, \		window frame rect -> client rect conversion
-	x, y, w, h) -> x, y, w, h`
-`app:frame_extents(frame, has_menu) \			frame extents for a frame type
-	-> left, top, right, bottom`
+`app:client_to_frame(frame, has_menu,`			client rect -> window frame rect conversion
+	`x, y, w, h) -> x, y, w, h`
+`app:frame_to_client(frame, has_menu,			window frame rect -> client rect conversion
+	`x, y, w, h) -> x, y, w, h`
+`app:frame_extents(frame, has_menu)`			frame extents for a frame type
+	`-> left, top, right, bottom`
 __size and position__
 `win:frame_rect() -> x, y, w, h`					get frame rect in current state
 `win:frame_rect(x, y, w, h)`						set frame rect (and change state to normal)
