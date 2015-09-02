@@ -49,27 +49,27 @@ __window creation__
 *`min_cw`, `min_ch`*									min client rect size
 *`max_cw`, `max_ch`*									max client rect size
 *__state__*
-`visible`												start visible (true)
-`minimized`												start minimized (false)
-`maximized`												start maximized (false)
-`enabled`												start enabled (true)
-__frame__
-`title	` 												initial title ('')
-`transparent`											make it transparent (false)
-__behavior__
-`parent`													is parented (nil)
-`sticky`													moves with parent (false)
-`topmost`												stays on top of other windows (false)
-`minimizable`											allow minimization (true)
-`maximizable`											allow maximization (true)
-`closeable`												allow closing (true)
-`resizeable`											allow resizing (true)
-`fullscreenable`										allow full screen mode (true)
-`activable`												allow activation (true) only for 'toolbox' frames
-`autoquit`												quit the app on closing (false)
-`edgesnapping`											magnetized edges ('screen')
-__menu__
-`menu`													menu bar
+*`visible`*												start visible (true)
+*`minimized`*											start minimized (false)
+*`maximized`*											start maximized (false)
+*`enabled`*												start enabled (true)
+*__frame__*
+*`title`* 												initial title ('')
+*`transparent`*										make it transparent (false)
+*__behavior__*
+*`parent`*												is parented (nil)
+*`sticky`*												moves with parent (false)
+*`topmost`*												stays on top of other windows (false)
+*`minimizable`*										allow minimization (true)
+*`maximizable`*										allow maximization (true)
+*`closeable`*											allow closing (true)
+*`resizeable`*											allow resizing (true)
+*`fullscreenable`*									allow full screen mode (true)
+*`activable`*											allow activation (true) only for 'toolbox' frames
+*`autoquit`*											quit the app on closing (false)
+*`edgesnapping`*										magnetized edges ('screen')
+*__menu__*
+*`menu`*													menu bar
 __window closing__
 `win:close()`											close the window and destroy it
 `win:dead() -> t|f`									check if the window was destroyed
