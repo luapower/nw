@@ -1081,7 +1081,7 @@ _x, y, inside, left, right, middle, ex1, ex2_
 
 The mouse state is not queried: it is the state at the time of the last mouse event.
 
-#### `win/view:mouseenter()` <br> #### `win/view:mouseleave()`
+#### `win/view:mouseenter()` <br> `win/view:mouseleave()`
 
 Event: mouse entered/left the client area of the window.
 
