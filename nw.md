@@ -334,7 +334,9 @@ function win:repaint()        --called when window needs repainting
 	cr:paint()
 end
 
-app:run() --start the message loop
+win:show() --show it now that it was properly set up
+
+app:run()  --start the message loop
 ~~~
 
 ## Status
@@ -384,8 +386,8 @@ Quit the app, i.e. close all windows and stop the loop.
 Quitting is a multi-phase process:
 
 1. the `app:quitting()` event is fired. If it returns false, quitting is aborted.
-2. the `win:closing()` event is fired on all top-level (i.e. without a parent)
-   windows. If any of them returns false, quitting is aborted.
+2. the `win:closing()` event is fired on all non-parented windows.
+   If any of them returns false, quitting is aborted.
 3. `win:close(true)` is called on all windows. If new windows are created
    during this process, quitting is aborted.
 4. the app loop is stopped.
@@ -400,7 +402,8 @@ When this flag is true, the app quits when the last window is closed.
 
 #### `app:quitting() -> [false]`
 
-Event: quitting. Return false from this event to refuse.
+Event: the app wants to quit, but none of the windows were yet closed
+to that effect. Return false from this event to refuse to quit.
 
 #### `win:autoquit(t|f)` <br> `win:autoquit() -> t|f`
 
@@ -413,7 +416,7 @@ This flag can be used on the app's main window if there is such a thing.
 #### `app:runevery(seconds, func)`
 
 Run a function on a recurrent timer.
-The timer can be stopped from inside the function by returning false.
+The timer can be stopped by returning false from the function.
 
 #### `app:runafter(seconds, func)`
 
@@ -429,8 +432,8 @@ the function finishes.
 
 #### `app:sleep(seconds)`
 
-Sleep without blocking inside a function run with app:run(). While this
-function is sleeping (can you say "coroutine"?), other timers
+Sleep without blocking from inside a function that was run via app:run().
+While the function is sleeping (can you say "coroutine"?), other timers
 and events continue to be processed.
 
 This is poor man's multi-threading based on timers and coroutines.
