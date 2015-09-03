@@ -7,10 +7,13 @@ platforms: mingw32, mingw64, osx32, osx64
 
 ## `local nw = require'nw'`
 
-Cross-platform library for displaying and manipulating native windows,
-drawing in their client area using [cairo] or [opengl], and accessing
-input devices in a consistent and well-specified manner across Windows,
-Linux and OS X.
+Cross-platform library for accessing windows, graphics and input
+in a consistent manner across Windows, Linux and OS X.
+
+Supports transparent windows, unicode, rgba8 bitmaps everywhere,
+drawing via [cairo] and [opengl], edge snapping, fullscreen mode,
+multiple displays, hi-dpi, US keyboard key mapping, triple-click events,
+native menus, notification icons, and more.
 
 ## API
 
@@ -70,7 +73,7 @@ __window creation__
 *`edgesnapping`*										magnetized edges ('screen')
 *__menu__*
 *`menu`*													menu bar
-__window closing__
+__closing__
 `win:close()`											close the window and destroy it
 `win:dead() -> t|f`									check if the window was destroyed
 `win:closing()`										event: closing (return false to refuse)
@@ -119,7 +122,7 @@ __fullscreen mode__
 `win:fullscreen(t|f)`								enter/exit fullscreen state
 `win:entered_fullscreen()`							event: entered fullscreen state
 `win:exited_fullscreen()`							event: exited fullscreen state
-__window restoring__
+__restoring__
 `win:restore()`										restore from minimized or maximized state
 `win:shownormal()`									show in normal state
 __state strings__
@@ -185,7 +188,7 @@ __cursors__
 __frame flags__
 `win:frame() -> frame`								window's frame: 'normal', 'none', 'toolbox'
 `win:transparent() -> t|f`							transparent flag
-__parent/child rel.__
+__child windows__
 `win:parent() -> win|nil`							window's parent
 `win:children() -> {win1, ...}`					window's children
 `win:sticky() -> t|f`								sticky flag
@@ -241,6 +244,39 @@ __rendering__
 `win/view:free_cairo()`								event: cairo context needs freeing
 `win/view:free_bitmap()`							event: bitmap needs freeing
 `win/view:gl() -> gl`								get an OpenGL API for the window
+__menus__
+`app:menu() -> menu`									create a menu (or menu bar)
+`app:menubar() -> menu`								get app's menu bar (OSX)
+`win:menubar() -> menu`								get window's menu bar (Windows, Linux)
+`win/view:popup(menu, cx, cy)`					pop up a menu relative to a window or view
+`menu:popup(win/view, cx, cy)`					pop up a menu relative to a window or view
+`menu:add(...)`
+`menu:set(...)`
+`menu:remove(index)`
+`menu:get(index[, prop])`
+`menu:item_count() -> n`
+`menu:items([prop]) -> {item1, ...}`
+`menu:checked(index) -> t|f`
+`menu:checked(index, t|f)`
+__notification icons__
+`app:notifyicon(t) -> icon`
+`icon:free()`
+`app:notifyicon_count() -> n`
+`app:notifyicons() -> {icon1, ...}`				list notification icons
+`icon:bitmap() -> bmp`								get a bgra8 [bitmap] object
+`icon:invalidate()`									request bitmap redrawing
+`icon:repaint()`										event: bitmap needs redrawing
+`icon:free_bitmap(bitmap)`							event: bitmap needs freeing
+`icon:tooltip() -> s`								get tooltip
+`icon:tooltip(s)`										set tooltip
+`icon:menu() -> menu`								get menu
+`icon:menu(menu)`										set menu
+`icon:text() -> s`									get text (OSX)
+`icon:text(s)`											set text (OSX)
+`icon:length() -> n`									get length (OSX)
+`icon:length(n)`										set length (OSX)
+__window icon__
+
 __events__
 `app/win/view:on(event, func)`					call _func_ when _event_ happens
 `app/win/view:events(enabled) -> prev_state`	enable/disable events
@@ -259,50 +295,48 @@ __extending__
 ~~~{.lua}
 local nw = require'nw'
 
-local app = nw:app()
+local app = nw:app()        --get the app singleton
 
-local win = app:window{x = 100, y = 100, w = 400, h = 200, title = 'hello'}
+local win = app:window{     --create a new window
+	w = 400, h = 200,        --specify window's frame size
+	title = 'hello',         --specify window's title
+	visible = false,         --don't show it yet
+}
 
-function win:click(button, count)
+function win:click(button, count) --this is one way to bind events
 	if button == 'left' and count == 3 then --triple click
 		app:quit()
 	end
 end
 
-function win:keydown(key)
+--this is another way to bind events which allows setting multiple
+--handlers for the same event type.
+function win:on('keydown', function(key)
 	if key == 'F11' then
-		self:fullscreen(not self:fullscreen())
+		self:fullscreen(not self:fullscreen()) --toggle fullscreen state
 	end
+end)
+
+function win:repaint()        --called when window needs repainting
+	local bmp = win:bitmap()   --get the window's bitmap
+	local cr = bitmap:cairo()  --get a cairo drawing context
+	cr:set_source_rgb(0, 1, 0) --make it green
+	cr:paint()
 end
 
-app:run() --start the main loop
-
+app:run() --start the message loop
 ~~~
 
-## Features
+## Status
 
-  * frameless transparent windows
-  * edge snapping
-  * full screen mode
-  * multi-monitor support
-  * complete access to the US keyboard
-  * triple-click events
-  * multi-touch gestures
-  * unicode
-
-## Style
-
-  * consistent and fully-specified behavior accross all supported platforms
-  * no platform-specific features except for supporting platform idioms
-  * unspecified behavior is a bug
-  * unsupported parameter combinations are errors
-  * properties for state are orthogonal to each other
-  * iterators are stable and with specified order
+	See [issues](https://github.com/luapower/nw/issues)
+	and [milestones](https://github.com/luapower/nw/milestones).
 
 ## Backends
 
   * cocoa: OSX 10.7+
   * winapi: Windows XP/2000+
+  * xlib: Ubuntu/Unity 10.04+
 
 ## Behavior
 
@@ -360,4 +394,27 @@ a count of 3.
   * calling display functions on an invalid display object results in error (monitors can come and go too you know).
 
 
+## Getting Involved
+
+This is one of the bigger bricks in luapower but it lends itself well
+to community development IMO. The frontend uses composition rather than
+inheritance to connect to the backend so the communication between the two
+is always explicit. Features are well separated functionally and visually
+in the code so they can be developed separately without much risk of
+regressions, and there's unit tests which can help with that too.
+The code follows the luapower [coding-style] and [api-design] guidelines.
+
+All the development planning, coordination and communication is done via
+github issues and milestones.
+
+### Design Goals
+
+  * level out platform differences for common functionality.
+  * _do_ support platform idioms and platform-specific functionality.
+  * minimize the need for emulation of missing features by rethinking the API.
+  * take preventive measures to avoid platform behavior:
+    * raise errors for parameter combinations that are not universally supported.
+    * clamp values to universally supported ranges.
+    * make stable iterators with specified order or better yet, return arrays.
+  * seek orthogonality, but do add convenience methods where useful.
 
