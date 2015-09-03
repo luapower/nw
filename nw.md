@@ -26,7 +26,7 @@ __app loop__
 `app:stop()`											stop the loop
 `app:running() -> t|f`								check if the loop is running
 __app quitting__
-`app:quit()`											quit app, i.e. close all windows and stop the loop
+`app:quit()`											quit the app, i.e. close all windows and stop the loop
 `app:autoquit(t|f)`									flag: quit the app when the last window is closed
 `app:autoquit() -> t|f`								get app autoquit flag (true)
 `app:quitting() -> [false]`						event: quitting (return false to refuse)
@@ -379,18 +379,16 @@ Check if the loop is running.
 
 #### `app:quit()`
 
-Quit app, i.e. close all windows and stop the loop.
+Quit the app, i.e. close all windows and stop the loop.
 
 Quitting is a multi-phase process:
 
-	1. the `app:quitting()` event is fired. If it returns false,
-	quitting is aborted.
-	2. the `win:closing()` event is fired on all top-level
-	(i.e. without a parent) windows. If any of them returns false,
-	quitting is aborted.
-	3. `win:close(true)` is called on all windows. If new windows are
-	created during this process, quitting is aborted.
-	4. the app loop is stopped.
+1. the `app:quitting()` event is fired. If it returns false, quitting is aborted.
+2. the `win:closing()` event is fired on all top-level (i.e. without a parent)
+   windows. If any of them returns false, quitting is aborted.
+3. `win:close(true)` is called on all windows. If new windows are created
+   during this process, quitting is aborted.
+4. the app loop is stopped.
 
 Calling quit() when the loop is not running or if quitting
 is in progress does nothing.
