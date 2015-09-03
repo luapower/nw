@@ -338,8 +338,8 @@ app:run() --start the message loop
 
 ## Status
 
-	See [issues](https://github.com/luapower/nw/issues)
-	and [milestones](https://github.com/luapower/nw/milestones).
+See [issues](https://github.com/luapower/nw/issues)
+and [milestones](https://github.com/luapower/nw/milestones).
 
 ## Backends
 
