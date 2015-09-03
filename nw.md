@@ -451,34 +451,34 @@ Event: a window was closed.
 Create a window (fields of _t_ below):
 
 * __position__
-* `x`, `y`		 										frame position (nil, nil)
-* `w`, `h`												frame size (this or cw,ch required)
-* `cx`, `cy`											client area position (nil, nil)
-* `cw`, `ch`											client area size (this or w,h required)
-* `min_cw`, `min_ch`									min client rect size
-* `max_cw`, `max_ch`									max client rect size
+	* `x`, `y`		 										frame position (nil, nil)
+	* `w`, `h`												frame size (this or cw,ch required)
+	* `cx`, `cy`											client area position (nil, nil)
+	* `cw`, `ch`											client area size (this or w,h required)
+	* `min_cw`, `min_ch`									min client rect size
+	* `max_cw`, `max_ch`									max client rect size
 * __state__
-* `visible`												start visible (true)
-* `minimized`											start minimized (false)
-* `maximized`											start maximized (false)
-* `enabled`												start enabled (true)
+	* `visible`												start visible (true)
+	* `minimized`											start minimized (false)
+	* `maximized`											start maximized (false)
+	* `enabled`												start enabled (true)
 * __frame__
-* `title` 												initial title ('')
-* `transparent`										make it transparent (false)
+	* `title` 												initial title ('')
+	* `transparent`										make it transparent (false)
 * __behavior__
-* `parent`												parent window (nil)
-* `sticky`												moves with parent (false)
-* `topmost`												stays on top of other windows (false)
-* `minimizable`										allow minimization (true)
-* `maximizable`										allow maximization (true)
-* `closeable`											allow closing (true)
-* `resizeable`											allow resizing (true)
-* `fullscreenable`									allow full screen mode (true)
-* `activable`											allow activation (true); only for 'toolbox' frames
-* `autoquit`											quit the app on closing (false)
-* `edgesnapping`										magnetized edges ('screen')
+	* `parent`												parent window (nil)
+	* `sticky`												moves with parent (false)
+	* `topmost`												stays on top of other windows (false)
+	* `minimizable`										allow minimization (true)
+	* `maximizable`										allow maximization (true)
+	* `closeable`											allow closing (true)
+	* `resizeable`											allow resizing (true)
+	* `fullscreenable`									allow full screen mode (true)
+	* `activable`											allow activation (true); only for 'toolbox' frames
+	* `autoquit`											quit the app on closing (false)
+	* `edgesnapping`										magnetized edges ('screen')
 * __menu__
-* `menu`													menu bar
+	* `menu`													menu bar
 
 ### Closing
 
