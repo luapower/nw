@@ -1134,13 +1134,16 @@ you must return true when the count is 3 to break the click chain,
 but you must not return anything when the count is 2,
 or you'll never get a count of 3.
 
-#### `win/view:wheel(delta, x, y)`
+The double-click time interval is the interval that the user
+has set in the OS and it is queried on every click.
 
-Event: mouse wheel was moved.
+#### `win/view:wheel(delta, x, y)` <br> `win/view:hwheel(delta, x, y)`
 
-#### `win/view:hwheel(delta, x, y)`
+Event: the mouse vertical or horizontal wheel was moved.
+The delta represents the number of lines to scroll.
 
-Event: mouse horizontal wheel was moved.
+The number of lines per scroll notch is the number that the user
+has set in the OS and it is queried on every wheel event.
 
 ### Rendering
 
