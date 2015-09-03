@@ -1091,11 +1091,11 @@ outside the client area of the window/view that captured the mouse.
 
 #### `win/view:mousemove(x, y)`
 
-Event: mouse was moved.
+Event: the mouse was moved.
 
 #### `win/view:mousedown(button, x, y)`
 
-Event: mouse button was pressed; button can be 'left', 'right', 'middle', 'ex1', 'ex2'.
+Event: a mouse button was pressed; button can be 'left', 'right', 'middle', 'ex1', 'ex2'.
 
 While a mouse button is down, the mouse is _captured_ by the window/view
 which received the mousedown event, which means that the same window/view
@@ -1104,13 +1104,13 @@ its client area.
 
 #### `win/view:mouseup(button, x, y)`
 
-Event: mouse button was depressed.
+Event: a mouse button was depressed.
 
 #### `win/view:click(button, count, x, y)`
 
-Event: mouse button was clicked (fires immediately after mousedown).
+Event: a mouse button was clicked (fires immediately after mousedown).
 
-##### Repeated clicks
+#### Repeated clicks
 
 When the user clicks the mouse repeatedly, with a small enough interval
 between clicks and over the same target, a counter is incremented.
