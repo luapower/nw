@@ -395,8 +395,7 @@ Quitting is a multi-phase process:
 Calling quit() when the loop is not running or if quitting
 is in progress does nothing.
 
-#### `app:autoquit(t|f)`
-#### `app:autoquit() -> t|f`
+#### `app:autoquit(t|f)` <br/> `app:autoquit() -> t|f`
 
 Get/set the app autoquit flag (default: true).
 Enabling it causes the app to quit when the last window is closed.
