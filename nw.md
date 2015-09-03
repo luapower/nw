@@ -12,7 +12,7 @@ in a consistent manner across Windows, Linux and OS X.
 
 Supports transparent windows, unicode, rgba8 bitmaps everywhere,
 drawing via [cairo] and [opengl], edge snapping, fullscreen mode,
-multiple displays, hi-dpi, US keyboard key mapping, triple-click events,
+multiple displays, hi-dpi, key mappings, triple-click events,
 native menus, notification icons, and more.
 
 ## API
@@ -266,7 +266,7 @@ __notification icons__
 `icon:bitmap() -> bmp`								get a bgra8 [bitmap] object
 `icon:invalidate()`									request bitmap redrawing
 `icon:repaint()`										event: bitmap needs redrawing
-`icon:free_bitmap(bitmap)`							event: bitmap needs freeing
+`icon:free_bitmap(bmp)`								event: bitmap needs freeing
 `icon:tooltip() -> s`								get tooltip
 `icon:tooltip(s)`										set tooltip
 `icon:menu() -> menu`								get menu
@@ -275,8 +275,17 @@ __notification icons__
 `icon:text(s)`											set text (OSX)
 `icon:length() -> n`									get length (OSX)
 `icon:length(n)`										set length (OSX)
-__window icon__
-
+__window icon (Windows)__
+`win:icon([which]) -> icon`						window's icon ('big'); which can be: 'big', 'small'
+`icon:bitmap() -> bmp`								icon's bitmap
+`icon:invalidate()`									request icon redrawing
+`icon:repaint()`										event: icon needs redrawing
+__dock icon (OSX)__
+`app:dockicon() -> icon`
+`icon:bitmap() -> bmp`								icon's bitmap
+`icon:invalidate()`									request icon redrawing
+`icon:repaint()`										event: icon needs redrawing
+`icon:free_bitmap(bmp)`								event: bitmap needs to be freed
 __events__
 `app/win/view:on(event, func)`					call _func_ when _event_ happens
 `app/win/view:events(enabled) -> prev_state`	enable/disable events
