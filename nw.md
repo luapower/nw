@@ -1148,11 +1148,11 @@ Get/set the anchors: they can be any combination of 'ltrb' characters
 representing left, top, right and bottom anchors respectively.
 
 Anchors are a simple but very powerful way of doing stitched layouting.
-This is how they work: there's four anchors for each side of a view.
-Setting an anchor on one side fixates the distance between that side
-and the same side of the window the view is on, so that when the window
-is moved/resized, the view is also moved/resized in order to preserve
-the initial distance to that side of the window.
+This is how they work: there's four possible anchors, one for each side
+of a view. Setting an anchor on one side fixates the distance between
+that side and the same side of the window the view is on, so that when
+the window is moved/resized, the view is also moved/resized in order
+to preserve the initial distance to that side of the window.
 
 #### `view:rect_changed(x, y, w, h)`
 
