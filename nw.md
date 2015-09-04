@@ -707,7 +707,7 @@ Calling show() on a visible (which includes minimized) window does nothing.
 
 #### `win:hide()`
 
-Hide the window from the screen and from the taskbar.
+Hide the window from the screen and from the taskbar, preserving its full state.
 
 Calling hide() on a hidden window does nothing.
 
