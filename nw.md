@@ -516,7 +516,7 @@ The position is optional and it defaults to OS-driven cascading.
 
 The window state is the combination of multiple flags (`minimized`,
 `maximized`, `fullscreen`, `visible`, `active`) plus its position
-and size in normal state (the `normal_rect`).
+and size in normal state (the `normal_frame_rect`).
 
 State flags are independent of each other, so they can be in almost
 any combination at the same time. For example, a window which starts
@@ -1219,7 +1219,7 @@ function win:click(button, count, x, y)
 end
 ~~~
 
-#### Explanation
+#### How it works
 
 When the user clicks the mouse repeatedly, with a small enough interval
 between clicks and over the same target, a counter is incremented.
@@ -1275,7 +1275,8 @@ Get a bgra8 [bitmap] object to draw on. The bitmap is freed when
 the window's client area changes size, so keeping a reference to it
 outside the `repaint` event is generally not useful.
 
-The alpha channel is not used unless this is a transparent window.
+The alpha channel is not used unless this is a transparent window
+(note: views cannot be transparent).
 
 #### `bmp:clear()`
 
@@ -1283,7 +1284,7 @@ Fill the bitmap with zeroes.
 
 #### `bmp:cairo() -> cr`
 
-Get a [cairo] context on the bitmap. The context dies with the bitmap.
+Get a [cairo] context on the bitmap. The context lasts as long as the bitmap lasts.
 
 #### `win/view:free_cairo(cr)`
 
@@ -1307,17 +1308,24 @@ Create a menu.
 
 Get the app's menu bar (OSX)
 
-#### `win:menubar() -> menu`
+#### `win:menubar() -> menu|nil` `win:menubar(menu|nil)`
 
-Get the window's menu bar (Windows, Linux). Create one if not already.
+Get/set/remove the window's menu bar (Windows, Linux).
 
 #### `win/view:popup(menu, cx, cy)` <br> `menu:popup(win/view, cx, cy)`
 
 Pop up a menu at a point relative to a window or view.
 
-#### `menu:add([index, ]text, [action], [options])` <br> `menu:set(index, text, [action], [options])` <br> `menu:add{index =, text =, action =, optionX =}` <br> `menu:set{index =, text =, action =, optionX =}`
+#### `menu:add([index, ]text, [action], [options])` <br> `menu:set(index, text, [action], [options])` <br> `menu:add{index =, text =, action =, <option> =}` <br> `menu:set{index =, text =, action =, <option> =}`
 
-Add/set a menu item. The `action` can be a function or another menu.
+Add/set a menu item. The options are:
+
+  * `action` - can be a function or another menu to be used as a submenu.
+  * `text` - the text to display; it can be the empty string (the default)
+  which means that the menu item is a separator.
+  * `submenu` - a submenu (same as when `action` is a submenu).
+  * `enabled` - enabled state (true)
+  * `checked` - checked state (false)
 
 #### `menu:remove(index)`
 
@@ -1325,7 +1333,7 @@ Remove menu item at index.
 
 #### `menu:get(index) -> item` <br> `menu:get(index, prop) -> val`
 
-Get the menu item (or the value of one of its properties) at index.
+Get a menu item, or the value of one of its properties.
 
 #### `menu:item_count() -> n`
 
@@ -1339,71 +1347,9 @@ Get the menu items.
 
 Get/set the checked state of a menu item.
 
-### Notification icons
-
-#### `app:notifyicon(t) -> icon`
-
-Create a notification icon.
-
-#### `icon:free()`
-
-Free the icon.
-
-#### `app:notifyicon_count() -> n`
-
-Get the number of notification icons.
-
-#### `app:notifyicons() -> {icon1, ...}`
-
-Get all the notification icons.
-
-#### `icon:bitmap() -> bmp`
-
-Get a bgra8 [bitmap] that can be used to draw on the icon.
-
-#### `icon:invalidate()`
-
-Request redrawing of the icon.
-
-#### `icon:repaint()`
-
-Event: icon needs redrawing.
-
-#### `icon:free_bitmap(bmp)`
-
-Event: icon bitmap needs to be freed.
-
-#### `icon:tooltip() -> s` <br> `icon:tooltip(s)`
-
-Get/set the icon's tooltip.
-
-#### `icon:menu() -> menu` <br> `icon:menu(menu)`
-
-Get/set a menu for the icon.
-
-#### `icon:text() -> s` <br> `icon:text(s)`
-
-Get/set the status bar item's text (OSX only).
-
-#### `icon:length() -> n` <br> `icon:length(n)`
-
-Get/set the status bar item's length (OSX only).
-
 ## Icons
 
-### Window icon (Windows)
-
-#### `win:icon([which]) -> icon`
-
-Get the window's icon. The `which` arg can be: 'big' (default), 'small'.
-
-### Dock icon (OSX)
-
-#### `app:dockicon() -> icon`
-
-Get the app's dock icon.
-
-### Icon API
+### Common API
 
 #### `icon:bitmap() -> bmp`
 
@@ -1420,6 +1366,48 @@ Event: icon needs redrawing.
 #### `icon:free_bitmap(bmp)`
 
 Event: the icon's bitmap needs to be freed.
+
+### Window icon (Windows)
+
+#### `win:icon([which]) -> icon`
+
+Get the window's icon. The `which` arg can be: 'big' (default), 'small'.
+
+### Dock icon (OSX)
+
+#### `app:dockicon() -> icon`
+
+Get the app's dock icon.
+
+### Notification icons
+
+#### `app:notifyicon(t) -> icon`
+
+Create a notification icon.
+
+#### `app:notifyicon_count() -> n`
+
+Get the number of notification icons.
+
+#### `app:notifyicons() -> {icon1, ...}`
+
+Get all the notification icons.
+
+#### `icon:tooltip() -> s` <br> `icon:tooltip(s)`
+
+Get/set the icon's tooltip.
+
+#### `icon:menu() -> menu` <br> `icon:menu(menu)`
+
+Get/set a menu for the icon.
+
+#### `icon:text() -> s` <br> `icon:text(s)`
+
+Get/set the status bar item's text (OSX only).
+
+#### `icon:length() -> n` <br> `icon:length(n)`
+
+Get/set the status bar item's length (OSX only).
 
 ## Events
 
