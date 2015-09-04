@@ -1325,7 +1325,7 @@ Add/set a menu item. The options are:
 	* `&` before a letter creates an access key
 	* `\t` followed by a key combination creates a shortcut key
 	* the empty string (the default) creates a separator
-	* eg. `'&Close\tAlt+F4'` shows as '<u>C</u>lose      Alt+F4' and activates on `Alt+C` and on `Alt+F4`
+	* eg. `'&Close\tAlt+F4'` shows as '<u>C</u>lose &nbsp;&nbsp;&nbsp;&nbsp; Alt+F4' and activates on `Alt+C` and on `Alt+F4`
 * `submenu` - a submenu (same as when `action` is a submenu)
 * `enabled` - enabled state (true)
 * `checked` - checked state (false)
