@@ -1016,9 +1016,19 @@ Get the display the window is currently on.
 
 #### `win:cursor() -> name` <br> `win:cursor(name)`
 
-Get/set the mouse cursor. Name can be: 'arrow' (default), 'text', 'hand',
-'cross', 'forbidden', 'size_diag1' (i.e. NE-SW), 'size_diag2' (i.e. NW-SE),
-'size_h', 'size_v', 'move', 'busy_arrow'.
+Get/set the mouse cursor. Name can be:
+
+  * 'arrow' (default)
+  * 'text'
+  * 'hand'
+  * 'cross'
+  * 'forbidden'
+  * 'size_diag1' (i.e. NE-SW)
+  * 'size_diag2' (i.e. NW-SE)
+  * 'size_h'
+  * 'size_v'
+  * 'move'
+  * 'busy_arrow'
 
 ## Keyboard
 
