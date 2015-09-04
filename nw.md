@@ -619,7 +619,7 @@ Check if the app is active.
 Activate the app, which activates the last window that was active
 before the app got deactivated.
 
-The `mode` arg can be:
+The _mode_ arg can be:
 
   * 'alert' (default; Windows and OSX only; on Linux it does nothing)
   * 'force' (OSX and Linux only; on Windows it's the same as 'alert')
