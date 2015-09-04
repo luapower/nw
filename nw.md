@@ -713,13 +713,11 @@ Calling hide() on a hidden window does nothing.
 
 #### `win:visible() -> t|f`
 
-Get window visibility.
-
-__NOTE:__ A minimized window is considered visible.
+Check if a window is visible (note: that includes minimized).
 
 #### `win:visible(t|f)`
 
-Calls `show()` and `hide()` to change the window's visibility.
+Call `show()` or `hide()` to change the window's visibility.
 
 #### `win:was_shown()` <br> `win:was_hidden()`
 
