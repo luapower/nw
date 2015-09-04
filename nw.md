@@ -516,8 +516,8 @@ The position is optional and it defaults to OS-driven cascading.
 
 A window can be created in any combination of `visible`, `minimized`
 and `maximized` states. If created hidden, calling `win:show()`
-will respect its initial `minimized` and `maximized` flags
-as well as its initial size and position.
+will show the window respecting the `minimized` and `maximized`
+flags.
 
 ## Child windows
 
@@ -557,26 +557,32 @@ Get the sticky flag (read-only).
 
 Toolbox windows (`frame = 'toolbox'`) show a thin title bar on Windows
 (they show a normal frame on OSX and Linux).
-They must be parented. They can be non-activable.
+They must be parented. They can be non-activable (`activable = false`).
 
 ## Transparent windows
 
 Transparent windows allow using the full alpha channel when drawing on them.
-They also come with some big limitations mostly from Windows:
+They also come with some limitations (mostly from Windows):
 
   * they can't be framed so you must pass `frame = 'none'`.
   * they can't have views.
-  * you can't draw using OpenGL on them.
+  * you can't draw on them using OpenGL.
 
 #### `win:transparent() -> t|f`
 
 Get the transparent flag (read-only).
 
-#### `win:frame() -> frame`
-
-Get the frame type (read-only). Can be 'normal', 'none', or 'toolbox'.
-
 ## Window closing
+
+Closing the window destroys it by default.
+You can prevent that by returning false in the `closing` event:
+
+~~~{.lua}
+function win:closing()
+	self:hide()
+	return false --prevent destruction
+end
+~~~
 
 #### `win:close()`
 
@@ -1471,17 +1477,6 @@ which would make programming with them much more robust. The real world is
 an unspecified mess. So never, never mix queries with commands, i.e.
 never assume that when you perform some command the state of the window
 actually changed when the call returns.
-
-## Closing windows
-
-Closing a window destroys it by default. You can prevent that by returning false on the `closing` event.
-
-~~~{.lua}
-function win:closing()
-	self:hide()
-	return false --prevent destruction
-end
-~~~
 
 ## Corner cases
 
