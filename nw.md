@@ -1446,9 +1446,9 @@ The query has the form `'<API> <version>'` where API can be
 
 Example: `app:ver'OSX 10.8'` returns `true` on OSX 10.8 and beyond.
 
-For Windows you can use the following table:
+For Windows you can use the following table to figure it out:
 
-Windows							Version
+Release							Version
 -------------------------- -----------
 Windows 10						10.0 (6.2)
 Windows Server 2016 TP		10.0 (6.2)
