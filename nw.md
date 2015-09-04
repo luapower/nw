@@ -684,13 +684,9 @@ __NOTE:__ This [doesn't work](https://github.com/luapower/nw/issues/26) in Linux
 
 ## App visibility (OSX)
 
-#### `app:hidden() -> t|f` <br> `app:hidden(t|f)`
+#### `app:hidden() -> t|f` <br> `app:hidden(t|f)` <br> `app:hide()` <br> `app:unhide()`
 
 Get/set app visibility.
-
-#### `app:hide()` <br> `app:unhide()`
-
-Hide/unhide the app.
 
 #### `app:was_hidden()` <br> `app:was_unhidden()`
 
