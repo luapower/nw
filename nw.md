@@ -1441,7 +1441,8 @@ The name and args of the event are passed in.
 #### `app:ver(query) -> t|f`
 
 Check that a certain backend API is at a specified version or beyond.
-The query format is `<API> <version>` where API can be 'Windows', 'OSX' or 'X'.
+The query has the form `'<API> <version>'` where API can be
+'Windows', 'OSX' or 'X'.
 
 Example: `app:ver'OSX 10.8'` returns `true` on OSX 10.8 and beyond.
 
