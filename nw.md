@@ -795,7 +795,7 @@ Restore from minimized, maximized or fullscreen state, i.e. unminimize
 if the window was minimized, exit fullscreen if it was in fullscreen mode,
 or unmaximize it if it was maximized (otherwise do nothing).
 
-The window is always activated unless it's in normal mode.
+The window is always activated unless it was in normal mode.
 
 #### `win:shownormal()`
 
@@ -896,7 +896,7 @@ Resize the window to accomodate a specified client area size.
 Event: window size/position is about to change.
 Return a new rectangle to affect the window's final size and position.
 
-__NOTE:__ This does not fire in Linux (most windows managers don't allow it).
+__NOTE:__ This does not fire in Linux.
 
 #### `win:was_moved(cx, cy)`
 
@@ -936,18 +936,24 @@ This constraint applies to the maximized state too.
 
 ## Edge snapping
 
-#### `win:edgesnapping() -> mode`
-#### `win:edgesnapping(mode)`
+#### `win:edgesnapping() -> mode` <br> `win:edgesnapping(mode)`
 
-Get/set edge snapping mode, which can be any combination of the words
-'app', 'other', 'screen', 'all' separated by spaces (eg. 'app screen').
+Get/set edge snapping mode, which is a string containing any combination
+of the words 'app', 'other', 'screen', 'all' separated by spaces
+(eg. 'app screen'):
 
-__NOTE:__ Edge snapping doesn't work on Linux. It is however already
-(poorly) implemented by some window managers (Unity) so all is not lost.
+  * 'app' - snap to app's windows
+  * 'other' - snap to other windows
+  * 'screen' - snap to screen edges
+  * 'all' - equivalent to 'app other screen'
+
+__NOTE:__ Edge snapping doesn't work on Linux because the `sizing` event
+doesn't fire there. It is however already (poorly) implemented by some
+window managers (eg. Unity) so all is not lost.
 
 #### `win:magnets(which) -> {r1, ...}`
 
-Event: get edge snapping rectangles (rectangles are tables with x, y, w, h fields).
+Event: get edge snapping rectangles (rectangles are tables with fields _x, y, w, h_).
 
 ## Z-Order
 
