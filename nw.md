@@ -20,7 +20,7 @@ notification icons, all text in utf8, and more.
 <div class=small>
 -------------------------------------------- -----------------------------------------------------------------------------
 __app object__
-[`nw:app() -> app`](nw_app)						the application object (singleton)
+`nw:app() -> app`										the global application object
 __app loop__
 `app:run()`												run the loop
 `app:stop()`											stop the loop
@@ -37,7 +37,7 @@ __timers__
 `app:runafter(seconds, func)`						run a function on a timer once
 `app:run(func)`										(star the loop and) run a function on a zero-second timer once
 `app:sleep(seconds)`									sleep without blocking inside a function run with app:run()
-__window list__
+__window tracking__
 `app:windows() -> {win1, ...}`					all windows in creation order
 `app:window_count([filter]) -> n`				number of windows
 `app:window_created(win)`							event: a window was created
@@ -57,6 +57,7 @@ __window creation__
 *`maximized`*											start maximized (false)
 *`enabled`*												start enabled (true)
 *__frame__*
+*`frame`*												frame type: 'normal', 'none', 'toolbox' ('normal')
 *`title`* 												initial title ('')
 *`transparent`*										make it transparent (false)
 *__behavior__*
@@ -346,17 +347,15 @@ and [milestones](https://github.com/luapower/nw/milestones).
 
 ## Backends
 
-API            Library     Platform                Most tested on
--------------- ----------- ----------------------- -------------------------
-Windows API    [winapi]    Windows XP/2000+        Windows 7 x64
-Cocoa          [objc]      OSX 10.7+               OSX 10.9
-Xlib           [xlib]      Ubuntu 10.04+ (Unity)   Ubuntu 10.04 (Unity)
+API               Library     Min. platform           Most tested platform
+----------------- ----------- ----------------------- ------------------------
+WinAPI            [winapi]    Windows XP/2000+        Windows 7 x64
+Cocoa             [objc]      OSX 10.7+               OSX 10.9
+Xlib              [xlib]      Ubuntu/Unity 10.04+     Ubuntu/Unity 10.04 x64
 
-## API Documentation
+## The app object
 
-### The app object
-
-The app object is the API from which everything else gets created.
+The global app object is the API from which everything else gets created.
 
 #### `nw:app() -> app`
 
@@ -365,7 +364,7 @@ Get the global application object.
 This calls `nw:init()` which initializes the library with the default
 backend for the current platform.
 
-### The app loop
+## The app loop
 
 #### `app:run()`
 
@@ -383,7 +382,7 @@ Calling stop() when the loop is not running does nothing.
 
 Check if the loop is running.
 
-### Quitting
+## Quitting
 
 #### `app:quit()`
 
@@ -417,7 +416,7 @@ Get/set the window autoquit flag (default: false).
 When this flag is true, the app quits when the window is closed.
 This flag can be used on the app's main window if there is such a thing.
 
-### Timers
+## Timers
 
 #### `app:runevery(seconds, func)`
 
@@ -430,7 +429,7 @@ Run a function on a timer once.
 
 #### `app:run(func)`
 
-Run a function on a zero-second timer once, inside a coroutine.
+Run a function on a zero-second timer, once, inside a coroutine.
 This allows calling `app:sleep()` inside the function (see below).
 
 If the loop is not already started, it is started and then stopped after
@@ -443,12 +442,12 @@ While the function is sleeping, other timers and events continue
 to be processed.
 
 This is poor man's multi-threading based on timers and coroutines.
-It can be used to create complex temporal sequences (eg. animation)
-withoug having to chain timer callbacks.
+It can be used to create complex temporal sequences withoug having to chain
+timer callbacks.
 
 Calling sleep() outside an app:run() function raises an error.
 
-### Window list
+## Window tracking
 
 #### `app:windows() -> {win1, ...}`
 
@@ -456,8 +455,9 @@ Get all windows in creation order.
 
 #### `app:window_count([filter]) -> n`
 
-Get the number of windows (dead or alive). `filter` can be 'root'
-which returns the number of non-dead non-parented windows.
+Get the number of windows (dead or alive) without wasting a table.
+`filter` can be 'root' which returns the number of non-dead
+non-parented windows.
 
 #### `app:window_created(win)`
 
@@ -469,17 +469,17 @@ Fired right after the window's `was_created` event is fired.
 Event: a window was closed.
 Fired right after the window's `was_closed` event is fired.
 
-### Window creation
+## Creating windows
 
 #### `app:window(t) -> win`
 
 Create a window (fields of _t_ below):
 
 * __position__
-	* `x`, `y`		 				- frame position (nil, nil)
-	* `w`, `h`						- frame size (this or cw,ch required)
-	* `cx`, `cy`					- client area position (nil, nil)
-	* `cw`, `ch`					- client area size (this or w,h required)
+	* `x`, `y`		 				- frame position
+	* `w`, `h`						- frame size
+	* `cx`, `cy`					- client area position
+	* `cw`, `ch`					- client area size
 	* `min_cw`, `min_ch`			- min client rect size
 	* `max_cw`, `max_ch`			- max client rect size
 * __state__
@@ -489,10 +489,10 @@ Create a window (fields of _t_ below):
 	* `enabled`						- start enabled (true)
 * __frame__
    * `frame`                  - frame type: 'normal', 'none', 'toolbox' ('normal')
-	* `title` 						- initial title ('')
-	* `transparent`				- make it transparent (false)
+	* `title` 						- title ('')
+	* `transparent`				- transparent window (false)
 * __behavior__
-	* `parent`						- parent window (nil)
+	* `parent`						- parent window
 	* `sticky`						- moves with parent (false)
 	* `topmost`						- stays on top of other windows (false)
 	* `minimizable`				- allow minimization (true)
@@ -500,13 +500,79 @@ Create a window (fields of _t_ below):
 	* `closeable`					- allow closing (true)
 	* `resizeable`					- allow resizing (true)
 	* `fullscreenable`			- allow fullscreen mode (true)
-	* `activable`					- allow activation (true); only for 'toolbox' frames
+	* `activable`					- allow activation (true); only for 'toolbox' frame
 	* `autoquit`					- quit the app on closing (false)
 	* `edgesnapping`				- magnetized edges ('screen')
 * __menu__
-	* `menu`							- menu bar
+	* `menu`							- the menu bar
 
-### Closing
+### Initial size and position
+
+You can pass any combination of `x`, `y`, `w`, `h`, `cx`, `cy`, `cw`, `ch`
+as long as you pass the width and the height in one way or another.
+The position is optional and it defaults to OS-driven cascading.
+
+### Initial state
+
+A window can be created in any combination of `visible`, `minimized`
+and `maximized` states. If created hidden, calling `win:show()`
+will respect its initial `minimized` and `maximized` flags
+as well as its initial size and position.
+
+## Child windows
+
+Child windows are top-level windows that stay on top of their parent
+and don't appear in the taskbar.
+
+The following defaults are different for child windows:
+
+  * minimizable: false
+  * maximizable: false
+  * fullscreenable: false
+  * edgesnapping: 'parent siblings screen'
+  * sticky: true
+
+Child windows can't be minimizable because they don't appear in the taskbar.
+
+__NOTE:__ The `sticky` flag [doesn't work](https://github.com/luapower/nw/issues/27) on Linux.
+
+#### `win:parent() -> win|nil`
+
+Get the window's parent (read-only).
+
+#### `win:children() -> {win1, ...}`
+
+Get the window's children (those whose parent() is this window).
+
+#### `win:sticky() -> t|f`
+
+Get the sticky flag (read-only).
+
+## Toolbox windows
+
+Toolbox windows show a thin title bar on Windows (they show a normal frame
+on OSX and Linux). They must be parented. They allow `activable = fase`.
+
+__NOTE:__ The `activable` flag [doesn't work](https://github.com/luapower/nw/issues/26) on Linux.
+
+## Transparent windows
+
+Transparent windows allow using the full alpha channel when drawing on them.
+They also come with some big limitations mostly from Windows:
+
+  * they can't be framed so you must pass `frame = 'none'`.
+  * they can't have views.
+  * you can't draw using OpenGL on them.
+
+#### `win:transparent() -> t|f`
+
+Get the transparent flag (read-only).
+
+#### `win:frame() -> frame`
+
+Get the frame type (read-only). Can be 'normal', 'none', or 'toolbox'.
+
+## Closing
 
 #### `win:close()`
 
@@ -531,7 +597,7 @@ is destroyed (`win:dead()` still returns true).
 
 Get the closeable flag (read-only).
 
-### App activation
+## App activation
 
 #### `app:active() -> t|f`
 
@@ -554,7 +620,7 @@ Event: the app was activated.
 
 Event: the app was deactivated.
 
-### Window activation
+## Window activation
 
 #### `app:active_window() -> win`
 
@@ -592,7 +658,7 @@ toolboxes that don't steal keyboard focus away from the main window when clicked
 
 __NOTE:__ This [does not work](https://github.com/luapower/nw/issues/26) in Linux.
 
-### App visibility (OSX only)
+## App visibility (OSX)
 
 #### `app:hidden() -> t|f`
 
@@ -610,7 +676,7 @@ Hide/unhide the app.
 
 Event: app was hidden/unhidden.
 
-### Window visibility
+## Window visibility
 
 #### `win:show()`
 
@@ -639,7 +705,7 @@ A minimized window is considered visible.
 
 Event: window was shown/hidden.
 
-### Minimization
+## Minimization
 
 #### `win:minimizable() -> t|f`
 
@@ -658,7 +724,7 @@ it is shown in minimized state (and the taskbar button is not activated).
 
 Event: window was minimized/unminimized.
 
-### Maximization
+## Maximization
 
 #### `win:maximizable() -> t|f`
 
@@ -680,7 +746,7 @@ If the window is already maximized it is not activated.
 
 Event: window was maximized/unmaximized.
 
-### Fullscreen mode
+## Fullscreen mode
 
 #### `win:fullscreenable() -> t|f`
 
@@ -707,7 +773,7 @@ Event: entered fullscreen mode.
 
 Event: exited fullscreen mode.
 
-### Restoring
+## Restoring
 
 #### `win:restore()`
 
@@ -723,17 +789,28 @@ Show the window in normal state.
 
 The window is always activated even when it's already in normal mode.
 
-### State strings
+## State tracking
+
+State tracking is about getting and tracking the entire user-changeable
+state of a window (of or the app) as a whole.
 
 #### `win:state() -> state`
 
 Get the window's full state string, eg. 'visible maximized active'.
 
+#### `win:changed(old_state, new_state)`
+
+Event: window state has changed.
+
 #### `app:state() -> state`
 
 Get the app's full state string, eg. 'visible active'.
 
-### Enabled state
+#### `app:changed(old_state, new_state)`
+
+Event: app state has changed.
+
+## Enabled state
 
 #### `win:enabled(t|f)` <br> `win:enabled() -> t|f`
 
@@ -744,7 +821,7 @@ the child, and enable back the parent when closing the child.
 
 __NOTE:__ This [doesn't work](https://github.com/luapower/nw/issues/25) on Linux.
 
-### Client/screen conversion
+## Client/screen conversion
 
 #### `win:to_screen(x, y) -> x, y`
 
@@ -754,7 +831,7 @@ Convert a point from the window's client space to screen space.
 
 Convert a point from screen space to the window's client space.
 
-### Frame/client conversion
+## Frame/client conversion
 
 #### `app:client_to_frame(frame, has_menu, x, y, w, h) -> x, y, w, h`
 
@@ -770,7 +847,7 @@ frame type. If `has_menu` is true, then the window also has a menu.
 
 Get the frame extents for a certain frame type.
 
-### Size and position
+## Size and position
 
 #### `win:frame_rect() -> x, y, w, h`
 
@@ -815,7 +892,7 @@ Event: window was moved.
 
 Event: window was resized.
 
-### Size constraints
+## Size constraints
 
 #### `win:resizeable() -> t|f`
 
@@ -843,7 +920,7 @@ The window is resized if it was larger than this size.
 
 This constraint applies to the maximized state too.
 
-### Window edge snapping
+## Edge snapping
 
 #### `win:edgesnapping() -> mode`
 #### `win:edgesnapping(mode)`
@@ -858,7 +935,7 @@ __NOTE:__ Edge snapping doesn't work on Linux. It is however already
 
 Event: get edge snapping rectangles (rectangles are tables with x, y, w, h fields).
 
-### Window z-order
+## Z-Order
 
 #### `win:topmost() -> t|f` <br> `win:topmost(t|f)`
 
@@ -872,13 +949,13 @@ Raise above all windows/specific window.
 
 Lower below all windows/specific window.
 
-### Window title
+## Window title
 
 #### `win:title() -> title` <br> `win:title(title)`
 
 Get/set the window's title.
 
-### Displays
+## Displays
 
 In non-mirrored multi-monitor setups, the displays are mapped
 on a virtual surface, with the main display's top-left corner at (0, 0).
@@ -915,52 +992,13 @@ Event: displays changed.
 
 Get the display the window is currently on.
 
-### Cursors
+## Cursors
 
 #### `win:cursor() -> name` <br> `win:cursor(name)`
 
 Get/set the mouse cursor.
 
-### Frame flags
-
-#### `win:frame() -> frame`
-
-Get the window frame type (read-only). Can be 'normal', 'none', or 'toolbox'.
-
-#### `win:transparent() -> t|f`
-
-Get the transparent flag (read-only).
-
-### Child windows
-
-Child windows are top-level windows that stay on top of their parent
-and don't appear in the taskbar.
-
-The following defaults are different for child windows:
-
-  * minimizable: false
-  * maximizable: false
-  * fullscreenable: false
-  * edgesnapping: 'parent siblings screen'
-  * sticky: true
-
-Child windows can't be minimizable because they don't appear in the taskbar.
-
-__NOTE:__ The sticky flag [doesn't work](https://github.com/luapower/nw/issues/27) on Linux.
-
-#### `win:parent() -> win|nil`
-
-Get the window's parent (read-only).
-
-#### `win:children() -> {win1, ...}`
-
-Get the window's children (those whose parent() is this window).
-
-#### `win:sticky() -> t|f`
-
-Get the sticky flag (read-only).
-
-### Keyboard
+## Keyboard
 
 #### `app:key(query) -> t|f`
 
@@ -982,7 +1020,7 @@ Event: sent after each keydown, including repeats.
 
 Event: sent after keypress for displayable characters; char is utf-8.
 
-### Hi-DPI support
+## Hi-DPI support
 
 By default, windows contents are scaled by the OS on Hi-DPI screens,
 so they look blurry but they are readable even if the app is unaware
@@ -1014,7 +1052,7 @@ scaling factor and scale the UI accordingly.
 A window's display scaling factor changed or most likely the window
 was moved to a screen with a different scaling factor.
 
-### Views
+## Views
 
 Views allow partitioning a window's client area into multiple non-overlapping
 rectangle-shaped regions that can be rendered using different technologies.
@@ -1065,7 +1103,7 @@ Get/set the view's visibility.
 
 Get/set the view's position (in window's client space) and size.
 
-> The view rect is valid and can be changed while the view is hidden.
+The view rect is valid and can be changed while the view is hidden.
 
 #### `view:size() -> w, h` <br> `view:size(w, h)`
 
@@ -1095,7 +1133,7 @@ Event: view was moved.
 
 Event: view was resized.
 
-### Mouse
+## Mouse
 
 #### `win/view:mouse() -> t`
 
@@ -1168,7 +1206,7 @@ The delta represents the number of lines to scroll.
 The number of lines per scroll notch is the number that the user
 has set in the OS and it is queried on every wheel event.
 
-### Rendering
+## Rendering
 
 #### `win/view:repaint()`
 
@@ -1202,8 +1240,7 @@ event: bitmap needs freeing
 
 get an OpenGL API for the window
 
-
-### Menus
+## Menus
 
 #### `app:menu() -> menu`
 
@@ -1325,7 +1362,7 @@ get length (OSX)
 set length (OSX)
 
 
-### Window icon (Windows)
+## Window icon (Windows)
 
 #### `win:icon([which]) -> icon`
 
@@ -1344,7 +1381,7 @@ request icon redrawing
 event: icon needs redrawing
 
 
-### Dock icon (OSX)
+## Dock icon (OSX)
 
 #### `app:dockicon() -> icon`
 
@@ -1367,7 +1404,7 @@ event: icon needs redrawing
 event: bitmap needs to be freed
 
 
-### Events
+## Events
 
 #### `app/win/view:on(event, func)`
 
@@ -1382,14 +1419,13 @@ enable/disable events
 meta-event fired on every other event
 
 
-### Version checks
+## Version checks
 
 #### `app:ver(query) -> t|f`
 
-check OS _minimum_ version (eg. 'OSX 10.8')
+check OS _minimum_ version (eg. 'OSX 10.8' returns true on OSX 10.8 and beyond).
 
-
-### Extending
+## Extending
 
 #### `nw.backends -> {os -> module_name}`
 
@@ -1399,25 +1435,28 @@ default backend modules for each OS
 
 init with a specific backend (can be called only once)
 
-
-----
-
-## API Notes
-
-### Coordinate systems
+## Coordinate systems
 
   * window-relative positions are relative to the top-left corner of the window's client area.
   * screen-relative positions are relative to the top-left corner of the main screen.
 
-### State variables
+## State variables
 
 State variables are independent of each other, so a window can be maximized,
 maximized and hidden all at the same time. If such a window is shown, it will
 show minimized. If the user unminimizes it, it will restore to maximized state.
 
-### Common mistakes
+## Common mistakes
 
-#### Assuming that calls are blocking
+### Creating windows in visible state
+
+When creating windows the `visible` flag defaults to true, but you should
+really create windows with `visible = false`, set up all the event handlers
+on them and then call `win:show()`, otherwise you will not catch any events
+that trigger before you set up the event handlers (sometimes that includes
+the `repaint` event so you will be showing a non-painted window).
+
+### Assuming that calls are blocking
 
 The number one mistake you can make is to assume that all calls are blocking.
 It's very easy to make that mistake because some of them actually are blocking
@@ -1429,7 +1468,7 @@ an unspecified mess. So never, never mix queries with commands, i.e.
 never assume that when you perform some command the state of the window
 actually changed when the call returns.
 
-### Closing windows
+## Closing windows
 
 Closing a window destroys it by default. You can prevent that by returning false on the `closing` event.
 
@@ -1440,12 +1479,12 @@ function win:closing()
 end
 ~~~
 
-### Closing the app
+## Closing the app
 
 The `app:run()` call returns after the last window is destroyed. Because of that, `app:quit()`
 only has to close all windows, and it tries to do that in reverse-creation order.
 
-### Corner cases
+## Corner cases
 
   * calling any method on a closed window results in error, except for win:free() which does nothing.
   * calling app:run() while running is a no op.
