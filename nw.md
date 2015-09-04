@@ -1000,9 +1000,9 @@ Get the display which has the keyboard focus.
 
 Get the display's screen rectangle.
 
-#### `disp:client_rect() -> x, y, w, h` <br> `disp.cx, disp.cy, disp.cw, disp.ch`
+#### `disp:client_rect() -> cx, cy, cw, ch` <br> `disp.cx, disp.cy, disp.cw, disp.ch`
 
-Get the display's screen rectangle minus the taskbar.
+Get the display's desktop rectangle (screen minus any taskbars).
 
 #### `app:displays_changed()`
 
