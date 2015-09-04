@@ -347,11 +347,11 @@ and [milestones](https://github.com/luapower/nw/milestones).
 
 ## Backends
 
-API               Library     Min. platform           Most tested platform
------------------ ----------- ----------------------- ------------------------
-WinAPI            [winapi]    Windows XP/2000+        Windows 7 x64
-Cocoa             [objc]      OSX 10.7+               OSX 10.9
-Xlib              [xlib]      Ubuntu/Unity 10.04+     Ubuntu/Unity 10.04 x64
+API        Library     Min. platform           Most tested platform
+---------- ----------- ----------------------- ------------------------
+WinAPI     [winapi]    Windows XP/2000+        Windows 7 x64
+Cocoa      [objc]      OSX 10.7+               OSX 10.9
+Xlib       [xlib]      Ubuntu/Unity 10.04+     Ubuntu/Unity 10.04 x64
 
 ## The app object
 
@@ -393,11 +393,11 @@ Quitting is a multi-phase process:
 1. the `app:quitting()` event is fired. If it returns false, quitting is aborted.
 2. the `win:closing()` event is fired on all non-parented windows.
    If any of them returns false, quitting is aborted.
-3. `win:close(true)` is called on all windows. If new windows are created
-   during this process, quitting is aborted.
+3. `win:close(true)` is called on all windows (in reverse-creation order).
+   If new windows are created during this process, quitting is aborted.
 4. the app loop is stopped.
 
-Calling quit() when the loop is not running or if quitting
+Calling `quit()` when the loop is not running or while quitting
 is in progress does nothing.
 
 #### `app:autoquit(t|f)` <br> `app:autoquit() -> t|f`
@@ -521,20 +521,19 @@ as well as its initial size and position.
 
 ## Child windows
 
-Child windows are top-level windows that stay on top of their parent
-and don't appear in the taskbar.
+Child windows are top-level windows that stay on top of their parent,
+minimize along with their parent, and don't appear in the taskbar.
 
 The following defaults are different for child windows:
 
-  * minimizable: false
-  * maximizable: false
-  * fullscreenable: false
-  * edgesnapping: 'parent siblings screen'
-  * sticky: true
+  * `minimizable`: false
+  * `maximizable`: false
+  * `fullscreenable`: false
+  * `edgesnapping`: 'parent siblings screen'
+  * `sticky`: true
 
-Child windows can't be minimizable because they don't appear in the taskbar.
-
-__NOTE:__ The `sticky` flag [doesn't work](https://github.com/luapower/nw/issues/27) on Linux.
+Child windows can't be minimizable because they don't appear in the taskbar
+(they minimize when their parent is minimized).
 
 #### `win:parent() -> win|nil`
 
@@ -544,16 +543,21 @@ Get the window's parent (read-only).
 
 Get the window's children (those whose parent() is this window).
 
+### Sticky windows
+
+Sticky windows follow their parent when their parent is moved.
+
+__NOTE:__ Sticky windows [don't work](https://github.com/luapower/nw/issues/27) on Linux.
+
 #### `win:sticky() -> t|f`
 
 Get the sticky flag (read-only).
 
-## Toolbox windows
+### Toolbox windows
 
-Toolbox windows show a thin title bar on Windows (they show a normal frame
-on OSX and Linux). They must be parented. They allow `activable = fase`.
-
-__NOTE:__ The `activable` flag [doesn't work](https://github.com/luapower/nw/issues/26) on Linux.
+Toolbox windows (`frame = 'toolbox'`) show a thin title bar on Windows
+(they show a normal frame on OSX and Linux).
+They must be parented. They can be non-activable.
 
 ## Transparent windows
 
@@ -572,7 +576,7 @@ Get the transparent flag (read-only).
 
 Get the frame type (read-only). Can be 'normal', 'none', or 'toolbox'.
 
-## Closing
+## Window closing
 
 #### `win:close()`
 
@@ -591,7 +595,7 @@ Return false from the event handler to refuse.
 
 Event: The window was closed.
 Fired after all children are closed, but before the window itself
-is destroyed (`win:dead()` still returns true).
+is destroyed (`win:dead()` still returns false at this point).
 
 #### `win:closeable() -> t|f`
 
@@ -1478,11 +1482,6 @@ function win:closing()
 	return false --prevent destruction
 end
 ~~~
-
-## Closing the app
-
-The `app:run()` call returns after the last window is destroyed. Because of that, `app:quit()`
-only has to close all windows, and it tries to do that in reverse-creation order.
 
 ## Corner cases
 
