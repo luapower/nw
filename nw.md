@@ -1016,7 +1016,7 @@ Get the display the window is currently on.
 
 #### `win:cursor() -> name` <br> `win:cursor(name)`
 
-Get/set the mouse cursor. Name can be:
+Get/set the mouse cursor. The name can be:
 
   * 'arrow' (default)
   * 'text'
@@ -1034,7 +1034,11 @@ Get/set the mouse cursor. Name can be:
 
 #### `app:key(query) -> t|f`
 
-Get key pressed and toggle states. TODO
+Get key pressed and toggle states. The query can be one or more
+[key name][nw_keys] separated by spaces or the `+` sign
+(eg. 'alt+f3' or 'alt f3'). The key name can start with `^` in which
+case the toggle state of that key is queried (only the capslock, numlock
+and scrolllock keys maintain toggle states).
 
 #### `win:keydown(key)`
 
