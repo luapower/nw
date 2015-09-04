@@ -244,7 +244,7 @@ __rendering__
 `bmp:clear()`											fill the bitmap with zero bytes
 `bmp:cairo() -> cr`									get a cairo context on the bitmap
 `win/view:free_cairo()`								event: cairo context needs freeing
-`win/view:free_bitmap()`							event: bitmap needs freeing
+`win/view:free_bitmap(bmp)`						event: bitmap needs freeing
 `win/view:gl() -> gl`								get an OpenGL API for the window
 __menus__
 `app:menu() -> menu`									create a menu (or menu bar)
@@ -1235,7 +1235,7 @@ you must return `true` when the count is 3 to break the click chain,
 but you must not return anything when the count is 2,
 or you'll never get a count of 3.
 
-__NOTE:__ The double-click time interval is the interval that the user
+The double-click time interval is the interval that the user
 has set in the OS and it is queried on every click.
 
 #### `win/view:wheel(delta, x, y)` <br> `win/view:hwheel(delta, x, y)`
@@ -1248,9 +1248,13 @@ has set in the OS and it is queried on every wheel event.
 
 ## Rendering
 
+Drawing on a window or view must be done inside the `repaint` event.
+To force a repaint, use `invalidate()`.
+
 #### `win/view:repaint()`
 
-Event: window needs redrawing.
+Event: window needs redrawing. Now it's a good time to request
+the window's bitmap or OpenGL context and use it to draw on the window.
 
 #### `win/view:invalidate()`
 
@@ -1258,11 +1262,15 @@ Request window redrawing.
 
 #### `win/view:bitmap() -> bmp`
 
-Get a bgra8 [bitmap] object to draw on.
+Get a bgra8 [bitmap] object to draw on. The bitmap is freed when
+the window's client area changes size, so keeping a reference to it
+outside the `repaint` event is generally not useful.
+
+The alpha channel is not used unless this is a transparent window.
 
 #### `bmp:clear()`
 
-Fill the bitmap with zero bytes.
+Fill the bitmap with zeroes.
 
 #### `bmp:cairo() -> cr`
 
@@ -1270,37 +1278,33 @@ Get a cairo context on the bitmap.
 
 #### `win/view:free_cairo()`
 
-event: cairo context needs freeing
+Event: cairo context needs freeing.
 
-#### `win/view:free_bitmap()`
+#### `win/view:free_bitmap(bmp)`
 
-event: bitmap needs freeing
+Event: bitmap needs freeing.
 
 #### `win/view:gl() -> gl`
 
-get an OpenGL API for the window
+Get an OpenGL context/API to draw on the window or view.
 
 ## Menus
 
 #### `app:menu() -> menu`
 
-create a menu (or menu bar)
+Create a menu.
 
 #### `app:menubar() -> menu`
 
-get app's menu bar (OSX)
+Get app's menu bar (OSX)
 
 #### `win:menubar() -> menu`
 
-get window's menu bar (Windows, Linux)
+Get window's menu bar (Windows, Linux).
 
-#### `win/view:popup(menu, cx, cy)`
+#### `win/view:popup(menu, cx, cy)` <br> `menu:popup(win/view, cx, cy)`
 
-pop up a menu relative to a window or view
-
-#### `menu:popup(win/view, cx, cy)`
-
-pop up a menu relative to a window or view
+Pop up a menu at a point relative to a window or view.
 
 #### `menu:add(...)`
 
