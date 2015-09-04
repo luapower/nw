@@ -1320,10 +1320,12 @@ Pop up a menu at a point relative to a window or view.
 
 Add/set a menu item. The options are:
 
-  * `action` - can be a function or another menu to be used as a submenu.
-  * `text` - the text to display; it can be the empty string (the default)
-  which means that the menu item is a separator.
-  * `submenu` - a submenu (same as when `action` is a submenu).
+  * `action` - can be a function or another menu to be used as a submenu
+  * `text` - the text to display
+    * `'&'` before a letter creates an access key
+	 * `'\t` followed by a key combination creates a shortcut key (eg. `'&Close\tAlt+F4'`)
+    * the empty string (the default) creates a separator
+  * `submenu` - a submenu (same as when `action` is a submenu)
   * `enabled` - enabled state (true)
   * `checked` - checked state (false)
 
