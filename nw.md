@@ -1147,24 +1147,19 @@ Get/set the view's size.
 Get/set the anchors: they can be any combination of 'ltrb' characters
 representing left, top, right and bottom anchors respectively.
 
-Anchors are a simple but very powerful way of doing stitched layouting.
-This is how they work: there's four possible anchors, one for each side
-of a view. Setting an anchor on one side fixates the distance between
-that side and the same side of the window the view is on, so that when
-the window is moved/resized, the view is also moved/resized in order
-to preserve the initial distance to that side of the window.
+Anchors are a simple but very effective way of doing stitched layouting.
+This is how they work: there's four possible anchors which you can set,
+one for each side of the view. Setting an anchor on one side fixates
+the distance between that side and the same side of the window
+the view is on, so that when the window is moved/resized, the view
+is also moved/resized in order to preserve the initial distance
+to that side of the window.
 
 #### `view:rect_changed(x, y, w, h)`
-
-Event: view's size and/or position changed.
-
 #### `view:was_moved(x, y)`
-
-Event: view was moved.
-
 #### `view:was_resized(w, h)`
 
-Event: view was resized.
+Event: view's size and/or position changed.
 
 ## Mouse
 
