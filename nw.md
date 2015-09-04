@@ -1322,8 +1322,8 @@ Add/set a menu item. The options are:
 
 * `action` - can be a function or another menu to be used as a submenu
 * `text` - the text to display:
-	* `&` before a letter creates an access key
-	* `\t` followed by a key combination creates a shortcut key
+	* `&` before a letter creates an _access key_
+	* `\t` followed by a key combination creates a _shortcut key_
 	* the empty string (the default) creates a separator
 	* eg. `'&Close\tAlt+F4'` shows as '<u>C</u>lose Alt+F4' and activates on `Alt+C` and on `Alt+F4`
 * `submenu` - a submenu (same as when `action` is a submenu)
@@ -1382,7 +1382,7 @@ Get the window's icon. The `which` arg can be: 'big' (default), 'small'.
 
 Get the app's dock icon.
 
-### Notification icons
+### Notification icons (Windows, OSX)
 
 #### `app:notifyicon(t) -> icon`
 
