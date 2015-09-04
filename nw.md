@@ -661,9 +661,9 @@ When the app is inactive, this returns false for all windows.
 #### `win:activate()`
 
 Activate the window. If the app is inactive, this does not activate the app.
-Instead it only marks this window to be activated when the app becomes active.
-If you want to force the window to become active, call `app:activate()`
-after calling this function (very rude).
+Instead it only marks the window to be activated when the app becomes active.
+If you want to alert the user that it should pay attention to the window,
+call `app:activate()` after calling this function.
 
 #### `win:was_activated()`
 
@@ -677,20 +677,16 @@ Event: window was deactivated.
 
 Get the activable flag (read-only; only for windows with 'toolbox' frame).
 
-Toolbox windows can be made non-activable. It is sometimes useful to have
+Only toolbox windows can be made non-activable. It is sometimes useful to have
 toolboxes that don't steal keyboard focus away from the main window when clicked.
 
-__NOTE:__ This [does not work](https://github.com/luapower/nw/issues/26) in Linux.
+__NOTE:__ This [doesn't work](https://github.com/luapower/nw/issues/26) in Linux.
 
 ## App visibility (OSX)
 
-#### `app:hidden() -> t|f`
+#### `app:hidden() -> t|f` <br> `app:hidden(t|f)`
 
-Check if the app is hidden.
-
-#### `app:hidden(t|f)`
-
-Show or hide the app.
+Get/set app visibility.
 
 #### `app:hide()` <br> `app:unhide()`
 
@@ -705,13 +701,13 @@ Event: app was hidden/unhidden.
 #### `win:show()`
 
 Show the window in its previous state (which can include any combination
-of minimized, maximized, and fullscreen states).
+of minimized, maximized, and fullscreen state flags).
 
 When a hidden window is shown it is also activated, except if it was
 previously minimized, in which case it is shown in minimized state
-without activating.
+without being activated.
 
-Calling show() on a visible (that includes minimized) window does nothing.
+Calling show() on a visible (which includes minimized) window does nothing.
 
 #### `win:hide()`
 
