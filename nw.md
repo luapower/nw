@@ -1197,31 +1197,45 @@ Event: a mouse button was depressed.
 
 Event: a mouse button was clicked (fires immediately after mousedown).
 
-#### Repeated clicks
+### Repeated clicks
+
+#### TL;DR
+
+~~~{.lua}
+function win:click(button, count, x, y)
+	if count == 2 then     --double click
+		...
+	elseif count == 3 then --triple click
+		...
+		return true         --triple click is as high as we go in this app
+	end
+end
+~~~
+
+#### Explanation
 
 When the user clicks the mouse repeatedly, with a small enough interval
 between clicks and over the same target, a counter is incremented.
 When the interval between two clicks is larger than the threshold
 or the mouse is moved too far away from the initial target,
 the counter is reset (i.e. the click-chain is interrupted).
-Returning true on the `click` event also resets the counter
-(i.e. interrupts the click chain).
+Returning `true` on the `click` event also resets the counter.
 
 This allows processing of double-clicks, triple-clicks, or multi-clicks
 by checking the `count` argument on the `click` event. If your app
 doesn't need to process double-clicks or multi-clicks, you can just ignore
-the `count` argument. If it does, you must return true after processing
-the multi-click event so that the counter is reset.
+the `count` argument. If it does, you must return `true` after processing
+the event with the highest count so that the counter is reset.
 
 For instance, if your app supports double-click over some target,
-you must return true when count is 2, otherwise you might get a count of 3
+you must return `true` when count is 2, otherwise you might get a count of 3
 on the next click sometimes, instead of 1 as expected. If your app
 supports both double-click and triple-click over a target,
-you must return true when the count is 3 to break the click chain,
+you must return `true` when the count is 3 to break the click chain,
 but you must not return anything when the count is 2,
 or you'll never get a count of 3.
 
-The double-click time interval is the interval that the user
+__NOTE:__ The double-click time interval is the interval that the user
 has set in the OS and it is queried on every click.
 
 #### `win/view:wheel(delta, x, y)` <br> `win/view:hwheel(delta, x, y)`
