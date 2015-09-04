@@ -1035,10 +1035,10 @@ Get/set the mouse cursor. The name can be:
 #### `app:key(query) -> t|f`
 
 Get key pressed and toggle states. The query can be one or more
-[key names][nw_keys] separated by spaces (or by `+` signs),
-eg. 'alt+f3' or 'alt f3'. The key name can start with `^` in which
-case the toggle state of that key is queried (only the capslock, numlock
-and scrolllock keys maintain toggle states).
+[key names][nw_keys] separated by spaces or by `+` eg. 'alt+f3' or 'alt f3'.
+The key name can start with `^` in which case the toggle state of that key
+is queried (only the capslock, numlock and scrolllock keys maintain
+toggle states).
 
 #### `win:keydown(key)`
 
