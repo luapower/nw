@@ -301,7 +301,7 @@ __extending__
 </div>
 
 
-## Quick Example
+## Example
 
 ~~~{.lua}
 local nw = require'nw'
