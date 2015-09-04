@@ -584,9 +584,10 @@ function win:closing()
 end
 ~~~
 
-#### `win:close()`
+#### `win:close([force])`
 
 Close the window and destroy it. Children are closed first.
+The `force` arg allows closing the window without firing the `closing` event.
 
 #### `win:dead() -> t|f`
 
@@ -613,14 +614,27 @@ Get the closeable flag (read-only).
 
 Check if the app is active.
 
-#### `app:activate()`
+#### `app:activate([mode])`
 
-Activate the app, which implies activating the last window that was active
+Activate the app, which activates the last window that was active
 before the app got deactivated.
 
-On Windows, this only flashes the window on the taskbar instead of popping
-it up in user's face. OSX and Linux don't have this feature, so calling
-activate() on these platforms is very, very rude.
+The `mode` arg can be:
+
+  * 'alert' (default; Windows and OSX only; on Linux it does nothing)
+  * 'force' (OSX and Linux only; on Windows it's the same as 'alert')
+  * 'info'  (OSX only; on Windows it's the same as 'alert'; on Linux it does nothing)
+
+The 'alert' mode: on Windows, this flashes the window on the taskbar until
+the user activates the window. On OSX it bounces the dock icon until the
+user activates the app. On Linux it does nothing.
+
+The 'force' mode: on Windows this is the same as the 'alert' mode.
+On OSX and Linux it pops up the window in the user's face
+(very rude, don't do it).
+
+The 'info' mode: this special mode allows bouncing up the dock icon
+on OSX only once. On other platforms it's the same as the default 'alert' mode.
 
 #### `app:was_activated()`
 

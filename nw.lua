@@ -302,7 +302,7 @@ function app:_forcequit()
 	for i = #t, 1, -1 do
 		local win = t[i]
 		if not win:dead() and not win:parent() then
-			win:close(true)
+			win:close'force'
 		end
 	end
 
