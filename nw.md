@@ -1155,9 +1155,7 @@ the view is on, so that when the window is moved/resized, the view
 is also moved/resized in order to preserve the initial distance
 to that side of the window.
 
-#### `view:rect_changed(x, y, w, h)`
-#### `view:was_moved(x, y)`
-#### `view:was_resized(w, h)`
+#### `view:rect_changed(x, y, w, h)` <br> `view:was_moved(x, y)` <br> `view:was_resized(w, h)`
 
 Event: view's size and/or position changed.
 
