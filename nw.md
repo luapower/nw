@@ -43,7 +43,7 @@ __window tracking__
 `app:window_created(win)`							event: a window was created
 `app:window_closed(win)`							event: a window was closed
 __window creation__
-`app:window(t) -> win`								create a window (fields of _t_ below)
+`app:window(t) -> win`								create a window (fields of _`t`_ below)
 *__position__*
 *`x`, `y`*		 										frame position (nil, nil)
 *`w`, `h`*												frame size (this or cw,ch required)
@@ -208,7 +208,7 @@ __hi-dpi support__
 __views__
 `win:views() -> {view1, ...}`						list views
 `win:view_count() -> n`								number of views
-`win:view(t) -> view`								create a view (fields of _t_ below)
+`win:view(t) -> view`								create a view (fields of _`t`_ below)
 *`x`, `y`, `w`, `h`*									view's position (in window's client space) and size
 *`visible`*												start visible (true)
 *`anchors`*												resizing anchors ('lt'); can be 'ltrb'
@@ -473,7 +473,7 @@ Fired right after the window's `was_closed` event is fired.
 
 #### `app:window(t) -> win`
 
-Create a window (fields of _t_ below):
+Create a window (fields of _`t`_ below):
 
 * __position__
 	* `x`, `y`		 				- frame position
@@ -1093,7 +1093,7 @@ Get the number of views without wasting a table.
 
 #### `win:view(t) -> view`
 
-Create a view (fields of _t_ below):
+Create a view (fields of _`t`_ below):
 
 * `x`, `y`, `w`, `h`	- view's position (in window's client space) and size
 * `visible`				- start visible (default: true)
