@@ -711,11 +711,15 @@ Hide the window from the screen and from the taskbar, preserving its full state.
 
 Calling hide() on a hidden window does nothing.
 
-#### `win:visible() -> t|f` <br> `win:visible(t|f)`
+#### `win:visible() -> t|f`
 
-Get/set window visibility.
+Get window visibility.
 
-A minimized window is considered visible.
+__NOTE:__ A minimized window is considered visible.
+
+#### `win:visible(t|f)`
+
+Calls `show()` and `hide()` to change the window's visibility.
 
 #### `win:was_shown()` <br> `win:was_hidden()`
 
