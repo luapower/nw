@@ -783,13 +783,9 @@ or minimized, it is shown in fullscreen mode and activated.
 
 If the window is already in the desired mode it is not activated.
 
-#### `win:entered_fullscreen()`
+#### `win:entered_fullscreen()` <br> `win:exited_fullscreen()`
 
-Event: entered fullscreen mode.
-
-#### `win:exited_fullscreen()`
-
-Event: exited fullscreen mode.
+Event: entered/exited fullscreen mode.
 
 ## Restoring
 
