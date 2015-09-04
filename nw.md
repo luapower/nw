@@ -1095,11 +1095,11 @@ was moved to a screen with a different scaling factor.
 
 Views allow partitioning a window's client area into multiple non-overlapping
 rectangle-shaped regions that can be rendered using different technologies.
-In particular, you can use OpenGL on some rectangles, while using bitmaps
+In particular, you can use OpenGL on some regions, while using bitmaps
 (and thus cairo) on others. This gives a simple path for drawing
 an antialiased 2D UI around a 3D scene as an alternative to drawing
-on textures that stretch over orto-projected quads. Mouse events work
-the same on views as they do on windows (note: the window doesn't receive
+on the textures of orto-projected quads. Mouse events work the same
+on views as they do on windows (note: the window doesn't receive
 mouse events while the mouse is over a view).
 
 #### `win:views() -> {view1, ...}`
@@ -1126,17 +1126,11 @@ Destroy the view.
 
 Check if the view was destroyed.
 
-#### `view:show()`
-
-Show the view.
-
-#### `view:hide()`
-
-Hide the view. The view's position is preserved (anchors keep working).
-
-#### `view:visible() -> t|f` <br> `view:visible(t|f)`
+#### `view:visible() -> t|f` <br> `view:visible(t|f)` <br> `view:show()` <br> `view:hide()`
 
 Get/set the view's visibility.
+
+The position and size of the view are preserved while hidden (anchors keep working).
 
 #### `view:rect() -> x, y, w, h` <br> `view:rect(x, y, w, h)`
 
