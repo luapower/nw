@@ -1037,8 +1037,9 @@ Get/set the mouse cursor. The name can be:
 Get key pressed and toggle states. The query can be one or more
 [key names][nw_keys] separated by spaces or by `+` eg. 'alt+f3' or 'alt f3'.
 The key name can start with `^` in which case the toggle state of that key
-is queried eg. '^capslock' returns the toggle state of the caps lock key.
-(only the capslock, numlock and scrolllock keys have a toggle state).
+is queried instead eg. '^capslock' returns the toggle state of the
+caps lock key while 'capslock' returns its pressed state.
+(only the capslock, numlock and scrolllock keys have toggle states).
 
 #### `win:keydown(key)`
 
