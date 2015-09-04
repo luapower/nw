@@ -512,12 +512,19 @@ You can pass any combination of `x`, `y`, `w`, `h`, `cx`, `cy`, `cw`, `ch`
 as long as you pass the width and the height in one way or another.
 The position is optional and it defaults to OS-driven cascading.
 
-### Initial state
+### The window state
 
-A window can be created in any combination of `visible`, `minimized`
-and `maximized` states. If created hidden, calling `win:show()`
-will show the window respecting the `minimized` and `maximized`
-flags.
+The window state is the combination of multiple flags (`minimized`,
+`maximized`, `fullscreen`, `visible`, `active`) plus its position
+and size in normal state (the `normal_rect`).
+
+State flags are independent of each other, so they can be in almost
+any combination at the same time. For example, a window which starts
+with `{visible = false, minimized = true, maximized = true}`
+is initially hidden. If later made visible with `win:show()`,
+it will show minimized. If the user then unminimizes it, it will restore
+to maximized state. If the user unmaximizes it, it will restore to its
+initial position and size.
 
 ## Child windows
 
@@ -1248,13 +1255,15 @@ has set in the OS and it is queried on every wheel event.
 
 ## Rendering
 
-Drawing on a window or view must be done inside the `repaint` event.
-To force a repaint, use `invalidate()`.
+Drawing on a window or view must be done inside the `repaint` event
+by requesting the window's bitmap or OpenGL context and drawing on it.
+The OS fires `repaint` whenever it loses (part of) the contents
+of the window. To force a repaint anytime, use `invalidate()`.
 
 #### `win/view:repaint()`
 
-Event: window needs redrawing. Now it's a good time to request
-the window's bitmap or OpenGL context and use it to draw on the window.
+Event: window needs redrawing. To redraw the window, simply request
+the window's bitmap or OpenGL context and draw using that.
 
 #### `win/view:invalidate()`
 
@@ -1274,15 +1283,15 @@ Fill the bitmap with zeroes.
 
 #### `bmp:cairo() -> cr`
 
-Get a cairo context on the bitmap.
+Get a [cairo] context on the bitmap. The context dies with the bitmap.
 
-#### `win/view:free_cairo()`
+#### `win/view:free_cairo(cr)`
 
-Event: cairo context needs freeing.
+Event: cairo context needs to be freed.
 
 #### `win/view:free_bitmap(bmp)`
 
-Event: bitmap needs freeing.
+Event: bitmap needs to be freed.
 
 #### `win/view:gl() -> gl`
 
@@ -1296,199 +1305,159 @@ Create a menu.
 
 #### `app:menubar() -> menu`
 
-Get app's menu bar (OSX)
+Get the app's menu bar (OSX)
 
 #### `win:menubar() -> menu`
 
-Get window's menu bar (Windows, Linux).
+Get the window's menu bar (Windows, Linux). Create one if not already.
 
 #### `win/view:popup(menu, cx, cy)` <br> `menu:popup(win/view, cx, cy)`
 
 Pop up a menu at a point relative to a window or view.
 
-#### `menu:add(...)`
+#### `menu:add([index, ]text, [action], [options])` <br> `menu:set(index, text, [action], [options])` <br> `menu:add{index =, text =, action =, optionX =}` <br> `menu:set{index =, text =, action =, optionX =}`
 
-
-
-#### `menu:set(...)`
-
-
+Add/set a menu item. The `action` can be a function or another menu.
 
 #### `menu:remove(index)`
 
+Remove menu item at index.
 
+#### `menu:get(index) -> item` <br> `menu:get(index, prop) -> val`
 
-#### `menu:get(index[, prop])`
-
-
+Get the menu item (or the value of one of its properties) at index.
 
 #### `menu:item_count() -> n`
 
-
+Get the number of items in the menu.
 
 #### `menu:items([prop]) -> {item1, ...}`
 
+Get the menu items.
 
+#### `menu:checked(index) -> t|f` <br> `menu:checked(index, t|f)`
 
-#### `menu:checked(index) -> t|f`
-
-
-
-#### `menu:checked(index, t|f)`
-
-
-
+Get/set the checked state of a menu item.
 
 ### Notification icons
 
 #### `app:notifyicon(t) -> icon`
 
-
+Create a notification icon.
 
 #### `icon:free()`
 
-
+Free the icon.
 
 #### `app:notifyicon_count() -> n`
 
-
+Get the number of notification icons.
 
 #### `app:notifyicons() -> {icon1, ...}`
 
-list notification icons
+Get all the notification icons.
 
 #### `icon:bitmap() -> bmp`
 
-get a bgra8 [bitmap] object
+Get a bgra8 [bitmap] that can be used to draw on the icon.
 
 #### `icon:invalidate()`
 
-request bitmap redrawing
+Request redrawing of the icon.
 
 #### `icon:repaint()`
 
-event: bitmap needs redrawing
+Event: icon needs redrawing.
 
 #### `icon:free_bitmap(bmp)`
 
-event: bitmap needs freeing
+Event: icon bitmap needs to be freed.
 
-#### `icon:tooltip() -> s`
+#### `icon:tooltip() -> s` <br> `icon:tooltip(s)`
 
-get tooltip
+Get/set the icon's tooltip.
 
-#### `icon:tooltip(s)`
+#### `icon:menu() -> menu` <br> `icon:menu(menu)`
 
-set tooltip
+Get/set a menu for the icon.
 
-#### `icon:menu() -> menu`
+#### `icon:text() -> s` <br> `icon:text(s)`
 
-get menu
+Get/set the status bar item's text (OSX only).
 
-#### `icon:menu(menu)`
+#### `icon:length() -> n` <br> `icon:length(n)`
 
-set menu
+Get/set the status bar item's length (OSX only).
 
-#### `icon:text() -> s`
+## Icons
 
-get text (OSX)
-
-#### `icon:text(s)`
-
-set text (OSX)
-
-#### `icon:length() -> n`
-
-get length (OSX)
-
-#### `icon:length(n)`
-
-set length (OSX)
-
-
-## Window icon (Windows)
+### Window icon (Windows)
 
 #### `win:icon([which]) -> icon`
 
-window's icon ('big'); which can be: 'big', 'small'
+Get the window's icon. The `which` arg can be: 'big' (default), 'small'.
 
-#### `icon:bitmap() -> bmp`
-
-icon's bitmap
-
-#### `icon:invalidate()`
-
-request icon redrawing
-
-#### `icon:repaint()`
-
-event: icon needs redrawing
-
-
-## Dock icon (OSX)
+### Dock icon (OSX)
 
 #### `app:dockicon() -> icon`
 
+Get the app's dock icon.
 
+### Icon API
 
 #### `icon:bitmap() -> bmp`
 
-icon's bitmap
+Get the icon's bitmap.
 
 #### `icon:invalidate()`
 
-request icon redrawing
+Request icon redrawing.
 
 #### `icon:repaint()`
 
-event: icon needs redrawing
+Event: icon needs redrawing.
 
 #### `icon:free_bitmap(bmp)`
 
-event: bitmap needs to be freed
-
+Event: the icon's bitmap needs to be freed.
 
 ## Events
 
 #### `app/win/view:on(event, func)`
 
-call _func_ when _event_ happens
+Call `func` when `event` happens. Multiple functions can be attached
+to the same event.
 
 #### `app/win/view:events(enabled) -> prev_state`
 
-enable/disable events
+Enable/disable events.
 
 #### `app/win/view:event(name, args...)`
 
-meta-event fired on every other event
-
+This is a meta-event fired on every other event.
+The name and args of the event are passed in.
 
 ## Version checks
 
 #### `app:ver(query) -> t|f`
 
-check OS _minimum_ version (eg. 'OSX 10.8' returns true on OSX 10.8 and beyond).
+Check the OS _minimum_ version, eg. `app:ver'OSX 10.8'` returns `true`
+on OSX 10.8 and beyond.
 
 ## Extending
 
 #### `nw.backends -> {os -> module_name}`
 
-default backend modules for each OS
+Default backend modules for each OS.
 
 #### `nw:init([backend_name])`
 
-init with a specific backend (can be called only once)
+Init `nw` with a specific backend (can be called only once).
 
 ## Coordinate systems
 
   * window-relative positions are relative to the top-left corner of the window's client area.
   * screen-relative positions are relative to the top-left corner of the main screen.
-
-## State variables
-
-State variables are independent of each other, so a window can be maximized,
-maximized and hidden all at the same time. If such a window is shown, it will
-show minimized. If the user unminimizes it, it will restore to maximized state.
 
 ## Common mistakes
 
