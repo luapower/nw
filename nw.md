@@ -1043,7 +1043,7 @@ caps lock key while 'capslock' returns its pressed state.
 
 #### `win:keydown(key)`
 
-Event: a key was pressed.
+Event: a key was pressed (not sent on repeat).
 
 #### `win:keyup(key)`
 
@@ -1051,19 +1051,21 @@ Event: a key was depressed.
 
 #### `win:keypress(key)`
 
-Event: sent after each keydown, including repeats.
+Event: sent after keydown and on key repeat.
 
-#### `win:keychar(char)`
+#### `win:keychar(s)`
 
-Event: sent after keypress for displayable characters; char is utf-8.
+Event: sent after keypress for displayable characters; _`s`_ is a utf-8
+string and can contain one or more code points.
 
 ## Hi-DPI support
 
 By default, windows contents are scaled by the OS on Hi-DPI screens,
 so they look blurry but they are readable even if the app is unaware
-of Hi-DPI. Making the app Hi-DPI-aware means disabling this automatic
-raster scaling of the OS and allowing the app to scale the UI itself
-to make it readable on Hi-DPI screens.
+that it is showing on a dense screen. Making the app Hi-DPI-aware means
+telling the OS to disable this automatic raster scaling and allow the
+app to scale the UI itself (but this time in vector space) in order
+to make it readable again on a dense screen.
 
 #### `app:autoscaling() -> t|f`
 
