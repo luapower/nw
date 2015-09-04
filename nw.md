@@ -1449,10 +1449,10 @@ For Windows you can use the following table:
 
 Windows							Version
 -------------------------- -----------
-Windows 10						10.0 / 6.2
-Windows Server 2016 TP		10.0 / 6.2
-Windows 8.1						6.3 / 6.2
-Windows Server 2012 R2		6.3 / 6.2
+Windows 10						10.0 (6.2)
+Windows Server 2016 TP		10.0 (6.2)
+Windows 8.1						6.3 (6.2)
+Windows Server 2012 R2		6.3 (6.2)
 Windows 8						6.2
 Windows Server 2012			6.2
 Windows 7						6.1
@@ -1466,7 +1466,7 @@ Windows XP						5.1
 Windows 2000					5.0
 
 __NOTE:__ Apps not manifested for Windows 8.1 or Windows 10
-will not get versions greated than 6.2 (the [luajit] package
+will report platforms greater than 6.2 as 6.2 (the [luajit] package
 comes with proper manifest files).
 
 ## Extending
