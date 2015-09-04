@@ -770,7 +770,7 @@ Event: window was maximized/unmaximized.
 
 Check if a window is allowed to go in fullscreen mode (read-only).
 This flag only affects OSX - the only platform which presents a fullscreen
-button on the title bar. Fullscreen mode can always be entered programatically.
+button on the title bar. Fullscreen mode can always be engaged programatically.
 
 #### `win:fullscreen() -> t|f`
 
