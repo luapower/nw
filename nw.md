@@ -680,13 +680,9 @@ Instead it only marks the window to be activated when the app becomes active.
 If you want to alert the user that it should pay attention to the window,
 call `app:activate()` after calling this function.
 
-#### `win:was_activated()`
+#### `win:was_activated()` <br> `win:was_deactivated()`
 
-Event: window was activated.
-
-#### `win:was_deactivated()`
-
-Event: window was deactivated.
+Event: window was activated/deactivated.
 
 #### `win:activable() -> t|f`
 
