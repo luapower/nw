@@ -682,10 +682,10 @@ Event: window was activated/deactivated.
 
 #### `win:activable() -> t|f`
 
-Get the activable flag (read-only; only for windows with 'toolbox' frame).
+Get the activable flag (read-only).
 
-Only toolbox windows can be made non-activable. It is sometimes useful to have
-toolboxes that don't steal keyboard focus away from the main window when clicked.
+Only toolbox windows can be made non-activable. This is useful for toolboxes
+that can be clicked inside without stealing keyboard focus away from the main window.
 
 __NOTE:__ This [doesn't work](https://github.com/luapower/nw/issues/26) in Linux.
 
