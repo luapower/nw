@@ -44,36 +44,36 @@ __window tracking__
 `app:window_closed(win)`							event: a window was closed
 __window creation__
 `app:window(t) -> win`								create a window (fields of _`t`_ below)
-*__position__*
-&nbsp; *`x`, `y`*		 								frame position
-&nbsp; *`w`, `h`*										frame size (this or cw,ch required)
-&nbsp; *`cx`, `cy`*									client area position
-&nbsp; *`cw`, `ch`*									client area size (this or w,h required)
-&nbsp; *`min_cw`, `min_ch`*						min client rect size
-&nbsp; *`max_cw`, `max_ch`*						max client rect size
-&nbsp; *__state__*
-&nbsp; *`visible`*									start visible (true)
-&nbsp; *`minimized`*									start minimized (false)
-&nbsp; *`maximized`*									start maximized (false)
-&nbsp; *`enabled`*									start enabled (true)
-&nbsp; *__frame__*
-&nbsp; *`frame`*										frame type: 'normal', 'none', 'toolbox' ('normal')
-&nbsp; *`title`* 										initial title ('')
-&nbsp; *`transparent`*								make it transparent (false)
-&nbsp; *__behavior__*
-&nbsp; *`parent`*										parent window (nil)
-&nbsp; *`sticky`*										moves with parent (false)
-&nbsp; *`topmost`*									stays on top of other windows (false)
-&nbsp; *`minimizable`*								allow minimization (true)
-&nbsp; *`maximizable`*								allow maximization (true)
-&nbsp; *`closeable`*									allow closing (true)
-&nbsp; *`resizeable`*								allow resizing (true)
-&nbsp; *`fullscreenable`*							allow fullscreen mode (true)
-&nbsp; *`activable`*									allow activation (true); only for 'toolbox' frames
-&nbsp; *`autoquit`*									quit the app on closing (false)
-&nbsp; *`edgesnapping`*								magnetized edges ('screen')
-&nbsp; *__menu__*
-&nbsp; *`menu`*										menu bar
+&nbsp;&nbsp; *__position__*
+&nbsp;&nbsp; *`x`, `y`*		 						frame position
+&nbsp;&nbsp; *`w`, `h`*								frame size (this or cw,ch required)
+&nbsp;&nbsp; *`cx`, `cy`*							client area position
+&nbsp;&nbsp; *`cw`, `ch`*							client area size (this or w,h required)
+&nbsp;&nbsp; *`min_cw`, `min_ch`*				min client rect size
+&nbsp;&nbsp; *`max_cw`, `max_ch`*				max client rect size
+&nbsp;&nbsp; *__state__*
+&nbsp;&nbsp; *`visible`*							start visible (true)
+&nbsp;&nbsp; *`minimized`*							start minimized (false)
+&nbsp;&nbsp; *`maximized`*							start maximized (false)
+&nbsp;&nbsp; *`enabled`*							start enabled (true)
+&nbsp;&nbsp; *__frame__*
+&nbsp;&nbsp; *`frame`*								frame type: 'normal', 'none', 'toolbox' ('normal')
+&nbsp;&nbsp; *`title`* 								initial title ('')
+&nbsp;&nbsp; *`transparent`*						make it transparent (false)
+&nbsp;&nbsp; *__behavior__*
+&nbsp;&nbsp; *`parent`*								parent window (nil)
+&nbsp;&nbsp; *`sticky`*								moves with parent (false)
+&nbsp;&nbsp; *`topmost`*							stays on top of other windows (false)
+&nbsp;&nbsp; *`minimizable`*						allow minimization (true)
+&nbsp;&nbsp; *`maximizable`*						allow maximization (true)
+&nbsp;&nbsp; *`closeable`*							allow closing (true)
+&nbsp;&nbsp; *`resizeable`*						allow resizing (true)
+&nbsp;&nbsp; *`fullscreenable`*					allow fullscreen mode (true)
+&nbsp;&nbsp; *`activable`*							allow activation (true); only for 'toolbox' frames
+&nbsp;&nbsp; *`autoquit`*							quit the app on closing (false)
+&nbsp;&nbsp; *`edgesnapping`*						magnetized edges ('screen')
+&nbsp;&nbsp; *__menu__*
+&nbsp;&nbsp; *`menu`*								menu bar
 __closing__
 `win:close([force])`									close the window and destroy it
 `win:dead() -> t|f`									check if the window was destroyed
