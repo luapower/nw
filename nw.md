@@ -651,13 +651,9 @@ On OSX and Linux it pops up the window in the user's face
 The 'info' mode: this special mode allows bouncing up the dock icon
 on OSX only once. On other platforms it's the same as the default 'alert' mode.
 
-#### `app:was_activated()`
+#### `app:was_activated()` <br> `app:was_deactivated()`
 
-Event: the app was activated.
-
-#### `app:was_deactivated()`
-
-Event: the app was deactivated.
+Event: the app was activated/deactivated.
 
 ## Window activation
 
