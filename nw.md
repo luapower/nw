@@ -27,11 +27,11 @@ __app loop__
 `app:running() -> t|f`								check if the loop is running
 __quitting__
 `app:quit()`											quit the app, i.e. close all windows and stop the loop
-`app:autoquit(t|f)`									flag: quit the app when the last window is closed
+`app:autoquit(t|f)`									quit the app when the last window is closed (true)
 `app:autoquit() -> t|f`								get app autoquit flag (true)
 `app:quitting() -> [false]`						event: quitting (return false to refuse)
-`win:autoquit(t|f)`									flag: quit the app when the window is closed
-`win:autoquit() -> t|f`								get window autoquit flag
+`win:autoquit(t|f)`									quit the app when the window is closed (false)
+`win:autoquit() -> t|f`								get window autoquit flag (false)
 __timers__
 `app:runevery(seconds, func)`						run a function on a timer (timer stops if func returns false)
 `app:runafter(seconds, func)`						run a function on a timer once
@@ -45,35 +45,35 @@ __window tracking__
 __window creation__
 `app:window(t) -> win`								create a window (fields of _`t`_ below)
 *__position__*
-*`x`, `y`*		 										frame position (nil, nil)
-*`w`, `h`*												frame size (this or cw,ch required)
-*`cx`, `cy`*											client area position (nil, nil)
-*`cw`, `ch`*											client area size (this or w,h required)
-*`min_cw`, `min_ch`*									min client rect size
-*`max_cw`, `max_ch`*									max client rect size
-*__state__*
-*`visible`*												start visible (true)
-*`minimized`*											start minimized (false)
-*`maximized`*											start maximized (false)
-*`enabled`*												start enabled (true)
-*__frame__*
-*`frame`*												frame type: 'normal', 'none', 'toolbox' ('normal')
-*`title`* 												initial title ('')
-*`transparent`*										make it transparent (false)
-*__behavior__*
-*`parent`*												parent window (nil)
-*`sticky`*												moves with parent (false)
-*`topmost`*												stays on top of other windows (false)
-*`minimizable`*										allow minimization (true)
-*`maximizable`*										allow maximization (true)
-*`closeable`*											allow closing (true)
-*`resizeable`*											allow resizing (true)
-*`fullscreenable`*									allow fullscreen mode (true)
-*`activable`*											allow activation (true); only for 'toolbox' frames
-*`autoquit`*											quit the app on closing (false)
-*`edgesnapping`*										magnetized edges ('screen')
-*__menu__*
-*`menu`*													menu bar
+&nbsp; *`x`, `y`*		 								frame position
+&nbsp; *`w`, `h`*										frame size (this or cw,ch required)
+&nbsp; *`cx`, `cy`*									client area position
+&nbsp; *`cw`, `ch`*									client area size (this or w,h required)
+&nbsp; *`min_cw`, `min_ch`*						min client rect size
+&nbsp; *`max_cw`, `max_ch`*						max client rect size
+&nbsp; *__state__*
+&nbsp; *`visible`*									start visible (true)
+&nbsp; *`minimized`*									start minimized (false)
+&nbsp; *`maximized`*									start maximized (false)
+&nbsp; *`enabled`*									start enabled (true)
+&nbsp; *__frame__*
+&nbsp; *`frame`*										frame type: 'normal', 'none', 'toolbox' ('normal')
+&nbsp; *`title`* 										initial title ('')
+&nbsp; *`transparent`*								make it transparent (false)
+&nbsp; *__behavior__*
+&nbsp; *`parent`*										parent window (nil)
+&nbsp; *`sticky`*										moves with parent (false)
+&nbsp; *`topmost`*									stays on top of other windows (false)
+&nbsp; *`minimizable`*								allow minimization (true)
+&nbsp; *`maximizable`*								allow maximization (true)
+&nbsp; *`closeable`*									allow closing (true)
+&nbsp; *`resizeable`*								allow resizing (true)
+&nbsp; *`fullscreenable`*							allow fullscreen mode (true)
+&nbsp; *`activable`*									allow activation (true); only for 'toolbox' frames
+&nbsp; *`autoquit`*									quit the app on closing (false)
+&nbsp; *`edgesnapping`*								magnetized edges ('screen')
+&nbsp; *__menu__*
+&nbsp; *`menu`*										menu bar
 __closing__
 `win:close([force])`									close the window and destroy it
 `win:dead() -> t|f`									check if the window was destroyed
