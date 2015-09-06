@@ -1435,30 +1435,37 @@ Get/set the status bar item's length (OSX only).
 
 ### `app:opendialog(t) -> path|{path1,...}|nil`
 
-Open a standard "open file" dialog. Fields of _`t`_:
+Open a standard "open file" dialog and wait for it to close. Fields of _`t`_:
 
   * `title` - dialog's title
-  * `filetypes` - supported file types
+  * `filetypes` - supported file extensions eg. `{'txt', 'jpg', ...}`
   * `multiselect` - allow multiple selection (false)
   * `initial_dir` - initial dir
 
+When `multiselect = true` the dialog returns a list of paths,
+otherwise it returns a path. If the user closes the dialog without
+choosing a file, it returns ni.
+
 ### `app:savedialog(t) -> path|nil`
-Open a standard "save file" dialog. Fields of _`t`_:
+
+Open a standard "save file" dialog and wait for it to close. Fields of _`t`_:
 
   * `title` dialog's title
-  * `filetypes` - supported file types
+  * `filetypes` - supported file extensions eg. `{'txt', 'jpg', ...}`
   * `filename` - default filename
   * `initial_dir` - initial dir
+
+If the user closes the dialog without choosing a file, it returns ni.
 
 ## Clipboard
 
 ### `app:getclipboard() -> {format1,...}`
 
-Get formats in clipboard.
+Get the formats currently in clipboard.
 
 ### `app:getclipboard(format) -> data`
 
-Get clipboard contents. The format can be:
+Get the clipboard contents in one of the available formats. The format can be:
 
   * 'text' - returns a string.
   * 'files' - returns `{path1, ...}`
@@ -1466,13 +1473,12 @@ Get clipboard contents. The format can be:
 
 ### `app:setclipboard(f|data[, format])`
 
-Clear or set the clipboard. Passing `false` clears it,
-otherwise `data` can be
+Clear or set the clipboard. Passing `false` clears it, otherwise `data` can be:
 
   * a string (assuming 'text' format).
-  * a list of strings (assuming 'files' format).
   * a bitmap (assuming 'bitmap' format).
   * a table `{format = ..., data = ...}`.
+  * a list of strings (for format: 'files').
 
 ## Drag & drop
 
