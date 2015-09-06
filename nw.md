@@ -1,4 +1,4 @@
-:---
+---
 tagline:   native windows
 platforms: mingw32, mingw64, osx32, osx64
 ---
