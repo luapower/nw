@@ -1,4 +1,4 @@
----
+:---
 tagline:   native windows
 platforms: mingw32, mingw64, osx32, osx64
 ---
@@ -186,8 +186,8 @@ __displays__
 `app:displays_changed()`							event: displays changed
 `win:display() -> disp`								the display the window is on
 __cursors__
-`win:cursor() -> name`								get the mouse cursor
-`win:cursor(name)`									set the mouse cursor
+`win:cursor() -> name, t|f`						get the mouse cursor and visibility
+`win:cursor(name|t|f)`								set the mouse cursor or visibility
 __frame flags__
 `win:frame() -> frame`								window's frame: 'normal', 'none', 'toolbox'
 `win:transparent() -> t|f`							transparent flag
@@ -289,6 +289,24 @@ __dock icon (OSX)__
 `icon:invalidate()`									request icon redrawing
 `icon:repaint()`										event: icon needs redrawing
 `icon:free_bitmap(bmp)`								event: bitmap needs to be freed
+__file choose dialogs__
+`app:opendialog(t) -> path|{path1,...}|nil`	open a standard "open file" dialog
+&nbsp;&nbsp; *`title`*								dialog's title
+&nbsp;&nbsp; *`filetypes`*							supported file types
+&nbsp;&nbsp; *`multiselect`*						allow multiple selection (false)
+&nbsp;&nbsp; *`initial_dir`*						initial dir
+`app:savedialog(t) -> path|nil`					open a standard "save file" dialog
+&nbsp;&nbsp; *`title`*								dialog's title
+&nbsp;&nbsp; *`filetypes`*							supported file types
+&nbsp;&nbsp; *`filename`*							default filename
+&nbsp;&nbsp; *`initial_dir`*						initial dir
+__clipboard__
+`app:clipboard() -> {format1,...}`				get formats in clipboard
+`app:clipboard(format) -> data`					get clipboard contents (format is 'text', 'files', 'bitmap')
+`app:setclipboard(data[, format|f])`			set or clear clipboard
+__drag & drop__
+`win/view:dropfiles(x, y, {filename1, ...})`	event: files are dropped
+`win/view:dragging(how, data, x, y)->effect`	event: something is being dragged
 __events__
 `app/win/view:on(event, func)`					call _func_ when _event_ happens
 `app/win/view:events(enabled) -> prev_state`	enable/disable events
@@ -1028,9 +1046,9 @@ Get the display the window is currently on.
 
 ## Cursors
 
-### `win:cursor() -> name` <br> `win:cursor(name)`
+### `win:cursor() -> name, t|f` <br> `win:cursor(name|t|f)`
 
-Get/set the mouse cursor. The name can be:
+Get/set the mouse cursor and/or visibility. The name can be:
 
   * 'arrow' (default)
   * 'text'
