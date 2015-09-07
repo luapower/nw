@@ -19,9 +19,9 @@ notification icons, all text in utf8, and more.
 
 <div class=small>
 -------------------------------------------- -----------------------------------------------------------------------------
-__[The app object](#the-app-object)__
+__the app object__
 `nw:app() -> app`										the global application object
-__app loop__
+__the app loop__
 `app:run()`												run the loop
 `app:stop()`											stop the loop
 `app:running() -> t|f`								check if the loop is running
@@ -300,7 +300,10 @@ __clipboard__
 `app:setclipboard(f|data[, format])`			clear or set clipboard
 __drag & drop__
 `win/view:dropfiles(x, y, files)`				event: files are dropped
-`win/view:dragging(stage, t, x, y)`				event: something is being dragged
+`win/view:dragging('enter', t, x, y) -> s`   event: mouse enter with payload
+`win/view:dragging('hover', t, x, y) -> s`   event: mouse move with payload
+`win/view:dragging('drop', t, x, y)`         event: dropped the payload
+`win/view:dragging('leave')`                 event: mouse left with payload
 __events__
 `app/win/view:on(event, func)`					call _func_ when _event_ happens
 `app/win/view:events(enabled) -> prev_state`	enable/disable events
@@ -1488,7 +1491,7 @@ Clear or set the clipboard. Passing `false` clears it, otherwise `data` can be:
 
 Event: files are dropped over the window/view.
 
-### `win/view:dragging('enter', data, x, y) -> effect` <br> `win/view:dragging('hover', data, x, y) -> effect` <br> `win/view:dragging('drop', data, x, y)` <br> `win/view:dragging('leave')`
+### `win/view:dragging('enter', t, x, y) -> s` <br> `win/view:dragging('hover', t, x, y) -> s` <br> `win/view:dragging('drop', t, x, y)` <br> `win/view:dragging('leave')`
 
 Event: something is being dragged over the window/view. The first arg
 corresponds to the following mouse events:
@@ -1498,7 +1501,7 @@ corresponds to the following mouse events:
   * 'drop' - mouse button up
   * 'leave' - mouse leave
 
-The `data` arg is a table cotaining the drag payload in one or more formats:
+The `t` arg is a table cotaining the drag payload in one or more formats:
 `{format = data}`. The `x`, `y` args are the mouse coordinates in window/view
 client space.
 
@@ -1514,7 +1517,7 @@ You can respond to the 'enter' and 'hover' stages by returning:
 
 ## Events
 
-### `app/win/view:on(event_name, func)`
+### `app/win/view:on(event, func)`
 
 Call `func` when `event_name` happens. Multiple functions can be attached
 to the same event.
@@ -1523,7 +1526,7 @@ to the same event.
 
 Enable/disable events.
 
-### `app/win/view:event(event_name, args...)`
+### `app/win/view:event(name, args...)`
 
 This is a meta-event fired on every other event.
 The event's name and args are passed in.
