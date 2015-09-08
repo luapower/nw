@@ -18,7 +18,8 @@ notification icons, all text in utf8, and more.
 ## API
 
 NOTE: In the table below, `foo(t|f) /-> t|f` is a shortcut for saying that
-`foo(t|f)` sets `foo`, and `foo() -> t|f` gets it. `t|f` means it's a boolean.
+`foo(t|f)` sets the value of foo, and `foo() -> t|f` gets it.
+`t|f` means that foo is a boolean.
 
 <div class=small>
 -------------------------------------------- -----------------------------------------------------------------------------
