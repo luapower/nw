@@ -90,15 +90,17 @@ __maximization__
 `win:was_unmaximized()`								event: window was unmaximized
 __fullscreen mode__
 `win:fullscreenable() -> t|f`						fullscreenable flag
-`win:fullscreen(t|f) /-> t|f`						get/enter/exit fullscreen state
-`win:entered_fullscreen()`							event: entered fullscreen state
-`win:exited_fullscreen()`							event: exited fullscreen state
+`win:fullscreen(t|f) /-> t|f`						get/enter/exit fullscreen mode
+`win:entered_fullscreen()`							event: entered fullscreen mode
+`win:exited_fullscreen()`							event: exited fullscreen mode
 __restoring__
 `win:restore()`										restore from minimized or maximized state
 `win:shownormal()`									show in normal state
-__state strings__
+__state tracking__
 `win:state() -> state`								full window state string
+`win:changed(old_state, new_state)`				event: window state changed
 `app:state() -> state`								full app state string
+`app:changed(old_state, new_state)`				event: app state changed
 __enabled state__
 `win:enabled(t|f) /-> t|f`							get/set window enabled flag
 __client/screen conversion__
@@ -232,9 +234,9 @@ __clipboard__
 `app:setclipboard(f|data[, format])`			clear or set clipboard
 __drag & drop__
 `win/view:dropfiles(x, y, files)`				event: files are dropped
-`win/view:dragging('enter', t, x, y) -> s`   event: mouse enter with payload
-`win/view:dragging('hover', t, x, y) -> s`   event: mouse move with payload
-`win/view:dragging('drop', t, x, y)`         event: dropped the payload
+`win/view:dragging('enter', t, x,y) -> s`    event: mouse enter with payload
+`win/view:dragging('hover', t, x,y) -> s`    event: mouse move with payload
+`win/view:dragging('drop', t, x,y) `         event: dropped the payload
 `win/view:dragging('leave')`                 event: mouse left with payload
 __events__
 `app/win/view:on(event, func)`					call _func_ when _event_ happens
