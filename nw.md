@@ -24,34 +24,34 @@ NOTE: In the table below, `foo(t|f) /-> t|f` is a shortcut for saying that
 <div class=small>
 -- -------------------------------------------- -----------------------------------------------------------------------------
    __the app object__
-r  `nw:app() -> app`										the global application object
+>  `nw:app() -> app`										the global application object
    __the app loop__
-m  `app:run()`												run the loop
-m  `app:stop()`											stop the loop
-r  `app:running() -> t|f`								check if the loop is running
-m  `app:poll() -> t|f`									process the next pending event (return true if there was one)
+M  `app:run()`												run the loop
+M  `app:stop()`											stop the loop
+R  `app:running() -> t|f`								check if the loop is running
+M  `app:poll() -> t|f`									process the next pending event (return true if there was one)
    __quitting__
-m  `app:quit()`											quit the app, i.e. close all windows and stop the loop
-rw `app:autoquit(t|f) /-> t|f`						quit the app when the last window is closed (true)
-   `app:quitting() -> [false]`						event: quitting (return false to refuse)
-   `win:autoquit(t|f) /-> t|f`						quit the app when the window is closed (false)
+M  `app:quit()`											quit the app, i.e. close all windows and stop the loop
+RW `app:autoquit(t|f) /-> t|f`						quit the app when the last window is closed (true)
+E  `app:quitting() -> [false]`						event: quitting (return false to refuse)
+RW  `win:autoquit(t|f) /-> t|f`						quit the app when the window is closed (false)
    __timers__
-   `app:runevery(seconds, func)`						run a function on a timer (return false to stop it)
-   `app:runafter(seconds, func)`						run a function on a timer once
-   `app:run(func)`										run a function on a zero-second timer once
-   `app:sleep(seconds)`									sleep without blocking inside a function run with app:run()
+M  `app:runevery(seconds, func)`						run a function on a timer (return false to stop it)
+M  `app:runafter(seconds, func)`						run a function on a timer once
+M  `app:run(func)`										run a function on a zero-second timer once
+M  `app:sleep(seconds)`									sleep without blocking inside a function run with app:run()
    __window tracking__
-   `app:windows() -> {win1, ...}`					all windows in creation order
-   `app:window_created(win)`							event: a window was created
-   `app:window_closed(win)`							event: a window was closed
+R  `app:windows() -> {win1, ...}`					all windows in creation order
+E  `app:window_created(win)`							event: a window was created
+E  `app:window_closed(win)`							event: a window was closed
    __window creation__
-   `app:window(t) -> win`								create a window
+>  `app:window(t) -> win`								create a window
    __closing__
-   `win:close([force])`									close the window and destroy it
-   `win:dead() -> t|f`									check if the window was destroyed
-   `win:closing()`										event: closing (return false to refuse)
-   `win:was_closed()`									event: closed (but not dead yet)
-   `win:closeable() -> t|f`							closeable flag
+<  `win:close([force])`									close the window and destroy it
+R  `win:dead() -> t|f`									check if the window was destroyed
+E  `win:closing()`										event: closing (return false to refuse)
+E  `win:was_closed()`									event: closed (but not dead yet)
+R  `win:closeable() -> t|f`							closeable flag
    __app activation__
    `app:active() -> t|f`								check if the app is active
    `app:activate([mode])`								activate the app
