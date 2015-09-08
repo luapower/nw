@@ -17,6 +17,9 @@ notification icons, all text in utf8, and more.
 
 ## API
 
+> In the table below, `foo(t|f) /-> t|f` is a shortcut for saying that
+`foo(t|f)` sets `foo` and `foo() -> t|f` gets it.
+
 <div class=small>
 -------------------------------------------- -----------------------------------------------------------------------------
 __the app object__
@@ -28,15 +31,13 @@ __the app loop__
 `app:poll() -> t|f`									process the next pending event (return true if there was one)
 __quitting__
 `app:quit()`											quit the app, i.e. close all windows and stop the loop
-`app:autoquit(t|f)`									quit the app when the last window is closed (true)
-`app:autoquit() -> t|f`								get app autoquit flag (true)
+`app:autoquit(t|f) /-> t|f`						quit the app when the last window is closed (true)
 `app:quitting() -> [false]`						event: quitting (return false to refuse)
-`win:autoquit(t|f)`									quit the app when the window is closed (false)
-`win:autoquit() -> t|f`								get window autoquit flag (false)
+`win:autoquit(t|f) /-> t|f`						quit the app when the window is closed (false)
 __timers__
-`app:runevery(seconds, func)`						run a function on a timer (timer stops if func returns false)
+`app:runevery(seconds, func)`						run a function on a timer (return false to stop it)
 `app:runafter(seconds, func)`						run a function on a timer once
-`app:run(func)`										(star the loop and) run a function on a zero-second timer once
+`app:run(func)`										run a function on a zero-second timer once
 `app:sleep(seconds)`									sleep without blocking inside a function run with app:run()
 __window tracking__
 `app:windows() -> {win1, ...}`					all windows in creation order
@@ -63,15 +64,13 @@ __window activation__
 `win:was_deactivated()`								event: window was deactivated
 `win:activable() -> t|f`							activable flag (for 'toolbox' windows)
 __app visibility (OSX)__
-`app:hidden() -> t|f`								check if app is hidden
-`app:hidden(t|f)`										change if the app is hidden
+`app:hidden(t|f) /-> t|f`							get/set app visibility
 `app:hide()`											hide the app
 `app:unhide()`											unhide the app
 `app:was_hidden()`									event: app was hidden
 `app:was_unhidden()`									event: app was unhidden
 __window visibility__
-`win:visible() -> t|f`								check if the window is visible
-`win:visible(t|f)`									show or hide the window
+`win:visible(t|f) /-> t|f`							get/set window visibility
 `win:show()`											show window (in its previous state)
 `win:hide()`											hide window
 `win:was_shown()`										event: window was shown
@@ -90,8 +89,7 @@ __maximization__
 `win:was_unmaximized()`								event: window was unmaximized
 __fullscreen mode__
 `win:fullscreenable() -> t|f`						fullscreenable flag
-`win:fullscreen() -> t|f`							check if the window is in fullscreen state
-`win:fullscreen(t|f)`								enter/exit fullscreen state
+`win:fullscreen(t|f) /-> t|f`						get/enter/exit fullscreen state
 `win:entered_fullscreen()`							event: entered fullscreen state
 `win:exited_fullscreen()`							event: exited fullscreen state
 __restoring__
@@ -101,8 +99,7 @@ __state strings__
 `win:state() -> state`								full window state string
 `app:state() -> state`								full app state string
 __enabled state__
-`win:enabled(t|f)`									enable/disable the window
-`win:enabled() -> t|f`								check if the window is enabled
+`win:enabled(t|f) /-> t|f`							get/set window enabled flag
 __client/screen conversion__
 `win:to_screen(x, y) -> x, y`						client space -> screen space conversion
 `win:to_client(x, y) -> x, y`						screen space -> client space conversion
@@ -111,13 +108,10 @@ __frame/client conversion__
 `app:frame_to_client(...) -> ...`				window frame rect -> client rect conversion
 `app:frame_extents(...) -> ...`					frame extents for a frame type
 __size and position__
-`win:frame_rect() -> x, y, w, h`					get frame rect in current state
-`win:frame_rect(x, y, w, h)`						set frame rect (and change state to normal)
-`win:normal_frame_rect() -> x, y, w, h`		get frame rect in normal state
-`win:client_rect() -> cx, cy, cw, ch`			get client rect in current state
-`win:client_rect(cx, cy, cw, ch)`				set client rect (and change state to normal)
-`win:client_size() -> cw, ch`						get client rect size
-`win:client_size(cw, ch)`							set client rect size
+`win:frame_rect(x,y,w,h) /-> x,y,w,h`			get/set frame rect in current state
+`win:normal_frame_rect(x,y,w,h) /-> x,y,w,h`	get/set frame rect in normal state
+`win:client_rect(x,y,w,h) -> x,y,w,h`			get client rect in current state
+`win:client_size(cw, ch) /-> cw, ch`			get/set client rect size
 `win:sizing(when, how, x, y, w, h)`				event: window size/position is about to change
 `win:was_moved(cx, cy)`								event: window was moved
 `win:was_resized(cw, ch)`							event: window was resized
@@ -132,13 +126,11 @@ __window edge snapping__
 `win:edgesnapping(mode)`							set edge snapping mode
 `win:magnets(which) -> {r1, ...}`				event: get edge snapping rectangles
 __window z-order__
-`win:topmost() -> t|f`								get the topmost flag
-`win:topmost(t|f)`									set the topmost flag
+`win:topmost(t|f) /-> t|f`							get/set the topmost flag
 `win:raise([rel_to_win])`							raise above all windows/specific window
 `win:lower([rel_to_win])`							lower below all windows/specific window
 __window title__
-`win:title() -> title`								get title
-`win:title(title)`									set title
+`win:title(title) /-> title`						get/set title
 __displays__
 `app:displays() -> {disp1, ...}`					get displays (in no specific order)
 `app:main_display() -> disp	`					the display whose screen rect starts at (0,0)
@@ -150,8 +142,7 @@ __displays__
 `app:displays_changed()`							event: displays changed
 `win:display() -> disp|nil`						the display the window is on
 __cursors__
-`win:cursor() -> name, t|f`						get the mouse cursor and visibility
-`win:cursor(name|t|f)`								set the mouse cursor or visibility
+`win:cursor(name|t|f) /-> name, t|f`			get/set the mouse cursor and visibility
 __frame flags__
 `win:frame() -> frame`								window's frame: 'normal', 'none', 'toolbox'
 `win:transparent() -> t|f`							transparent flag
@@ -166,8 +157,7 @@ __keyboard__
 `win:keypress(key)`									event: sent after each keydown, including repeats
 `win:keychar(s)`										event: input char pressed; _`s`_ is utf-8
 __hi-dpi support__
-`app:autoscaling() -> t|f`							check if autoscaling is enabled
-`app:autoscaling(t|f)`								enable/disable autoscaling
+`app:autoscaling(t|f) /-> t|f`					get/enable/disable autoscaling
 `disp.scalingfactor`									display's scaling factor
 `win:scalingfactor_changed()`						a window's display scaling factor changed
 __views__
@@ -175,16 +165,12 @@ __views__
 `win:view(t) -> view`								create a view
 `view:free()`											destroy the view
 `view:dead() -> t|f`									check if the view was freed
-`view:visible() -> t|f`								check if the view is visible
-`view:visible(t|f)`									show or hide the view
+`view:visible(t|f) /-> t|f`						get/set view's visibility
 `view:show()`											show the view
 `view:hide()`											hide the view
-`view:rect() -> x, y, w, h`						get view's position (in window's client space) and size
-`view:rect(x, y, w, h)`								set view's position and/or size
-`view:size() -> w, h`								get view's size
-`view:size(w, h)`										set view's size
-`view:anchors() -> anchors`						get anchors
-`view:anchors(anchors)`								set anchors
+`view:rect(x, y, w, h) /-> x, y, w, h`			get/set view's position (in window's client space) and size
+`view:size(w, h) /-> w, h`							get/set view's size
+`view:anchors(anchors) /-> anchors`				get/set anchors
 `view:rect_changed(x, y, w, h)`					event: view's size and/or position changed
 `view:was_moved(x, y)`								event: view was moved
 `view:was_resized(w, h)`							event: view was resized
@@ -219,8 +205,7 @@ __menus__
 `menu:get(index) -> item`							get the menu item at index
 `menu:get(index, prop) -> val`					get the value of a property of the menu item at index
 `menu:items([prop]) -> {item1, ...}`
-`menu:checked(index) -> t|f`
-`menu:checked(index, t|f)`
+`menu:checked(index, t|f) /-> t|f`				get/set a menu item's checked state
 __icons (common API)__
 `icon:free()`
 `icon:bitmap() -> bmp`								get a bgra8 [bitmap] object
@@ -230,14 +215,10 @@ __icons (common API)__
 __notification icons__
 `app:notifyicon(t) -> icon`
 `app:notifyicons() -> {icon1, ...}`				list notification icons
-`icon:tooltip() -> s`								get tooltip
-`icon:tooltip(s)`										set tooltip
-`icon:menu() -> menu`								get menu
-`icon:menu(menu)`										set menu
-`icon:text() -> s`									get text (OSX)
-`icon:text(s)`											set text (OSX)
-`icon:length() -> n`									get length (OSX)
-`icon:length(n)`										set length (OSX)
+`icon:tooltip(s) /-> s`								get/set icon's tooltip
+`icon:menu(menu) /-> menu`							get/set icon's menu
+`icon:text(s) /-> s`									get/set text (OSX)
+`icon:length(n) /-> n`								get/set length (OSX)
 __window icon (Windows)__
 `win:icon([which]) -> icon`						window's icon ('big'); which can be: 'big', 'small'
 __dock icon (OSX)__
