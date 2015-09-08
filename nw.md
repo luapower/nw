@@ -17,8 +17,8 @@ notification icons, all text in utf8, and more.
 
 ## API
 
-> In the table below, `foo(t|f) /-> t|f` is a shortcut for saying that
-`foo(t|f)` sets `foo` and `foo() -> t|f` gets it.
+NOTE: In the table below, `foo(t|f) /-> t|f` is a shortcut
+for saying that `foo(t|f)` sets `foo` and `foo() -> t|f` gets it.
 
 <div class=small>
 -------------------------------------------- -----------------------------------------------------------------------------
