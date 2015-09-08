@@ -24,7 +24,7 @@ NOTE: In the table below, `foo(t|f) /-> t|f` is a shortcut for saying that
 <div class=small>
 -- -------------------------------------------- -----------------------------------------------------------------------------
    __the app object__
-*  `nw:app() -> app`										the global application object
+R  `nw:app() -> app`										the global application object
    __the app loop__
 M  `app:run()`												run the loop
 M  `app:stop()`											stop the loop
@@ -161,90 +161,90 @@ RM `app:autoscaling(t|f) /-> t|f`					get/enable/disable autoscaling
 R  `disp.scalingfactor`									display's scaling factor
 E  `win:scalingfactor_changed()`						a window's display scaling factor changed
    __views__
-   `win:views() -> {view1, ...}`						list views
-   `win:view(t) -> view`								create a view
-   `view:free()`											destroy the view
-   `view:dead() -> t|f`									check if the view was freed
-   `view:visible(t|f) /-> t|f`						get/set view's visibility
-   `view:show()`											show the view
-   `view:hide()`											hide the view
-   `view:rect(x, y, w, h) /-> x, y, w, h`			get/set view's position (in window's client space) and size
-   `view:size(w, h) /-> w, h`							get/set view's size
-   `view:anchors(anchors) /-> anchors`				get/set anchors
-   `view:rect_changed(x, y, w, h)`					event: view's size and/or position changed
-   `view:was_moved(x, y)`								event: view was moved
-   `view:was_resized(w, h)`							event: view was resized
+R  `win:views() -> {view1, ...}`						list views
+*  `win:view(t) -> view`								create a view
+-  `view:free()`											destroy the view
+R  `view:dead() -> t|f`									check if the view was freed
+RM `view:visible(t|f) /-> t|f`						get/set view's visibility
+M  `view:show()`											show the view
+M  `view:hide()`											hide the view
+RM `view:rect(x, y, w, h) /-> x, y, w, h`			get/set view's position (in window's client space) and size
+RM `view:size(w, h) /-> w, h`							get/set view's size
+RW `view:anchors(anchors) /-> anchors`				get/set anchors
+E  `view:rect_changed(x, y, w, h)`					event: view's size and/or position changed
+E  `view:was_moved(x, y)`								event: view was moved
+E  `view:was_resized(w, h)`							event: view was resized
    __mouse__
-   `win/view:mouse() -> t`								mouse state: _x, y, inside, left, right, middle, ex1, ex2_
-   `win/view:mouseenter()`								event: mouse entered the client area of the window
-   `win/view:mouseleave()`								event: mouse left the client area of the window
-   `win/view:mousemove(x, y)`							event: mouse was moved
-   `win/view:mousedown(button, x, y)`				event: mouse button was pressed
-   `win/view:mouseup(button, x, y)`					event: mouse button was depressed
-   `win/view:click(button, count, x, y)`			event: mouse button was clicked
-   `win/view:wheel(delta, x, y)`						event: mouse wheel was moved
-   `win/view:hwheel(delta, x, y)`					event: mouse horizontal wheel was moved
+R  `win/view:mouse() -> t`								mouse state: _x, y, inside, left, right, middle, ex1, ex2_
+E  `win/view:mouseenter()`								event: mouse entered the client area of the window
+E  `win/view:mouseleave()`								event: mouse left the client area of the window
+E  `win/view:mousemove(x, y)`							event: mouse was moved
+E  `win/view:mousedown(button, x, y)`				event: mouse button was pressed
+E  `win/view:mouseup(button, x, y)`					event: mouse button was depressed
+E  `win/view:click(button, count, x, y)`			event: mouse button was clicked
+E  `win/view:wheel(delta, x, y)`						event: mouse wheel was moved
+E  `win/view:hwheel(delta, x, y)`					event: mouse horizontal wheel was moved
    __rendering__
-   `win/view:repaint()`									event: window needs redrawing
-   `win/view:invalidate()`								request window redrawing
-   `win/view:bitmap() -> bmp`							get a bgra8 [bitmap] object to draw on
-   `bmp:clear()`											fill the bitmap with zero bytes
-   `bmp:cairo() -> cr`									get a cairo context on the bitmap
-   `win/view:free_cairo(cr)`							event: cairo context needs freeing
-   `win/view:free_bitmap(bmp)`						event: bitmap needs freeing
-   `win/view:gl() -> gl`								get an OpenGL context to draw with
+E  `win/view:repaint()`									event: window needs redrawing
+M  `win/view:invalidate()`								request window redrawing
+R  `win/view:bitmap() -> bmp`							get a bgra8 [bitmap] object to draw on
+M  `bmp:clear()`											fill the bitmap with zero bytes
+R  `bmp:cairo() -> cr`									get a cairo context on the bitmap
+E  `win/view:free_cairo(cr)`							event: cairo context needs freeing
+E  `win/view:free_bitmap(bmp)`						event: bitmap needs freeing
+R  `win/view:gl() -> gl`								get an OpenGL context to draw with
    __menus__
-   `app:menu() -> menu`									create a menu (or menu bar)
-   `app:menubar() -> menu`								get app's menu bar (OSX)
-   `win:menubar() -> menu|nil`						get window's menu bar (Windows, Linux)
-   `win/view:popup(menu, cx, cy)`					pop up a menu relative to a window or view
-   `menu:popup(win/view, cx, cy)`					pop up a menu relative to a window or view
-   `menu:add(...)`
-   `menu:set(...)`
-   `menu:remove(index)`
-   `menu:get(index) -> item`							get the menu item at index
-   `menu:get(index, prop) -> val`					get the value of a property of the menu item at index
-   `menu:items([prop]) -> {item1, ...}`
-   `menu:checked(index, t|f) /-> t|f`				get/set a menu item's checked state
+*  `app:menu() -> menu`									create a menu (or menu bar)
+R  `app:menubar() -> menu`								get app's menu bar (OSX)
+R  `win:menubar() -> menu|nil`						get window's menu bar (Windows, Linux)
+M  `win/view:popup(menu, cx, cy)`					pop up a menu relative to a window or view
+M  `menu:popup(win/view, cx, cy)`					pop up a menu relative to a window or view
+M  `menu:add(...)`
+M  `menu:set(...)`
+M  `menu:remove(index)`
+R  `menu:get(index) -> item`							get the menu item at index
+R  `menu:get(index, prop) -> val`					get the value of a property of the menu item at index
+R  `menu:items([prop]) -> {item1, ...}`
+R  `menu:checked(index, t|f) /-> t|f`				get/set a menu item's checked state
    __icons (common API)__
-   `icon:free()`
-   `icon:bitmap() -> bmp`								get a bgra8 [bitmap] object
-   `icon:invalidate()`									request bitmap redrawing
-   `icon:repaint()`										event: bitmap needs redrawing
-   `icon:free_bitmap(bmp)`								event: bitmap needs freeing
+-  `icon:free()`
+R  `icon:bitmap() -> bmp`								get a bgra8 [bitmap] object
+M  `icon:invalidate()`									request bitmap redrawing
+E  `icon:repaint()`										event: bitmap needs redrawing
+E  `icon:free_bitmap(bmp)`								event: bitmap needs freeing
    __notification icons__
-   `app:notifyicon(t) -> icon`
-   `app:notifyicons() -> {icon1, ...}`				list notification icons
-   `icon:tooltip(s) /-> s`								get/set icon's tooltip
-   `icon:menu(menu) /-> menu`							get/set icon's menu
-   `icon:text(s) /-> s`									get/set text (OSX)
-   `icon:length(n) /-> n`								get/set length (OSX)
+*  `app:notifyicon(t) -> icon`
+R  `app:notifyicons() -> {icon1, ...}`				list notification icons
+RW `icon:tooltip(s) /-> s`								get/set icon's tooltip
+RW `icon:menu(menu) /-> menu`							get/set icon's menu
+RW `icon:text(s) /-> s`									get/set text (OSX)
+RW `icon:length(n) /-> n`								get/set length (OSX)
    __window icon (Windows)__
-   `win:icon([which]) -> icon`						window's icon ('big'); which can be: 'big', 'small'
+*  `win:icon([which]) -> icon`						window's icon ('big'); which can be: 'big', 'small'
    __dock icon (OSX)__
-   `app:dockicon() -> icon`
+*  `app:dockicon() -> icon`
    __file choose dialogs__
-   `app:opendialog(t) -> path|{path1,...}|nil`	open a standard "open file" dialog
-   `app:savedialog(t) -> path|nil`					open a standard "save file" dialog
+M  `app:opendialog(t) -> path|{path1,...}|nil`	open a standard "open file" dialog
+M  `app:savedialog(t) -> path|nil`					open a standard "save file" dialog
    __clipboard__
-   `app:getclipboard(format) -> data|nil`			get data in clipboard (format is 'text', 'files', 'bitmap')
-   `app:getclipboard() -> formats`					get data formats in clipboard
-   `app:setclipboard(f|data[, format])`			clear or set clipboard
+R  `app:getclipboard(format) -> data|nil`			get data in clipboard (format is 'text', 'files', 'bitmap')
+R  `app:getclipboard() -> formats`					get data formats in clipboard
+W  `app:setclipboard(f|data[, format])`			clear or set clipboard
    __drag & drop__
-   `win/view:dropfiles(x, y, files)`				event: files are dropped
-   `win/view:dragging('enter',t,x,y) -> s`      event: mouse enter with payload
-   `win/view:dragging('hover',t,x,y) -> s`      event: mouse move with payload
-   `win/view:dragging('drop',t,x,y)`            event: dropped the payload
-   `win/view:dragging('leave')`                 event: mouse left with payload
+E  `win/view:dropfiles(x, y, files)`				event: files are dropped
+E  `win/view:dragging('enter',t,x,y) -> s`      event: mouse enter with payload
+E  `win/view:dragging('hover',t,x,y) -> s`      event: mouse move with payload
+E  `win/view:dragging('drop',t,x,y)`            event: dropped the payload
+E  `win/view:dragging('leave')`                 event: mouse left with payload
    __events__
-   `app/win/view:on(event, func)`					call _func_ when _event_ happens
-   `app/win/view:events(enabled) -> prev_state`	enable/disable events
-   `app/win/view:event(name, args...)`				meta-event fired on every other event
+M  `app/win/view:on(event, func)`					call _func_ when _event_ happens
+M  `app/win/view:events(enabled) -> prev_state`	enable/disable events
+E  `app/win/view:event(name, args...)`				meta-event fired on every other event
    __version checks__
-   `app:ver(query) -> t|f`								check OS _minimum_ version (eg. 'OSX 10.8')
+R  `app:ver(query) -> t|f`								check OS _minimum_ version (eg. 'OSX 10.8')
    __extending__
-   `nw.backends -> {os -> module_name}`			default backend modules for each OS
-   `nw:init([backend_name])`							init with a specific backend (can be called only once)
+R  `nw.backends -> {os -> module_name}`			default backend modules for each OS
+M  `nw:init([backend_name])`							init with a specific backend (can be called only once)
 -- ----------------------------------------- -----------------------------------------------------------------------------
 </div>
 
