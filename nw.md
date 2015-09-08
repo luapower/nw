@@ -39,7 +39,7 @@ RW `win:autoquit(t|f) /-> t|f`						quit the app when the window is closed (fals
 M  `app:runevery(seconds, func)`						run a function on a timer (return false to stop it)
 M  `app:runafter(seconds, func)`						run a function on a timer once
 M  `app:run(func)`										run a function on a zero-second timer once
-M  `app:sleep(seconds)`									sleep without blocking inside a function run with app:run()
+M  `app:sleep(seconds)`									sleep without blocking an app:run() function
    __window tracking__
 R  `app:windows() -> {win1, ...}`					all windows in creation order
 E  `app:window_created(win)`							event: a window was created
@@ -196,12 +196,12 @@ R  `win/view:gl() -> gl`								get an OpenGL context to draw with
    __menus__
 *  `app:menu() -> menu`									create a menu (or menu bar)
 R  `app:menubar() -> menu`								get app's menu bar (OSX)
-R  `win:menubar() -> menu|nil`						get window's menu bar (Windows, Linux)
+RM `win:menubar(menu|nil) /-> menu|nil`			get/set/remove window's menu bar (Windows, Linux)
 M  `win/view:popup(menu, cx, cy)`					pop up a menu relative to a window or view
 M  `menu:popup(win/view, cx, cy)`					pop up a menu relative to a window or view
 M  `menu:add(...)`
 M  `menu:set(...)`
-M  `menu:remove(index)`
+-  `menu:remove(index)`
 R  `menu:get(index) -> item`							get the menu item at index
 R  `menu:get(index, prop) -> val`					get the value of a property of the menu item at index
 R  `menu:items([prop]) -> {item1, ...}`
@@ -453,6 +453,8 @@ Create a window (fields of _`t`_ below with default value in parenthesis):
 	* `activable`					- allow activation (true); only for 'toolbox' frame
 	* `autoquit`					- quit the app on closing (false)
 	* `edgesnapping`				- magnetized edges ('screen')
+* [__rendering__](#rendering)
+	* `opengl`						- enable and configure OpenGL
 * __menu__
 	* `menu`							- the menu bar
 
@@ -939,12 +941,12 @@ Get/set the window's title.
 
 ## Displays
 
-In non-mirrored multi-monitor setups, the displays are mapped
+In multi-monitor setups, the non-mirroring displays are mapped
 on a virtual surface, with the main display's top-left corner at (0, 0).
 
 ### `app:displays() -> {disp1, ...}` <br> `app:displays'#' -> n`
 
-Get displays (in no specific order). Mirror displays are not included.
+Get displays (in no specific order). Mirroring displays are not included.
 If '#' is given, get the display count instead.
 
 ### `app:main_display() -> disp`
@@ -953,8 +955,8 @@ Get the display whose screen rect is at (0, 0).
 
 ### `app:active_display() -> disp`
 
-Get the display which contains the active window.
-Fallback to the main display if there is no active window.
+Get the display which contains the active window, falling back to the main
+display if there is no active window.
 
 ### `disp:screen_rect() -> x, y, w, h` <br> `disp.x, disp.y, disp.w, disp.h`
 
