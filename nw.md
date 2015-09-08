@@ -453,8 +453,8 @@ Create a window (fields of _`t`_ below with default value in parenthesis):
 	* `activable`					- allow activation (true); only for 'toolbox' frame
 	* `autoquit`					- quit the app on closing (false)
 	* `edgesnapping`				- magnetized edges ('screen')
-* [__rendering__](#rendering)
-	* `opengl`						- enable and configure OpenGL
+* __rendering__
+	* `opengl`						- enable and [configure OpenGL](#winviewgl---gl) on the window
 * __menu__
 	* `menu`							- the menu bar
 
@@ -1085,6 +1085,7 @@ Create a view (fields of _`t`_ below):
 * `x`, `y`, `w`, `h`	- view's position (in window's client space) and size
 * `visible`				- start visible (default: true)
 * `anchors`				- resizing anchors (default: 'lt'); can be 'ltrb'
+* `opengl`				- enable and [configure OpenGL](#winviewgl---gl) on the view.
 
 ### `view:free()`
 
