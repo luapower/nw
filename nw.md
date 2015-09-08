@@ -24,7 +24,7 @@ NOTE: In the table below, `foo(t|f) /-> t|f` is a shortcut for saying that
 <div class=small>
 -- -------------------------------------------- -----------------------------------------------------------------------------
    __the app object__
->  `nw:app() -> app`										the global application object
+*  `nw:app() -> app`										the global application object
    __the app loop__
 M  `app:run()`												run the loop
 M  `app:stop()`											stop the loop
@@ -234,9 +234,9 @@ R  `win:closeable() -> t|f`							closeable flag
    `app:setclipboard(f|data[, format])`			clear or set clipboard
    __drag & drop__
    `win/view:dropfiles(x, y, files)`				event: files are dropped
-   `win/view:dragging('enter', t, x,y) -> s`    event: mouse enter with payload
-   `win/view:dragging('hover', t, x,y) -> s`    event: mouse move with payload
-   `win/view:dragging('drop', t, x,y) `         event: dropped the payload
+   `win/view:dragging('enter',t,x,y) -> s`      event: mouse enter with payload
+   `win/view:dragging('hover',t,x,y) -> s`      event: mouse move with payload
+   `win/view:dragging('drop',t,x,y)`            event: dropped the payload
    `win/view:dragging('leave')`                 event: mouse left with payload
    __events__
    `app/win/view:on(event, func)`					call _func_ when _event_ happens
@@ -1518,7 +1518,8 @@ Default backend modules for each OS.
 
 ### `nw:init([backend_name])`
 
-Init `nw` with a specific backend (can be called only once).
+Init the library with a specific backend. Calling this again
+with a different backend name raises an error.
 
 ## Common mistakes
 
