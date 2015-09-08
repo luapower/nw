@@ -43,39 +43,7 @@ __window tracking__
 `app:window_created(win)`							event: a window was created
 `app:window_closed(win)`							event: a window was closed
 __window creation__
-`app:window(t) -> win`								create a window (fields of _`t`_ below)
-&nbsp;&nbsp; *__position__*
-&nbsp;&nbsp; *`x`, `y`*		 						frame position
-&nbsp;&nbsp; *`w`, `h`*								frame size (this or cw,ch required)
-&nbsp;&nbsp; *`cx`, `cy`*							client area position
-&nbsp;&nbsp; *`cw`, `ch`*							client area size (this or w,h required)
-&nbsp;&nbsp; *`min_cw`, `min_ch`*				min client rect size
-&nbsp;&nbsp; *`max_cw`, `max_ch`*				max client rect size
-&nbsp;&nbsp; *__state__*
-&nbsp;&nbsp; *`visible`*							start visible (true)
-&nbsp;&nbsp; *`minimized`*							start minimized (false)
-&nbsp;&nbsp; *`maximized`*							start maximized (false)
-&nbsp;&nbsp; *`enabled`*							start enabled (true)
-&nbsp;&nbsp; *__frame__*
-&nbsp;&nbsp; *`frame`*								frame type: 'normal', 'none', 'toolbox' ('normal')
-&nbsp;&nbsp; *`title`* 								initial title ('')
-&nbsp;&nbsp; *`transparent`*						make it transparent (false)
-&nbsp;&nbsp; *__behavior__*
-&nbsp;&nbsp; *`parent`*								parent window (nil)
-&nbsp;&nbsp; *`sticky`*								moves with parent (false)
-&nbsp;&nbsp; *`topmost`*							stays on top of other windows (false)
-&nbsp;&nbsp; *`minimizable`*						allow minimization (true)
-&nbsp;&nbsp; *`maximizable`*						allow maximization (true)
-&nbsp;&nbsp; *`closeable`*							allow closing (true)
-&nbsp;&nbsp; *`resizeable`*						allow resizing (true)
-&nbsp;&nbsp; *`fullscreenable`*					allow fullscreen mode (true)
-&nbsp;&nbsp; *`activable`*							allow activation (true); only for 'toolbox' frames
-&nbsp;&nbsp; *`autoquit`*							quit the app on closing (false)
-&nbsp;&nbsp; *`edgesnapping`*						magnetized edges ('screen')
-&nbsp;&nbsp; *__rendering__*
-&nbsp;&nbsp; *`opengl = {opts...}`*				enable & [configure](#winviewgl---gl) OpenGL
-&nbsp;&nbsp; *__menu__*
-&nbsp;&nbsp; *`menu`*								menu bar
+`app:window(t) -> win`								create a window
 __closing__
 `win:close([force])`									close the window and destroy it
 `win:dead() -> t|f`									check if the window was destroyed
@@ -204,10 +172,7 @@ __hi-dpi support__
 `win:scalingfactor_changed()`						a window's display scaling factor changed
 __views__
 `win:views() -> {view1, ...}`						list views
-`win:view(t) -> view`								create a view (fields of _`t`_ below)
-&nbsp;&nbsp; *`x`, `y`, `w`, `h`*				view's position (in window's client space) and size
-&nbsp;&nbsp; *`visible`*							start visible (true)
-&nbsp;&nbsp; *`anchors`*							resizing anchors ('lt'); can be 'ltrb'
+`win:view(t) -> view`								create a view
 `view:free()`											destroy the view
 `view:dead() -> t|f`									check if the view was freed
 `view:visible() -> t|f`								check if the view is visible
@@ -228,7 +193,7 @@ __mouse__
 `win/view:mouseenter()`								event: mouse entered the client area of the window
 `win/view:mouseleave()`								event: mouse left the client area of the window
 `win/view:mousemove(x, y)`							event: mouse was moved
-`win/view:mousedown(button, x, y)`				event: mouse button was pressed; button is _'left', 'right', 'middle', 'ex1', 'ex2'_
+`win/view:mousedown(button, x, y)`				event: mouse button was pressed
 `win/view:mouseup(button, x, y)`					event: mouse button was depressed
 `win/view:click(button, count, x, y)`			event: mouse button was clicked
 `win/view:wheel(delta, x, y)`						event: mouse wheel was moved
@@ -279,15 +244,7 @@ __dock icon (OSX)__
 `app:dockicon() -> icon`
 __file choose dialogs__
 `app:opendialog(t) -> path|{path1,...}|nil`	open a standard "open file" dialog
-&nbsp;&nbsp; *`title`*								dialog's title
-&nbsp;&nbsp; *`filetypes`*							supported file types
-&nbsp;&nbsp; *`multiselect`*						allow multiple selection (false)
-&nbsp;&nbsp; *`initial_dir`*						initial dir
 `app:savedialog(t) -> path|nil`					open a standard "save file" dialog
-&nbsp;&nbsp; *`title`*								dialog's title
-&nbsp;&nbsp; *`filetypes`*							supported file types
-&nbsp;&nbsp; *`filename`*							default filename
-&nbsp;&nbsp; *`initial_dir`*						initial dir
 __clipboard__
 `app:getclipboard(format) -> data|nil`			get data in clipboard (format is 'text', 'files', 'bitmap')
 `app:getclipboard() -> formats`					get data formats in clipboard
