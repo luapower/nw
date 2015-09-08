@@ -123,8 +123,7 @@ __size constraints__
 `win:maxsize() -> cw, ch`							get max client rect size
 `win:maxsize(cw, ch)`								set max client rect size
 __window edge snapping__
-`win:edgesnapping() -> mode`						get edge snapping mode
-`win:edgesnapping(mode)`							set edge snapping mode
+`win:edgesnapping(mode) /-> mode`				get/set edge snapping mode
 `win:magnets(which) -> {r1, ...}`				event: get edge snapping rectangles
 __window z-order__
 `win:topmost(t|f) /-> t|f`							get/set the topmost flag
@@ -354,7 +353,7 @@ Quitting is a multi-phase process:
 Calling `quit()` when the loop is not running or while quitting
 is in progress does nothing.
 
-### `app:autoquit(t|f)` <br> `app:autoquit() -> t|f`
+### `app:autoquit() -> t|f` <br> `app:autoquit(t|f)`
 
 Get/set the app autoquit flag (default: true).
 When this flag is true, the app quits when the last window is closed.
@@ -364,7 +363,7 @@ When this flag is true, the app quits when the last window is closed.
 Event: the app wants to quit, but nothing was done to that effect.
 Return false from this event to cancel the process.
 
-### `win:autoquit(t|f)` <br> `win:autoquit() -> t|f`
+### `win:autoquit() -> t|f` <br> `win:autoquit(t|f)`
 
 Get/set the window autoquit flag (default: false).
 When this flag is true, the app quits when the window is closed.
@@ -790,7 +789,7 @@ Event: app state has changed.
 
 ## Enabled state
 
-### `win:enabled(t|f)` <br> `win:enabled() -> t|f`
+### `win:enabled() -> t|f` <br> `win:enabled(t|f)`
 
 Get/set the enabled flag (default: true). A disabled window cannot receive
 mouse or keyboard focus. Disabled windows are useful for implementing
