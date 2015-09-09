@@ -246,10 +246,11 @@ R  `app:ver(query) -> t|f`								check OS _minimum_ version (eg. 'OSX 10.8')
 R  `nw.backends -> {os -> module_name}`			default backend modules for each OS
 M  `nw:init([backend_name])`							init with a specific backend (can be called only once)
 -- ----------------------------------------- -----------------------------------------------------------------------------
-</div>
 
-__Legend:__ `R`: read-only property; `RW`: read-write property; `M`: method;
+> __Legend:__ `R`: read-only property; `RW`: read-write property; `M`: method;
 `E`: event; `*`: constructor, `-`: destructor.
+
+</div>
 
 ## Example
 
