@@ -248,7 +248,7 @@ M  `nw:init([backend_name])`							init with a specific backend (can be called o
 -- ----------------------------------------- -----------------------------------------------------------------------------
 
 > __Legend:__ `R`: read-only property; `RW`: read-write property; `M`: method;
-`E`: event; `*`: constructor, `-`: destructor.
+`E`: event; `*`: constructor, `-`:&nbsp;destructor.
 
 </div>
 
