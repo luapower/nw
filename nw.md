@@ -580,7 +580,7 @@ is destroyed (`win:dead()` still returns false at this point).
 
 Get the closeable flag (read-only).
 
-## Activation
+## Window & app activation
 
 Activation is about app activation and window activation. Activating a
 window programatically has an immediate effect only while the app is active.
@@ -660,7 +660,7 @@ Get/set app visibility.
 
 Event: app was hidden/unhidden.
 
-## Window visibility
+## Window state
 
 ### `win:show()`
 
@@ -691,8 +691,6 @@ Call `show()` or `hide()` to change the window's visibility.
 
 Event: window was shown/hidden.
 
-## Minimization
-
 ### `win:minimizable() -> t|f`
 
 Get the minimizable flag (read-only).
@@ -709,8 +707,6 @@ it is shown in minimized state (and the taskbar button is not activated).
 ### `win:was_minimized()` <br> `win:was_unminimized()`
 
 Event: window was minimized/unminimized.
-
-## Maximization
 
 ### `win:maximizable() -> t|f`
 
@@ -731,8 +727,6 @@ If the window is already maximized it is not activated.
 ### `win:was_maximized()` <br> `win:was_unmaximized()`
 
 Event: window was maximized/unmaximized.
-
-## Fullscreen mode
 
 ### `win:fullscreenable() -> t|f`
 
@@ -755,8 +749,6 @@ If the window is already in the desired mode it is not activated.
 
 Event: entered/exited fullscreen mode.
 
-## Restoring
-
 ### `win:restore()`
 
 Restore from minimized, maximized or fullscreen state, i.e. unminimize
@@ -770,8 +762,6 @@ The window is always activated unless it was in normal mode.
 Show the window in normal state.
 
 The window is always activated even when it's already in normal mode.
-
-## State tracking
 
 State tracking is about getting and tracking the entire user-changeable
 state of a window (of or the app) as a whole.
@@ -792,7 +782,7 @@ Get the app's full state string, eg. 'visible active'.
 
 Event: app state has changed.
 
-## Enabled state
+## Enabled State
 
 ### `win:enabled() -> t|f` <br> `win:enabled(t|f)`
 
