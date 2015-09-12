@@ -762,7 +762,8 @@ state of a window (of or the app) as a whole.
 
 ### `win:state() -> state`
 
-Get the window's full state string, eg. 'visible maximized active'.
+Get the window's full state string which can contain the words
+'visible', 'active', 'minimized', 'maximized', 'fullscreen'.
 
 ### `win:changed(old_state, new_state)`
 
@@ -770,7 +771,8 @@ Event: window state has changed.
 
 ### `app:state() -> state`
 
-Get the app's full state string, eg. 'visible active'.
+Get the app's full state string which can contain the words
+'visible' and 'active'.
 
 ### `app:changed(old_state, new_state)`
 
