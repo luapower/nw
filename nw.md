@@ -46,13 +46,13 @@ __window tracking__
 `app:window_closed(win)`							event: a window was closed
 __window creation__
 `app:window(t) -> win`								create a window
-__closing__
+__window closing__
 `win:close([force])`									close the window and destroy it
 `win:dead() -> t|f`									check if the window was destroyed
 `win:closing()`										event: closing (return false to refuse)
 `win:was_closed()`									event: closed (but not dead yet)
 `win:closeable() -> t|f`							closeable flag
-__activation__
+__window & app activation__
 `app:active() -> t|f`								check if the app is active
 `app:activate([mode])`								activate the app
 `app:was_activated()`								event: app was activated
