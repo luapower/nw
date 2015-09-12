@@ -52,12 +52,11 @@ __closing__
 `win:closing()`										event: closing (return false to refuse)
 `win:was_closed()`									event: closed (but not dead yet)
 `win:closeable() -> t|f`							closeable flag
-__app activation__
+__activation__
 `app:active() -> t|f`								check if the app is active
 `app:activate([mode])`								activate the app
 `app:was_activated()`								event: app was activated
 `app:was_deactivated()`								event: app was deactivated
-__window activation__
 `app:active_window() -> win`						the active window, if any
 `win:active() -> t|f`								check if window is active
 `win:activate()`										activate the window
@@ -581,7 +580,17 @@ is destroyed (`win:dead()` still returns false at this point).
 
 Get the closeable flag (read-only).
 
-## App activation
+## Activation
+
+Activation is about app activation and window activation. Activating a
+window programatically has an immediate effect only while the app is active.
+If the app is inactive, the window is not activated until the app becomes
+active and the user is notified in some other less intrusive way.
+
+If the user activates a different app in the interval between app launch
+and first window being shown, the app won't be activated back (this is a good
+thing usability-wise). This doesn't work on Linux (new windows always pop
+in your face because there's no concept of an "app" really in X).
 
 ### `app:active() -> t|f`
 
@@ -599,8 +608,8 @@ The _mode_ arg can be:
   * 'info'  (OSX only; on Windows it's the same as 'alert'; on Linux it does nothing)
 
 The 'alert' mode: on Windows, this flashes the window on the taskbar until
-the user activates the window. On OSX it bounces the dock icon until the
-user activates the app. On Linux it does nothing.
+the user activates the window. On OSX it bounces the dock icon until the user
+activates the app. On Linux it does nothing.
 
 The 'force' mode: on Windows this is the same as the 'alert' mode.
 On OSX and Linux it pops up the window in the user's face
@@ -613,25 +622,19 @@ on OSX only once. On other platforms it's the same as the default 'alert' mode.
 
 Event: the app was activated/deactivated.
 
-## Window activation
+### `app:active_window() -> win|nil`
 
-### `app:active_window() -> win`
-
-Get the active window, if any.
-
-When the app is inactive, this always returns nil.
+Get the active window, if any (nil if the app is inactive).
 
 ### `win:active() -> t|f`
 
-Check if the window is active.
-
-When the app is inactive, this returns false for all windows.
+Check if the window is active (false for all windows if the app is inactive).
 
 ### `win:activate()`
 
-Activate the window. If the app is inactive, this does not activate the app.
+Activate the window. If the app is inactive, this does _not_ activate the window.
 Instead it only marks the window to be activated when the app becomes active.
-If you want to alert the user that it should pay attention to the window,
+If you want to alert the user that it should pay attention to the app/window,
 call `app:activate()` after calling this function.
 
 ### `win:was_activated()` <br> `win:was_deactivated()`
