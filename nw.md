@@ -69,38 +69,32 @@ __app visibility (OSX)__
 `app:unhide()`											unhide the app
 `app:was_hidden()`									event: app was hidden
 `app:was_unhidden()`									event: app was unhidden
-__window visibility__
+__window state__
 `win:visible(t|f) /-> t|f`							get/set window visibility
 `win:show()`											show window (in its previous state)
 `win:hide()`											hide window
 `win:was_shown()`										event: window was shown
 `win:was_hidden()`									event: window was hidden
-__minimization__
 `win:minimizable() -> t|f`							minimizable flag
 `win:minimized() -> t|f`							check if the window is minimized
 `win:minimize()`										minimize the window
 `win:was_minimized()`								event: window was minimized
 `win:was_unminimized()`								event: window was unminimized
-__maximization__
 `win:maximizable() -> t|f`							maximizable flag
 `win:maximized() -> t|f`							check if the window is maximized
 `win:maximize()`										maximize the window
 `win:was_maximized()`								event: window was maximized
 `win:was_unmaximized()`								event: window was unmaximized
-__fullscreen mode__
 `win:fullscreenable() -> t|f`						fullscreenable flag
 `win:fullscreen(t|f) /-> t|f`						get/enter/exit fullscreen mode
 `win:entered_fullscreen()`							event: entered fullscreen mode
 `win:exited_fullscreen()`							event: exited fullscreen mode
-__restoring__
 `win:restore()`										restore from minimized or maximized state
 `win:shownormal()`									show in normal state
-__state tracking__
 `win:state() -> state`								full window state string
 `win:changed(old_state, new_state)`				event: window state changed
 `app:state() -> state`								full app state string
 `app:changed(old_state, new_state)`				event: app state changed
-__enabled state__
 `win:enabled(t|f) /-> t|f`							get/set window enabled flag
 __client/screen conversion__
 `win:to_screen(x, y) -> x, y`						client space -> screen space conversion
@@ -781,8 +775,6 @@ Get the app's full state string, eg. 'visible active'.
 ### `app:changed(old_state, new_state)`
 
 Event: app state has changed.
-
-## Enabled State
 
 ### `win:enabled() -> t|f` <br> `win:enabled(t|f)`
 
