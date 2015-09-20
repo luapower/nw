@@ -1398,7 +1398,7 @@ function view:_new(window, backend_class, useropt)
 	opt.opengl = opengl_options(useropt.opengl)
 
 	assert(opt.x and opt.y and opt.w and opt.h, 'x, y, w, h expected')
-	opt.w = math.max(0, opt.w)
+	opt.w = math.max(0, opt.w) --avoid negative sizes
 	opt.h = math.max(0, opt.h)
 
 	local self = glue.update({
@@ -1464,7 +1464,7 @@ function view:rect(x, y, w, h)
 		if not (x and y and w and h) then
 			x, y, w, h = override_rect(x, y, w, h, self.backend:get_rect())
 		end
-		w = math.max(0, w)
+		w = math.max(0, w) --avoid negative sizes
 		h = math.max(0, h)
 		self.backend:set_rect(x, y, w, h)
 	else
