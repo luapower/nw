@@ -288,8 +288,6 @@ function window:new(app, frontend, t)
 	cx = t.x and cx
 	cy = t.y and cy
 	cw, ch = self:__constrain(cw, ch)
-	cw = math.max(1, cw) --prevent BadValue errors
-	ch = math.max(1, ch)
 
 	attrs.x = cx
 	attrs.y = cy
@@ -1469,9 +1467,6 @@ function view:new(window, frontend, t)
 		app = window.app,
 		frontend = frontend,
 	}, self)
-
-	local w = math.max(1, t.w) --prevent BadValue errors
-	local h = math.max(1, t.h)
 
 	local attrs = {
 		depth = window._depth,
