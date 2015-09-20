@@ -2373,7 +2373,7 @@ end)
 
 --NOTE: this indirectly checks get/set rect() too when resizing the window.
 add('check-view-anchors', function()
-	local win = app:window{cw = 340, ch = 340, min_cw = 250, min_ch = 250, max_cw = 450, max_ch = 450,
+	local win = app:window{cw = 340, ch = 340, min_cw = 150, min_ch = 150, max_cw = 450, max_ch = 450,
 		maximizable = false, fullscreenable = false}
 	win:view{x = 10, y = 10, w = 100, h = 100,   anchors = 'tl'}
 	win:view{x = 120, y = 10, w = 100, h = 100,  anchors = 'tlr'}
