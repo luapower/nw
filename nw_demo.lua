@@ -51,7 +51,7 @@ function win:repaint()
 	local cr = bmp:cairo()
 	local mx, my = self:mouse'pos'
 
-	local scale = 4
+	local scale = 1
 	mx = mx and mx / scale
 	my = my and my / scale
 	local w = (bmp.w - scale) / scale
