@@ -107,7 +107,8 @@ local evfield = { --{event_code -> XEvent_field}
 }
 
 --event types for which we only keep the last one from any series
---of consecutive events of the same type.
+--of consecutive events of the same type (this is called event compression
+--and it's important for preventing lag when resizing frameless windows).
 local evrepeat = {
 	[C.Expose] = true,
 	[C.ConfigureNotify] = true,
