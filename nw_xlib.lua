@@ -1014,8 +1014,8 @@ end
 --cursors --------------------------------------------------------------------
 
 function window:update_cursor()
-	local visible, name = self.frontend:cursor()
-	local cursor = visible and xlib.load_cursor(name) or xlib.blank_cursor()
+	local name, visible = self.frontend:cursor()
+	local cursor = visible and xlib.try_load_cursor(name) or xlib.blank_cursor()
 	xlib.set_cursor(self.win, cursor)
 end
 
