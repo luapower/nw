@@ -1456,21 +1456,23 @@ an event is fired use `on(event_name, handler)`. Those functions will be
 called in the order in which they were added. You can also add methods
 in the target object named after the event. Those will be called first.
 
+Any extra args passed to `fire()` will be passed on to the handlers.
 The first handler to return a non-nil value stops the call chain and that
 value is returned to the caller who fired the event.
 
 ### `function app/win/view:`_`event_name`_`() ... end`
 
-Call `func` when `event_name` is fired.
+Call `func` when `event_name` is fired, always before calling any handlers
+added with `on()`.
 
 ### `app/win/view:on(event, func)`
 
 Call `func` when `event_name` is fired. Multiple functions can be attached
-to the same event.
+to the same event: they are called in the order in which they were added.
 
 ### `app/win/view:off(event[, func])`
 
-Remove all handlers of an event or a specific event handler for a specific event.
+Remove a specific handler or all handlers associated with an event.
 
 ### `app/win/view:fire(event, ...) -> ret`
 
@@ -1485,7 +1487,7 @@ Enable/disable events.
 ### `app/win/view:event(name, args...)`
 
 This is a meta-event fired on every other event.
-The event's name and args are passed in.
+The event name and args are passed in as args.
 
 ## Version checks
 
