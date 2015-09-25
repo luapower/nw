@@ -543,39 +543,6 @@ end
 
 --positioning/resizing -------------------------------------------------------
 
-function app:_resize_area_hit(mx, my, w, h)
-	local w1, h1, w2, h2 = app:frame_extents'normal'
-	local mw = (w1 + w2) / 2
-	local mh = (h1 + h2) / 2
-	local co = (mw + mh) / 2
-	return app.frontend:_resize_area_hit(mx, my, w, h, co, mw, mh)
-end
-
-local hts = {
-	bottomleft = winapi.HTBOTTOMLEFT,
-	bottomright = winapi.HTBOTTOMRIGHT,
-	topleft = winapi.HTTOPLEFT,
-	topright = winapi.HTTOPRIGHT,
-	bottom = winapi.HTBOTTOM,
-	top = winapi.HTTOP,
-	left = winapi.HTLEFT,
-	right = winapi.HTRIGHT,
-}
-
---[[
-function Window:on_nc_hittest(x, y)
-	local x, y = self.frontend:to_client(x, y)
-	local w, h = self.backend:get_client_size()
-	local ht = app:_resize_area_hit(x, y, w, h)
-	print(x, y, w, h, ht, hts[ht] or winapi.HTCAPTION)
-	return hts[ht] or winapi.HTCAPTION
-end
-
-function Window:on_nc_calcsize()
-	return 0
-end
-]]
-
 function Window:on_begin_sizemove()
 	--when moving the window, we want its position relative to
 	--the mouse position to remain constant, and we're going to enforce that.
