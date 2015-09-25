@@ -1242,9 +1242,13 @@ function window:_setmouse(e)
 	return m
 end
 
-function app:_get_mouse_pos()
+function app:get_mouse_pos()
 	local x, y = xlib.query_pointer(xlib.screen.root)
 	return x, y
+end
+
+function app:set_mouse_pos(x, y)
+	--TODO
 end
 
 function window:ButtonPress(e)

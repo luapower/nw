@@ -997,8 +997,8 @@ end
 function window:_hittest(mx, my)
 	local where
 	if self:_can_set_rect() and self:resizeable() then
-		local ho, vo = 8, 8 --TODO: expose this?
-		local co = (vo + ho) / 2
+		local ho, vo = 8, 8 --TODO: expose these?
+		local co = vo + ho  --...and this (corner radius)
 		local w, h = self:client_size()
 		where = app:_resize_area_hit(mx, my, w, h, ho, vo, co)
 	end
@@ -1009,7 +1009,6 @@ end
 
 function window:_init_manual_resize()
 	if self:frame() ~= 'none' then return end
-	if app:ver'OSX' then return end --TODO: remove this
 
 	local resizing, where, sides, dx, dy
 
@@ -1042,11 +1041,7 @@ function window:_init_manual_resize()
 				self:cursor'arrow'
 			end
 		else
-			if app:ver'X' then
-				mx, my = app.backend:_get_mouse_pos()
-			else
-				mx, my = self:to_screen(mx, my)
-			end
+			mx, my = app:mouse'pos' --need absolute pos because X is async
 			if where == 'move' then
 				local w, h = self:client_size()
 				self:frame_rect(mx + dx, my + dy, w, h)
@@ -1360,6 +1355,18 @@ function app:key(keys)
 end
 
 --mouse ----------------------------------------------------------------------
+
+function app:mouse(var)
+	if var == 'inside' then
+		return true
+	elseif var == 'pos' then
+		return self.backend:get_mouse_pos()
+	elseif var == 'x' then
+		return (self.backend:get_mouse_pos())
+	elseif var == 'y' then
+		return select(2, self.backend:get_mouse_pos())
+	end
+end
 
 function window:mouse(var)
 	if not self:_can_get_rect() then return end

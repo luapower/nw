@@ -315,13 +315,26 @@ function win:hittest(mx, my, where)
 	self.max_hover = box2d.hit(mx, my, unpack(max_rect))
 	self.close_hover = box2d.hit(mx, my, unpack(close_rect))
 	self.titlebar_hover =
-		not where --the titlebar is below the invisible resize grips
-		and not self:ismaximized()
-		and not self:fullscreen()
+		not where --the titlebar is below the invisible resize grip
 		and box2d.hit(mx, my, unpack(titlebar_rect))
 
-	if self.min_hover or self.max_hover or self.close_hover then return false end
-	if self.titlebar_hover then return 'move' end
+	if self.min_hover or self.max_hover or self.close_hover then
+		return false --titlebar buttons are above the invisible resize grip
+	elseif self.titlebar_hover then
+		if self:ismaximized() or self:fullscreen() then return end
+		return 'move'
+	end
+end
+
+function win:click(button, count)
+	if count == 2 and self.titlebar_hover then
+		if self:ismaximized() then
+			self:restore()
+		else
+			self:maximize()
+		end
+		return true
+	end
 end
 
 function win:mouseup(x, y)

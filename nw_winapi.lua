@@ -1137,6 +1137,15 @@ function app:double_click_target_area()
 	return w, h
 end
 
+function app:get_mouse_pos()
+	local p = winapi.GetCursorPos()
+	return p.x, p.y
+end
+
+function app:set_mouse_pos(x, y)
+	winapi.SetCursorPos(x, y)
+end
+
 --TODO: get lost mouse events http://blogs.msdn.com/b/oldnewthing/archive/2012/03/14/10282406.aspx
 
 local function unpack_buttons(b)

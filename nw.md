@@ -167,7 +167,7 @@ __views__
 `view:moved(x, y, oldx, oldy)`               event: view was moved
 `view:resized(w, h, oldw, oldh)`             event: view was resized
 __mouse__
-`win/view:mouse(var) -> val`                 mouse state: _x, y, pos, inside, left, right, middle, x1, x2_
+`app/win/view:mouse(var) -> val`             mouse state: _x, y, pos, inside, left, right, middle, x1, x2_
 `win/view:mouseenter(x, y)`                  event: mouse entered the client area of the window
 `win/view:mouseleave()`                      event: mouse left the client area of the window
 `win/view:mousemove(x, y)`                   event: mouse was moved
