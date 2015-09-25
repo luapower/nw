@@ -1019,7 +1019,7 @@ end
 
 function app:_resize_area_hit(mx, my, w, h)
 	--offsets were found empirically on OSX 10.9
-	return self.frontend:_resize_area_hit(mx, h-my, w, h, 15, 4, 4)
+	return self.frontend:_resize_area_hit(mx, h-my, w, h, 4, 4, 15)
 end
 
 function Window:nw_clientarea_hit(event)
