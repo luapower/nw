@@ -151,6 +151,8 @@ function window:new(app, frontend, t)
 		own_dc = t.opengl and true or nil,
 	}
 
+	self:_set_region()
+
 	--must set WS_CHILD **after** window is created for non-activable toolboxes!
 	if t.frame == 'toolbox' and not t.activable then
 		self.win.child = true
@@ -189,6 +191,15 @@ function window:new(app, frontend, t)
 	end
 
 	return self
+end
+
+function window:_set_region()
+	local cr = self.frontend:corner_radius()
+	if cr == 0 then return end
+	local r = self.win.rect
+	--yes, it's w+1, h+1 with regions and yes, we need the redraw flag.
+	self._hrgn = winapi.CreateRoundRectRgn(0, 0, r.w + 1, r.h + 1, cr, cr)
+	winapi.SetWindowRgn(self.win.hwnd, self._hrgn, true)
 end
 
 --closing --------------------------------------------------------------------
@@ -657,6 +668,7 @@ end
 
 function Window:on_resized(flag)
 	if not self.backend then return end --early resize from setting constraints: ignore.
+
 	if flag == 'maximized' then
 		if self.nw_maximizing then return end
 		--frameless windows maximize to the entire screen, covering the taskbar. fix that.
@@ -669,6 +681,9 @@ function Window:on_resized(flag)
 	elseif flag == 'restored' then --also triggered on show
 		self.backend:invalidate()
 	end
+
+	self.backend:_set_region()
+
 	self.frontend:_backend_changed()
 end
 

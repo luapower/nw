@@ -8,7 +8,7 @@ if not ... then
 	local dsp = app:main_display()
 	local win = app:window{x = dsp.w - 900, y = 200, cw = 800, ch = 400,
 		min_cw = 200, min_ch = 28,
-		frame = 'none', transparent = true, topmost = true, visible = false}
+		frame = 'none', transparent = false, corner_radius = 4, topmost = true, visible = false}
 	local function reload()
 		package.loaded.nw_demo = nil
 		local ok, methods = pcall(require, 'nw_demo')
@@ -305,11 +305,9 @@ function win:deactivated()
 	self:invalidate()
 end
 
-function win:hittest(x, y)
-	if self.min_hover then return false end
-	if self.max_hover then return false end
-	if self.close_hover then return false end
-	if self.titlebar_hover then return 'move' end
+function win:hittest(x, y, where_resize)
+	if self.min_hover or self.max_hover or self.close_hover then return false end
+	if not where_resize and self.titlebar_hover then return 'move' end
 end
 
 function win:mouseup(x, y)
