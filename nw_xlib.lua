@@ -1021,8 +1021,21 @@ end
 
 function window:update_cursor()
 	local name, visible = self.frontend:cursor()
-	local cursor = visible and xlib.try_load_cursor(name) or xlib.blank_cursor()
+	name = visible and name or '_blank'
+	self._cursors = self._cursors or {}
+	local cursor = self._cursors[name]
+	if not cursor then
+		if visible then
+			cursor = xlib.try_load_cursor(name)
+				or self._cursors.arrow
+				or xlib.try_load_cursor'arrow'
+		else
+			cursor = xlib.blank_cursor()
+		end
+	end
+	if not cursor then return end
 	xlib.set_cursor(self.win, cursor)
+	self._cursors[name] = cursor
 end
 
 --keyboard -------------------------------------------------------------------
