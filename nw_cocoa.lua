@@ -1656,10 +1656,11 @@ function app:double_click_target_area()
 end
 
 function app:get_mouse_pos()
-	--TODO: this returns the current mouse location outside of the event stream.
-	--We don't want that! We want the mouse location at "this event" time. Find a way!
-	local p = objc.NSEvent:mouseLocation()
-	return p.x, primary_screen_h() - p.y
+	local e = self.nsapp:currentEvent()
+	local win = e:window()
+	local p = e:locationInWindow()
+	local x, y = flip_screen_rect(nil, unpack_nsrect(win:convertRectToScreen(objc.NSMakeRect(p.x, p.y, 0, 0))))
+	return x, y
 end
 
 function app:set_mouse_pos()
