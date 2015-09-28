@@ -9,8 +9,8 @@ if not ... then
 	local win = app:window{x = dsp.w - 900, y = 200, cw = 800, ch = 400,
 		min_cw = 200, min_ch = 28,
 		frame = 'none',
-		transparent = true,
-		corner_radius = 0,
+		transparent = false,
+		corner_radius = 6,
 		topmost = false,
 		visible = false}
 

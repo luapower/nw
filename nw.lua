@@ -1029,6 +1029,7 @@ function window:_init_manual_resize()
 			dx = sides.left and -mx or cw - mx
 			dy = sides.top  and -my or ch - my
 		end
+		self:_backend_sizing('start', where)
 	end)
 
 	self:on('mousemove', function(self, mx, my)
@@ -1044,14 +1045,18 @@ function window:_init_manual_resize()
 			mx, my = app:mouse'pos' --need absolute pos because X is async
 			if where == 'move' then
 				local w, h = self:client_size()
-				self:frame_rect(mx + dx, my + dy, w, h)
+				local x, y, w, h = self:_backend_sizing(
+					'progress', where, mx + dx, my + dy, w, h)
+				self:frame_rect(x, y, w, h)
 			else
 				local x1, y1, x2, y2 = box2d.corners(self:frame_rect())
 				if sides.left   then x1 = mx + dx end
 				if sides.right  then x2 = mx + dx end
 				if sides.top    then y1 = my + dy end
 				if sides.bottom then y2 = my + dy end
-				self:frame_rect(box2d.rect(x1, y1, x2, y2))
+				local x, y, w, h = self:_backend_sizing(
+					'progress', where, box2d.rect(x1, y1, x2, y2))
+				self:frame_rect(x, y, w, h)
 			end
 		end
 	end)
@@ -1060,6 +1065,7 @@ function window:_init_manual_resize()
 		if not resizing then return end
 		self:cursor'arrow'
 		resizing = false
+		self:_backend_sizing('end', where)
 	end)
 end
 
