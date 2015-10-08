@@ -10,7 +10,6 @@ local glue  = require'glue'
 local box2d = require'box2d'
 local xlib  = require'xlib'
 require'xlib_keysym_h'
-require'xlib_xshm_h'
 local time  = require'time' --for timers
 local heap  = require'heap' --for timers
 local pp    = require'pp'
