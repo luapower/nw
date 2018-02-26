@@ -4,13 +4,12 @@ tagline: native windows
 
 ## `local nw = require'nw'`
 
-Cross-platform library for accessing windows, graphics and input
-in a consistent manner across Windows, Linux and OS X.
-
-Supports transparent windows, bgra8 bitmaps everywhere, drawing via [cairo]
-and [opengl], edge snapping, fullscreen mode, multiple displays, hi-dpi,
-key mappings, triple-click events, timers, cursors, native menus,
-notification icons, all text in utf8, and more.
+Cross-platform library for accessing windows, graphics and input in a
+consistent manner across Windows, Linux and OS X. Supports transparent
+windows, bgra8 bitmaps everywhere, drawing via [cairo] and [opengl], edge
+snapping, fullscreen mode, multiple displays, hi-dpi, key mappings,
+triple-click events, timers, cursors, native menus, notification icons, all
+text in utf8, and more.
 
 ## Status
 
