@@ -1269,6 +1269,9 @@ function Mouse:on_mouse_wheel(x, y, buttons, delta)
 		delta = delta - 1
 	end
 	delta = delta / 120 * wheel_scroll_lines()
+	local cx, cy = self.backend:get_client_pos()
+	x = x - cx
+	y = y - cy
 	self.backend:_setmouse(x, y, buttons)
 	self.frontend:_backend_mousewheel(delta, x, y)
 end
