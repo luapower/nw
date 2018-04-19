@@ -1823,7 +1823,6 @@ function View:nw_invalidate(x, y, w, h)
 		self:setNeedsDisplayInRect(objc.NSMakeRect(x, y, w, h))
 	else
 		self:setNeedsDisplay(true)
-		print(require'time'.clock())
 	end
 end
 
