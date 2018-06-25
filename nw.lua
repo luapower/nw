@@ -2182,5 +2182,15 @@ function window:_backend_dragging(stage, data, x, y)
 	return effect_arg(self:fire('dragging', how, data, x, y))
 end
 
+--tooltips -------------------------------------------------------------------
+
+function window:tooltip(text)
+	if text ~= nil then
+		assert(text ~= true, 'false or string expected')
+		self.backend:set_tooltip(text) --false or 'text'
+	else
+		return self.backend:get_tooltip()
+	end
+end
 
 return nw
