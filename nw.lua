@@ -607,6 +607,10 @@ function window:_new(app, backend_class, useropt)
 		self:show()
 	end
 
+	if opt.tooltip then
+		self:tooltip(tooltip)
+	end
+
 	return self
 end
 

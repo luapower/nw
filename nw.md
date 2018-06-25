@@ -463,6 +463,8 @@ Create a window (fields of _`t`_ below with default value in parenthesis):
 	* `opengl`                   - enable and [configure OpenGL](#winviewgl---gl) on the window
 * __menu__
 	* `menu`                     - the menu bar
+* __tooltip__
+	* `tooltip`                  - tooltip text (false)
 
 ### Initial size and position
 
