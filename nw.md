@@ -93,11 +93,12 @@ __window creation__
 `app:window(t) -> win`                       create a window
 __window closing__
 `win:close([force])`                         close the window and hide it or destroy it
+`win:free([force])`                          close the window and destroy it
+`win:hideonclose(t|f) /-> t|f`               hide on close or destroy on close
 `win:dead() -> t|f`                          check if the window was destroyed
 `win:closing(reason, closing_win)`           event: closing (return `false` to refuse)
-`win:closed()`                               event: closed (but not dead)
+`win:closed()`                               event: window is about to be destroyed
 `win:closeable() -> t|f`                     closeable flag
-`win:hideonclose(t|f) /-> t|f`               hide on close instead of destroying
 __window & app activation__
 `app/win:active() -> t|f`                    check if app/window is active
 `app:activate([mode])`                       activate the app
@@ -591,9 +592,10 @@ Return `false` from the event handler to refuse closing.
 
 ### `win:closed()`
 
-Event: The window was closed.
-Fired after all children are closed, but before the window itself is hidden
-or destroyed.
+Event: The window was closed and is about to be destroyed.
+Fired after all children are closed, but before the window itself is destroyed.
+This event does not fire when `hideonclose` is `true` and the window is
+closed by the user or by calling `close()` (check the `hidden` event then).
 
 ### `win:closeable() -> t|f`
 
