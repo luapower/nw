@@ -90,7 +90,7 @@ __window tracking__
 `app:window_created(win)`                    event: a window was created
 `app:window_closed(win)`                     event: a window was closed
 __window creation__
-`app:window(t|cw,ch,[title],[vis]) -> win` create a window
+`app:window(t|cw,ch,[title],[vis]) -> win`   create a window
 __window closing__
 `win:close([force])`                         close the window and hide it or destroy it
 `win:free([force])`                          close the window and destroy it
