@@ -404,8 +404,8 @@ end
 function app:window(...)
 	local t
 	if type((...)) ~= 'table' then
-		local w, h, title, visible = ...
-		t = {w = w, h = h, title = title, visible = visible}
+		local cw, ch, title, visible = ...
+		t = {cw = cw, ch = ch, title = title, visible = visible}
 	else
 		t = ...
 	end
