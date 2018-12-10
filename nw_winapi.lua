@@ -1453,7 +1453,7 @@ function Rendering:on_paint(hdc) --WM_PAINT
 end
 
 function Rendering:WM_ERASEBKGND()
-	if not self._windows_background then
+	if not self.backend._windows_background then
 		return false
 	end
 end
