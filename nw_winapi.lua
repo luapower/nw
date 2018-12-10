@@ -1441,7 +1441,14 @@ function Rendering:on_paint(hdc) --WM_PAINT
 	self:_paint_bitmap(hdc)
 
 	--draw the default Windows background next time if not custom-painting.
-	self._windows_background = not (self._bitmap or self._hrc)
+	--not drawing it the first time to prevent flicker in case bitmap() is
+	--called inside the repaint event.
+	if not (self._bitmap or self._hrc) then
+		if not self._windows_background then
+			self._windows_background = true
+			self.frontend:invalidate()
+		end
+	end
 end
 
 function Rendering:WM_ERASEBKGND()
@@ -1554,7 +1561,6 @@ function rendering:_free_opengl()
 end
 
 function rendering:_repaint_gl(hdc)
-	if not self._hrc then return end
 	assert(self._hdc == hdc, 'WGL need CS_OWNDC')
 	local gl = gl()
 	gl.wglMakeCurrent(self._hdc, self._hrc)
