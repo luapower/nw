@@ -1999,7 +1999,7 @@ local BitmapView = objc.class('BitmapView', 'NSView')
 glue.update(BitmapView, View)
 
 function BitmapView:nw_paint()
-	self.frontend:validate()
+	if not self.frontend:_backend_needs_repaint() then return end
 	self.frontend:_backend_repaint()
 	self.nw_dynbitmap:paint()
 end
