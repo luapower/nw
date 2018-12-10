@@ -1436,11 +1436,9 @@ function Rendering:on_paint(hdc) --WM_PAINT
 			self:_repaint_gl(hdc)
 		else
 			self.frontend:_backend_repaint()
-			self:_paint_bitmap(hdc)
 		end
-	else
-		self:_paint_bitmap(hdc)
 	end
+	self:_paint_bitmap(hdc)
 
 	--draw the default Windows background next time if not custom-painting.
 	self._windows_background = not (self._bitmap or self._hrc)
