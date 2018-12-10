@@ -1566,14 +1566,14 @@ function window:validate(at_clock)
 	if self:invalid(at_clock) then
 		self._invalid_clock = 1/0
 		self._painted = false
-		self:fire('sync', at_clock)
+		self:fire'sync'
 	end
 end
 
 function window:_backend_repaint()
 	if not self:_can_get_rect() then return end
 	self._painted = true
-	self:fire('repaint')
+	self:fire'repaint'
 end
 
 function window:_backend_needs_repaint(at_clock)
