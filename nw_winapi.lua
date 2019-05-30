@@ -194,7 +194,7 @@ function window:new(app, frontend, t)
 	self._layered = t.transparent
 
 	self._bg_brush = t.background_color
-		and winapi.CreateSolidBrush(t.background_color)
+		and winapi.CreateSolidBrush(t.background_color) or nil
 
 	if self._bg_brush then
 		self._windows_background = true
